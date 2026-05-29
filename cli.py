@@ -799,11 +799,15 @@ def _do_coach():
         console.rule(f"[bold]Suggested routine: {routine.get('title')}[/bold]")
         console.print(f"  [dim]{routine.get('notes')}[/dim]\n")
         for ex in routine.get("exercises", []):
+            if not isinstance(ex, dict):
+                continue
             sets_str = "  ".join(
-                f"[dim]{s['type']}[/dim] {s.get('weight_kg') or 'BW'}kg×{s.get('reps', '?')}"
+                f"[dim]{s.get('type', 'normal')}[/dim] {s.get('weight_kg') or 'BW'}kg×{s.get('reps', '?')}"
                 for s in ex.get("sets", [])
+                if isinstance(s, dict)
             )
-            console.print(f"  [bold]{ex['title']}[/bold]")
+            ex_title = ex.get("title") or ex.get("exercise_template_id", "Exercise")
+            console.print(f"  [bold]{ex_title}[/bold]")
             console.print(f"    {sets_str}")
             if ex.get("notes"):
                 console.print(f"    [dim italic]{ex['notes']}[/dim italic]")
@@ -812,8 +816,9 @@ def _do_coach():
             client = _require_hevy()
             if client:
                 try:
+                    from hevy.client import _routine_id
                     resp = push_routine_to_hevy(routine)
-                    console.print(f"\n[green]✓ Routine pushed to Hevy![/green] (id: {resp.get('routine', {}).get('id')})")
+                    console.print(f"\n[green]✓ Routine pushed to Hevy![/green] (id: {_routine_id(resp)})")
                 except Exception as e:
                     console.print("[red]Failed to push routine. Check your Hevy API key.[/red]")
                     console.print(f"[dim]{type(e).__name__}[/dim]")
@@ -824,13 +829,18 @@ def _do_chat():
         return
     weeks_str = questionary.select(
         "Training context:",
-        choices=["4 weeks", "8 weeks", "12 weeks", "All time (16 weeks)"],
-        default="8 weeks",
+        choices=[
+            questionary.Choice("4 weeks",  value=4),
+            questionary.Choice("8 weeks",  value=8),
+            questionary.Choice("12 weeks", value=12),
+            questionary.Choice("All time (16 weeks)", value=16),
+        ],
+        default=8,
         style=STYLE,
     ).ask()
     if not weeks_str:
         return
-    weeks = int(weeks_str.split()[0])
+    weeks = int(weeks_str)
     from ai.coach import start_enhanced_chat
     start_enhanced_chat(weeks=weeks)
 

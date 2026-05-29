@@ -35,8 +35,10 @@ def memories_as_context(limit: int = 15) -> str:
     memories = get_recent_memories(limit)
     if not memories:
         return ""
+    from ai.sanitize import sanitize_for_prompt
     lines = ["## Coach memory (from previous conversations)"]
     for m in memories:
         date = (m.get("created_at") or "")[:10]
-        lines.append(f"  - [{date}] {m['summary']}")
+        safe_summary = sanitize_for_prompt(m["summary"], max_len=300)
+        lines.append(f"  - [{date}] {safe_summary}")
     return "\n".join(lines)

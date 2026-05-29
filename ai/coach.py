@@ -6,7 +6,10 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
+from datetime import datetime, timezone
+
 from ai.provider import create_chat_session, stream_complete, provider_label, ToolCall
+from ai.sanitize import sanitize_for_prompt, ANTI_INJECTION_PREAMBLE
 from analytics.volume import muscle_group_summary, sets_per_muscle_per_week
 from analytics.progression import detect_plateaus, top_progressions
 from analytics.frequency import workout_frequency, muscle_group_frequency
@@ -36,13 +39,29 @@ def _build_context(weeks: int = 8) -> str:
            ORDER BY et.primary_muscle_group, et.title"""
     )
 
+    safe_name = sanitize_for_prompt(name, max_len=60)
+
+    # Days since last workout — helps the coach assess recovery state
+    last_wkt = query("SELECT start_time FROM workouts ORDER BY start_time DESC LIMIT 1")
+    days_since_last = None
+    if last_wkt:
+        try:
+            last_dt = datetime.fromisoformat(last_wkt[0]["start_time"].replace("Z", "+00:00"))
+            days_since_last = (datetime.now(timezone.utc) - last_dt).days
+        except Exception:
+            pass
+
     lines = [
-        f"## Athlete: {name}",
+        f"## Athlete: {safe_name}",
         f"## Training summary (last {weeks} weeks)\n",
         f"- Total workouts: {freq['total_workouts']}",
         f"- Avg workouts/week: {freq['avg_per_week']}",
         f"- Avg session duration: {freq['avg_duration_minutes']} min",
         f"- Avg rest days between sessions: {freq['rest_day_avg']}",
+    ]
+    if days_since_last is not None:
+        lines.append(f"- Days since last workout: {days_since_last}")
+    lines += [
         "",
         "## Weekly volume (avg kg tonnage) by muscle group",
     ]
@@ -81,7 +100,8 @@ def _build_context(weeks: int = 8) -> str:
     if active_goals:
         lines += ["", "## Active goals with IDs (use these IDs in manage_goals)"]
         for g in active_goals:
-            lines.append(f"  - id={g['id']} | {g['description']} | target={g['target']} {g.get('unit') or ''}")
+            safe_desc = sanitize_for_prompt(g["description"], max_len=150)
+            lines.append(f"  - id={g['id']} | {safe_desc} | target={g['target']} {g.get('unit') or ''}")
 
     # Fit / recovery data
     try:
@@ -101,6 +121,66 @@ def _build_context(weeks: int = 8) -> str:
     except Exception:
         pass
 
+    # Recent workouts — the actual sessions with exercises and best sets.
+    # This is the most important near-term context: what did the athlete do
+    # last, how heavy, and how long ago.
+    recent_wkts = query(
+        """SELECT id, title, start_time, end_time
+           FROM workouts
+           ORDER BY start_time DESC
+           LIMIT 7"""
+    )
+    if recent_wkts:
+        lines += ["", "## Recent workouts (last sessions, newest first)"]
+        for w in recent_wkts:
+            try:
+                start_dt = datetime.fromisoformat(w["start_time"].replace("Z", "+00:00"))
+                date_str = start_dt.strftime("%a %d %b %Y")
+                end_dt = datetime.fromisoformat(w["end_time"].replace("Z", "+00:00"))
+                dur = int((end_dt - start_dt).total_seconds() / 60)
+                dur_str = f"{dur} min"
+            except Exception:
+                date_str = (w["start_time"] or "")[:10]
+                dur_str = ""
+
+            lines.append(f"\n  {w['title']} — {date_str} ({dur_str})")
+
+            # Best normal set per exercise in this workout
+            ex_rows = query(
+                """SELECT we.title,
+                          ws.weight_kg,
+                          ws.reps,
+                          ws.weight_kg * (1 + ws.reps / 30.0) AS e1rm
+                   FROM workout_exercises we
+                   JOIN workout_sets ws ON ws.workout_exercise_id = we.id
+                   WHERE we.workout_id = ?
+                     AND ws.type = 'normal'
+                     AND ws.weight_kg IS NOT NULL
+                     AND ws.reps IS NOT NULL AND ws.reps > 0
+                   ORDER BY we.idx, e1rm DESC""",
+                (w["id"],),
+            )
+            # One best set per exercise name
+            seen_ex: dict = {}
+            for row in ex_rows:
+                if row["title"] not in seen_ex:
+                    seen_ex[row["title"]] = row
+
+            if seen_ex:
+                for ex_title, row in seen_ex.items():
+                    lines.append(
+                        f"    - {ex_title}: {row['weight_kg']} kg × {row['reps']} reps"
+                        f" (e1RM {row['e1rm']:.1f} kg)"
+                    )
+            else:
+                # Bodyweight / cardio session — just list exercise names
+                bw = query(
+                    "SELECT DISTINCT we.title FROM workout_exercises we WHERE we.workout_id = ?",
+                    (w["id"],),
+                )
+                for b in bw:
+                    lines.append(f"    - {b['title']}")
+
     if known:
         lines += ["", "## Exercise library (use these IDs in routines)"]
         for ex in known:
@@ -111,7 +191,8 @@ def _build_context(weeks: int = 8) -> str:
 
 # ── one-shot coaching report ──────────────────────────────────────────────────
 
-_COACH_SYSTEM = """You are an experienced strength and hypertrophy coach.
+_COACH_SYSTEM = ANTI_INJECTION_PREAMBLE + """\
+You are an experienced strength and hypertrophy coach.
 Analyze the athlete's training data, taking their stated goals into account, and return
 a JSON response with this exact structure:
 
@@ -143,18 +224,38 @@ Rules:
 - Only use exercise_template_ids from the "Exercise library" section.
 - The routine should target 4-6 exercises and address identified weaknesses.
 - Set weights should reflect the athlete's current strength level.
-- Return ONLY the JSON object, no markdown fences or extra text."""
+- Return ONLY the JSON object, no markdown fences or extra text.\
+"""
 
 
 def get_coaching(weeks: int = 8) -> dict:
     context = _build_context(weeks)
-    prompt = f"{context}\n\nPlease analyse my training and generate a suggested next routine."
+    prompt = (
+        "<training_data>\n"
+        f"{context}\n"
+        "</training_data>\n\n"
+        "Please analyse my training and generate a suggested next routine."
+    )
 
-    console.print(f"\n[dim]Thinking via {provider_label()}...[/dim]\n")
+    console.print(f"\n[dim]Powered by {provider_label()}[/dim]\n")
+
+    status = console.status(
+        "[bold cyan]Generating coaching report...[/bold cyan]",
+        spinner="dots",
+    )
+    status.start()
+
     full_text = ""
+    first_token = False
     for chunk in stream_complete(prompt, system=_COACH_SYSTEM):
+        if not first_token:
+            status.stop()
+            first_token = True
         print(chunk, end="", flush=True)
         full_text += chunk
+
+    if not first_token:
+        status.stop()
     print()
 
     raw = full_text.strip()
@@ -170,16 +271,18 @@ def push_routine_to_hevy(routine_data: dict) -> dict:
 
 # ── tools ─────────────────────────────────────────────────────────────────────
 
-_CHAT_SYSTEM_BASE = """\
-You are a personal fitness coach assistant. You have the athlete's complete training history,
-their stated goals, and memories from previous conversations.
-Answer questions conversationally and reference their actual numbers.
-Be encouraging but honest. Keep answers concise unless asked to elaborate.
-When the athlete asks you to create, build, add, or push a routine, use the push_routine tool.
-When the athlete explicitly asks to change, add, or remove a goal, use the manage_goals tool —
-always describe the exact change in changes_summary so the user can confirm.
-Only use exercise_template_ids from the exercise library provided.
-Address the athlete by their name when appropriate."""
+_CHAT_SYSTEM_BASE = (
+    ANTI_INJECTION_PREAMBLE
+    + "You are a personal fitness coach assistant. You have the athlete's complete training "
+    "history, their stated goals, and memories from previous conversations.\n"
+    "Answer questions conversationally and reference their actual numbers.\n"
+    "Be encouraging but honest. Keep answers concise unless asked to elaborate.\n"
+    "When the athlete asks you to create, build, add, or push a routine, use the push_routine tool.\n"
+    "When the athlete explicitly asks to change, add, or remove a goal, use the manage_goals tool — "
+    "always describe the exact change in changes_summary so the user can confirm.\n"
+    "Only use exercise_template_ids from the exercise library provided.\n"
+    "Address the athlete by their name when appropriate."
+)
 
 _PUSH_ROUTINE_TOOL: dict = {
     "name": "push_routine",
@@ -265,20 +368,42 @@ def _show_and_confirm_routine(routine: dict, session, tool_call: ToolCall) -> No
         lines.append(f"[dim]{routine['notes']}[/dim]")
     lines.append("")
     for ex in routine.get("exercises", []):
+        if not isinstance(ex, dict):
+            continue
         sets_desc = "  ".join(
             f"[dim]{s.get('type', 'normal')}[/dim] {s.get('weight_kg') or 'BW'}kg×{s.get('reps', '?')}"
             for s in ex.get("sets", [])
+            if isinstance(s, dict)
         )
         note = f"\n    [dim italic]{ex['notes']}[/dim italic]" if ex.get("notes") else ""
-        lines.append(f"  • [bold]{ex['title']}[/bold]  {sets_desc}{note}")
+        ex_title = ex.get("title") or ex.get("exercise_template_id", "Exercise")
+        lines.append(f"  • [bold]{ex_title}[/bold]  {sets_desc}{note}")
 
     console.print(Panel("\n".join(lines), title="[bold cyan]Proposed routine[/bold cyan]", border_style="cyan"))
 
+    # Validate every exercise_template_id against the local DB.
+    invalid_ids = [
+        ex.get("exercise_template_id", "")
+        for ex in routine.get("exercises", [])
+        if isinstance(ex, dict) and ex.get("exercise_template_id")
+        and not query(
+            "SELECT 1 FROM exercise_templates WHERE id = ?",
+            (ex["exercise_template_id"],),
+        )
+    ]
+    if invalid_ids:
+        console.print(
+            f"[yellow]⚠ {len(invalid_ids)} exercise ID(s) not found in your library "
+            f"and will be skipped: {', '.join(invalid_ids[:3])}[/yellow]"
+        )
+
     if questionary.confirm("  Push this routine to your Hevy app?", default=True).ask():
         try:
-            resp = HevyClient().create_routine(routine)
-            routine_id = resp.get("routine", {}).get("id", "")
-            follow = session.submit_tool_result(tool_call, {"success": True, "routine_id": routine_id})
+            with console.status("[dim]Saving routine to Hevy...[/dim]", spinner="dots"):
+                from hevy.client import _routine_id
+                resp = HevyClient().create_routine(routine)
+                routine_id = _routine_id(resp)
+                follow = session.submit_tool_result(tool_call, {"success": True, "routine_id": routine_id})
             console.print(f"[green]✓ Routine saved to Hevy[/green] (id: {routine_id})\n")
             if follow.text:
                 console.print(Markdown(follow.text))
@@ -289,7 +414,8 @@ def _show_and_confirm_routine(routine: dict, session, tool_call: ToolCall) -> No
             if follow.text:
                 console.print(Markdown(follow.text))
     else:
-        follow = session.submit_tool_result(tool_call, {"success": False, "message": "User declined"})
+        with console.status("[dim]...[/dim]", spinner="dots"):
+            follow = session.submit_tool_result(tool_call, {"success": False, "message": "User declined"})
         console.print("[dim]Routine not pushed.[/dim]\n")
         if follow.text:
             console.print(Markdown(follow.text))
@@ -297,19 +423,34 @@ def _show_and_confirm_routine(routine: dict, session, tool_call: ToolCall) -> No
 
 
 def _handle_manage_goals(fc_args: dict, session, tool_call: ToolCall) -> None:
-    from db.goals import save_goal, delete_goal, update_goal_fields
+    from db.goals import save_goal, delete_goal, update_goal_fields, get_goals
 
     action = fc_args.get("action")
     summary = fc_args.get("changes_summary", "Modify a goal")
 
+    # Validate that goal_id refers to an actual goal before touching anything.
+    if action in ("update", "remove"):
+        gid = fc_args.get("goal_id")
+        valid_ids = {g["id"] for g in get_goals()}
+        if gid is None or int(gid) not in valid_ids:
+            follow = session.submit_tool_result(
+                tool_call,
+                {"success": False, "error": f"Goal ID {gid} does not exist"},
+            )
+            console.print(f"[red]⚠ AI referenced a non-existent goal (id={gid}). Change blocked.[/red]\n")
+            if follow.text:
+                console.print(Markdown(follow.text))
+            return
+
     console.print(Panel(
-        f"[bold]{summary}[/bold]",
+        f"[bold]{sanitize_for_prompt(summary, max_len=200)}[/bold]",
         title="[bold yellow]Goal Change Requested[/bold yellow]",
         border_style="yellow",
     ))
 
     if not questionary.confirm("  Apply this change?", default=True).ask():
-        follow = session.submit_tool_result(tool_call, {"success": False, "message": "User declined"})
+        with console.status("[dim]...[/dim]", spinner="dots"):
+            follow = session.submit_tool_result(tool_call, {"success": False, "message": "User declined"})
         console.print("[dim]Change not applied.[/dim]\n")
         if follow.text:
             console.print(Markdown(follow.text))
@@ -317,43 +458,45 @@ def _handle_manage_goals(fc_args: dict, session, tool_call: ToolCall) -> None:
         return
 
     try:
-        if action == "add":
-            save_goal(
-                type=fc_args.get("goal_type", "custom"),
-                description=fc_args.get("description", ""),
-                target=fc_args.get("target"),
-                unit=fc_args.get("unit"),
-                exercise_template_id=fc_args.get("exercise_template_id"),
-                exercise_name=fc_args.get("exercise_name"),
-                muscle_group=fc_args.get("muscle_group"),
-            )
-            follow = session.submit_tool_result(tool_call, {"success": True, "action": "added"})
-            console.print("[green]✓ Goal added[/green]\n")
+        with console.status("[dim]Applying goal change...[/dim]", spinner="dots"):
+            if action == "add":
+                save_goal(
+                    type=fc_args.get("goal_type", "custom"),
+                    description=fc_args.get("description", ""),
+                    target=fc_args.get("target"),
+                    unit=fc_args.get("unit"),
+                    exercise_template_id=fc_args.get("exercise_template_id"),
+                    exercise_name=fc_args.get("exercise_name"),
+                    muscle_group=fc_args.get("muscle_group"),
+                )
+                follow = session.submit_tool_result(tool_call, {"success": True, "action": "added"})
+                label = "[green]✓ Goal added[/green]"
 
-        elif action == "update":
-            gid = fc_args.get("goal_id")
-            if not gid:
-                raise ValueError("goal_id is required for update")
-            update_goal_fields(
-                goal_id=int(gid),
-                description=fc_args.get("description"),
-                target=fc_args.get("target"),
-                unit=fc_args.get("unit"),
-            )
-            follow = session.submit_tool_result(tool_call, {"success": True, "action": "updated"})
-            console.print("[green]✓ Goal updated[/green]\n")
+            elif action == "update":
+                gid = fc_args.get("goal_id")
+                if not gid:
+                    raise ValueError("goal_id is required for update")
+                update_goal_fields(
+                    goal_id=int(gid),
+                    description=fc_args.get("description"),
+                    target=fc_args.get("target"),
+                    unit=fc_args.get("unit"),
+                )
+                follow = session.submit_tool_result(tool_call, {"success": True, "action": "updated"})
+                label = "[green]✓ Goal updated[/green]"
 
-        elif action == "remove":
-            gid = fc_args.get("goal_id")
-            if not gid:
-                raise ValueError("goal_id is required for remove")
-            delete_goal(int(gid))
-            follow = session.submit_tool_result(tool_call, {"success": True, "action": "removed"})
-            console.print("[green]✓ Goal removed[/green]\n")
+            elif action == "remove":
+                gid = fc_args.get("goal_id")
+                if not gid:
+                    raise ValueError("goal_id is required for remove")
+                delete_goal(int(gid))
+                follow = session.submit_tool_result(tool_call, {"success": True, "action": "removed"})
+                label = "[green]✓ Goal removed[/green]"
 
-        else:
-            raise ValueError(f"Unknown action: {action}")
+            else:
+                raise ValueError(f"Unknown action: {action}")
 
+        console.print(f"{label}\n")
         if follow.text:
             console.print(Markdown(follow.text))
             console.print()
@@ -424,7 +567,11 @@ def _extract_and_save_memories(conversation_log: list[dict]) -> int:
         saved = 0
         for mem in memories[:8]:
             if isinstance(mem, str) and len(mem.strip()) > 15:
-                save_memory(mem.strip())
+                # Sanitize before storing — prevents injected text from
+                # persisting as a "memory" across future sessions.
+                clean = sanitize_for_prompt(mem.strip(), max_len=300)
+                if clean:
+                    save_memory(clean)
                 saved += 1
         return saved
     except Exception:
@@ -436,7 +583,14 @@ def _extract_and_save_memories(conversation_log: list[dict]) -> int:
 def start_enhanced_chat(weeks: int = 8) -> None:
     """Interactive chat with tool calling, goal management, and memory persistence."""
     context = _build_context(weeks)
-    system = f"{_CHAT_SYSTEM_BASE}\n\n--- TRAINING DATA ---\n{context}\n--- END DATA ---"
+    # Use XML-like delimiters so the model can clearly distinguish
+    # instructions (above) from untrusted data (below).
+    system = (
+        f"{_CHAT_SYSTEM_BASE}\n\n"
+        "<training_data>\n"
+        f"{context}\n"
+        "</training_data>"
+    )
 
     session = create_chat_session(system=system, tools=[_PUSH_ROUTINE_TOOL, _MANAGE_GOALS_TOOL])
 
@@ -465,7 +619,11 @@ def start_enhanced_chat(weeks: int = 8) -> None:
         console.print()
 
         try:
-            response = session.send(user_input)
+            with console.status(
+                "[bold cyan]Coach is thinking...[/bold cyan]",
+                spinner="dots",
+            ):
+                response = session.send(user_input)
 
             if response.text:
                 console.print("[bold cyan]Coach:[/bold cyan]")
@@ -484,9 +642,9 @@ def start_enhanced_chat(weeks: int = 8) -> None:
 
     # ── extract and save memories after session ends ──
     if len(conversation_log) >= 2:
-        console.print("[dim]Analysing conversation for insights to remember...[/dim]")
-        saved = _extract_and_save_memories(conversation_log)
+        with console.status("[dim]Saving insights from conversation...[/dim]", spinner="dots"):
+            saved = _extract_and_save_memories(conversation_log)
         if saved > 0:
-            console.print(f"[dim]Saved {saved} insight(s) for future sessions.[/dim]\n")
+            console.print(f"[dim]✓ {saved} insight(s) saved for future sessions.[/dim]\n")
         else:
             console.print("[dim]No new insights to save.[/dim]\n")

@@ -1,4 +1,5 @@
 """Sync sleep, steps, calories, and heart rate from Google Fit."""
+import os
 import sqlite3
 from datetime import datetime, timezone, timedelta
 
@@ -25,14 +26,61 @@ def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
+def _local_tz_id() -> str | None:
+    """Best-effort local timezone name (e.g. 'America/Sao_Paulo')."""
+    try:
+        import zoneinfo
+        return str(datetime.now().astimezone().tzinfo)
+    except Exception:
+        pass
+    # Fallback: read /etc/timezone on Linux
+    try:
+        tz = open("/etc/timezone").read().strip()
+        if tz:
+            return tz
+    except Exception:
+        pass
+    return None
+
+
+def _sum_points(points: list[dict], field: str = "intVal") -> int | float | None:
+    """Sum a numeric field across ALL points in a dataset.
+
+    Google Fit can return multiple points within a bucket when multiple
+    data sources contribute data (e.g. watch + phone + Samsung Health).
+    Reading only points[0] misses the rest — we must sum them all.
+    """
+    total = 0
+    found = False
+    for point in points:
+        vals = point.get("value", [])
+        if not vals:
+            continue
+        v = vals[0].get(field)
+        if v is not None:
+            total += v
+            found = True
+    return total if found else None
+
+
 def sync_fit(days: int = 30) -> dict:
     client = FitClient()
-    end = datetime.now(timezone.utc)
-    start = end - timedelta(days=days)
+
+    # Use local midnight boundaries so day buckets align to the user's clock,
+    # not UTC midnight. This prevents steps from being assigned to the wrong day.
+    local_now = datetime.now()
+    end = local_now.replace(hour=23, minute=59, second=59, microsecond=0)
+    start = (end - timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Convert to UTC for the API call
+    end_utc = end.astimezone(timezone.utc)
+    start_utc = start.astimezone(timezone.utc)
+
+    tz_id = _local_tz_id()
     counts = {"daily_days": 0, "sleep_sessions": 0}
 
-    _sync_daily(client, start, end, counts)
-    _sync_sleep(client, start, end, counts)
+    _sync_daily(client, start_utc, end_utc, tz_id, counts)
+    _sync_sleep(client, start_utc, end_utc, counts)
 
     from db.store import set_sync_state
     set_sync_state("fit_last_sync", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
@@ -40,7 +88,13 @@ def sync_fit(days: int = 30) -> dict:
     return counts
 
 
-def _sync_daily(client: FitClient, start: datetime, end: datetime, counts: dict) -> None:
+def _sync_daily(
+    client: FitClient,
+    start: datetime,
+    end: datetime,
+    tz_id: str | None,
+    counts: dict,
+) -> None:
     data = client.aggregate(
         data_types=[
             "com.google.step_count.delta",
@@ -50,6 +104,7 @@ def _sync_daily(client: FitClient, start: datetime, end: datetime, counts: dict)
         ],
         start_ms=_ms(start),
         end_ms=_ms(end),
+        timezone_id=tz_id,
     )
 
     with _conn() as conn:
@@ -68,21 +123,48 @@ def _sync_daily(client: FitClient, start: datetime, end: datetime, counts: dict)
                 points = dataset.get("point", [])
                 if not points:
                     continue
-                dtype = points[0].get("dataTypeName", "")
-                vals = points[0].get("value", [])
 
-                if "step_count" in dtype and vals:
-                    row["steps"] = vals[0].get("intVal") or int(vals[0].get("fpVal", 0) or 0)
-                elif "calories.expended" in dtype and vals:
-                    row["total_calories"] = vals[0].get("fpVal")
+                # Detect data type from the point (more reliable than dataSourceId substring)
+                dtype = points[0].get("dataTypeName", "")
+                # Fallback: derive type from the dataSourceId
+                if not dtype:
+                    src = dataset.get("dataSourceId", "")
+                    if "step_count" in src:
+                        dtype = "com.google.step_count.delta"
+                    elif "calories" in src:
+                        dtype = "com.google.calories.expended"
+                    elif "heart_rate" in src:
+                        dtype = "com.google.heart_rate.bpm"
+                    elif "active_minutes" in src:
+                        dtype = "com.google.active_minutes"
+
+                if "step_count" in dtype:
+                    # SUM across all points — multiple sources (phone, watch,
+                    # Samsung Health) each contribute a separate point.
+                    steps = _sum_points(points, "intVal")
+                    if steps is None:
+                        steps = _sum_points(points, "fpVal")
+                    row["steps"] = int(steps) if steps is not None else None
+
+                elif "calories.expended" in dtype:
+                    cal = _sum_points(points, "fpVal")
+                    if cal is not None:
+                        row["total_calories"] = round(cal, 1)
+
                 elif "heart_rate" in dtype:
-                    # aggregate returns [avg, max, min]
-                    if len(vals) >= 1:
-                        row["avg_hr"] = vals[0].get("fpVal")
-                    if len(vals) >= 3:
-                        row["min_hr"] = vals[2].get("fpVal")
-                elif "active_minutes" in dtype and vals:
-                    row["active_minutes"] = vals[0].get("intVal") or int(vals[0].get("fpVal", 0) or 0)
+                    # Aggregate HR returns value[0]=avg, value[1]=max, value[2]=min
+                    # per bucket (single point).
+                    vals = points[0].get("value", [])
+                    if len(vals) >= 1 and vals[0].get("fpVal") is not None:
+                        row["avg_hr"] = round(vals[0]["fpVal"], 1)
+                    if len(vals) >= 3 and vals[2].get("fpVal") is not None:
+                        row["min_hr"] = round(vals[2]["fpVal"], 1)
+
+                elif "active_minutes" in dtype:
+                    mins = _sum_points(points, "intVal")
+                    if mins is None:
+                        mins = _sum_points(points, "fpVal")
+                    row["active_minutes"] = int(mins) if mins is not None else None
 
             conn.execute(
                 """INSERT INTO fit_daily
@@ -99,7 +181,12 @@ def _sync_daily(client: FitClient, start: datetime, end: datetime, counts: dict)
             counts["daily_days"] += 1
 
 
-def _sync_sleep(client: FitClient, start: datetime, end: datetime, counts: dict) -> None:
+def _sync_sleep(
+    client: FitClient,
+    start: datetime,
+    end: datetime,
+    counts: dict,
+) -> None:
     sessions = client.get_sleep_sessions(_iso(start), _iso(end))
 
     with _conn() as conn:
