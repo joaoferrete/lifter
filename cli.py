@@ -816,8 +816,9 @@ def _do_coach():
             client = _require_hevy()
             if client:
                 try:
+                    from hevy.client import _routine_id
                     resp = push_routine_to_hevy(routine)
-                    console.print(f"\n[green]✓ Routine pushed to Hevy![/green] (id: {resp.get('routine', {}).get('id')})")
+                    console.print(f"\n[green]✓ Routine pushed to Hevy![/green] (id: {_routine_id(resp)})")
                 except Exception as e:
                     console.print("[red]Failed to push routine. Check your Hevy API key.[/red]")
                     console.print(f"[dim]{type(e).__name__}[/dim]")

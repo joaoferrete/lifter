@@ -400,8 +400,9 @@ def _show_and_confirm_routine(routine: dict, session, tool_call: ToolCall) -> No
     if questionary.confirm("  Push this routine to your Hevy app?", default=True).ask():
         try:
             with console.status("[dim]Saving routine to Hevy...[/dim]", spinner="dots"):
+                from hevy.client import _routine_id
                 resp = HevyClient().create_routine(routine)
-                routine_id = resp.get("routine", {}).get("id", "")
+                routine_id = _routine_id(resp)
                 follow = session.submit_tool_result(tool_call, {"success": True, "routine_id": routine_id})
             console.print(f"[green]✓ Routine saved to Hevy[/green] (id: {routine_id})\n")
             if follow.text:

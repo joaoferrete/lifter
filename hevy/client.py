@@ -120,6 +120,18 @@ class HevyClient:
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+def _routine_id(resp) -> str:
+    """Extract routine id from any Hevy response shape (dict, wrapped dict, or list)."""
+    if isinstance(resp, list):
+        resp = resp[0] if resp else {}
+    if not isinstance(resp, dict):
+        return ""
+    inner = resp.get("routine") or resp
+    if isinstance(inner, dict):
+        return str(inner.get("id", ""))
+    return ""
+
+
 def _raise(resp: httpx.Response, path: str) -> None:
     """Raise with the API error body included so debugging is easier."""
     if resp.is_success:
