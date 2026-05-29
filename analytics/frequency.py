@@ -6,6 +6,7 @@ from db.store import query
 
 def workout_frequency(weeks: int = 8) -> dict:
     """Summary of training frequency and session duration."""
+    weeks = max(1, int(weeks))
     rows = query(
         """
         SELECT start_time, end_time

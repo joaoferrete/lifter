@@ -1,5 +1,8 @@
 .env
 hevy.db
+*.db
+fit_credentials.json
+fit_token.json
 __pycache__/
 *.py[cod]
 *.pyo

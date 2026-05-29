@@ -10,6 +10,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich import box
 
+from rich.markup import escape as _esc
 from config import HEVY_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY, AI_PROVIDER
 from db.store import init_db, query
 from db.goals import (
@@ -284,10 +285,10 @@ def _weekly_checkin() -> None:
         return
 
     name = get_pref("display_name") or "there"
-    console.print(f"\n  [bold cyan]Weekly goals check-in, {name}![/bold cyan]\n")
+    console.print(f"\n  [bold cyan]Weekly goals check-in, {_esc(name)}![/bold cyan]\n")
     console.print("  Your current goals:\n")
     for g in goals:
-        console.print(f"    [dim]•[/dim] {g['description']}")
+        console.print(f"    [dim]•[/dim] {_esc(g['description'])}")
     console.print()
 
     answer = questionary.select(
@@ -490,7 +491,7 @@ def _show_header() -> None:
 
     from ai.provider import provider_label
     sync_str = f"Last sync: {_time_ago(last_sync)}" if last_sync else "Never synced — run Sync first"
-    title = f"LIFTER  [dim]·[/dim]  {name}" if name else "LIFTER"
+    title = f"LIFTER  [dim]·[/dim]  {_esc(name)}" if name else "LIFTER"
     ai_str = f"AI: {provider_label()}"
 
     # Recovery line from Google Fit (if connected + data available)
@@ -760,7 +761,8 @@ def _do_coach():
     try:
         result = get_coaching(weeks=weeks)
     except Exception as e:
-        console.print(f"[red]AI error: {e}[/red]")
+        console.print("[red]AI request failed. Check your API key and network connection.[/red]")
+        console.print(f"[dim]{type(e).__name__}[/dim]")
         return
 
     console.rule("[bold green]Strengths[/bold green]")
@@ -799,7 +801,8 @@ def _do_coach():
                     resp = push_routine_to_hevy(routine)
                     console.print(f"\n[green]✓ Routine pushed to Hevy![/green] (id: {resp.get('routine', {}).get('id')})")
                 except Exception as e:
-                    console.print(f"[red]Failed: {e}[/red]")
+                    console.print(f"[red]Failed to push routine. Check your Hevy API key.[/red]")
+                    console.print(f"[dim]{type(e).__name__}[/dim]")
 
 
 def _do_chat():
@@ -893,7 +896,8 @@ def _do_fit():
             ))
             _render_recovery_panel()
         except Exception as e:
-            console.print(f"[red]Sync failed: {e}[/red]")
+            console.print("[red]Google Fit sync failed. Check your credentials and internet connection.[/red]")
+            console.print(f"[dim]{type(e).__name__}[/dim]")
 
     elif action == "view":
         if not is_connected():
@@ -934,9 +938,10 @@ def _fit_setup() -> None:
         console.print("\n[bold green]✓ Connected to Google Fit![/bold green]")
         console.print("[dim]Run 'Google Fit → Sync health data' to import your data.[/dim]\n")
     except FileNotFoundError as e:
-        console.print(f"\n[red]{e}[/red]")
+        console.print(f"\n[red]{e}[/red]")  # safe: our own message, no secrets
     except Exception as e:
-        console.print(f"\n[red]Authentication failed: {e}[/red]")
+        console.print("\n[red]Authentication failed. Check that fit_credentials.json is valid.[/red]")
+        console.print(f"[dim]{type(e).__name__}[/dim]")
 
 
 def _render_fit_dashboard() -> None:

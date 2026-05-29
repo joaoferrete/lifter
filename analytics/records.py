@@ -103,6 +103,7 @@ def recent_prs(days: int = 30) -> list[dict]:
 
 def body_measurement_trend(weeks: int = 12) -> dict:
     """Latest body measurements and trend vs N weeks ago."""
+    weeks = max(1, int(weeks))
     rows = query(
         """
         SELECT date, weight_kg, fat_percent, lean_mass_kg

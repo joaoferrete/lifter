@@ -13,6 +13,7 @@ def _e1rm(weight_kg: float, reps: int) -> float:
 
 def exercise_progression(template_id: str, weeks: int = 12) -> pd.DataFrame:
     """Best estimated 1RM per session for a given exercise template."""
+    weeks = max(1, int(weeks))
     rows = query(
         """
         SELECT w.start_time, ws.weight_kg, ws.reps

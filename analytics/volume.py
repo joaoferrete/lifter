@@ -6,6 +6,7 @@ from db.store import query
 
 def weekly_volume(weeks: int = 8) -> pd.DataFrame:
     """Return weekly tonnage (kg × reps) per primary muscle group for the last N weeks."""
+    weeks = max(1, int(weeks))
     rows = query(
         """
         SELECT

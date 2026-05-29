@@ -223,21 +223,33 @@ def upsert_exercise_template(template: dict, db_path: Path = DB_PATH) -> None:
 
 
 def upsert_body_measurement(m: dict, db_path: Path = DB_PATH) -> None:
-    fields = [
-        "date", "weight_kg", "lean_mass_kg", "fat_percent",
-        "neck_cm", "shoulder_cm", "chest_cm",
-        "left_bicep_cm", "right_bicep_cm", "left_forearm_cm", "right_forearm_cm",
-        "abdomen", "waist", "hips", "left_thigh", "right_thigh", "left_calf", "right_calf",
-    ]
-    row = {f: m.get(f) for f in fields}
-    cols = ", ".join(fields)
-    placeholders = ", ".join(f":{f}" for f in fields)
-    updates = ", ".join(f"{f}=excluded.{f}" for f in fields if f != "date")
     with _conn(db_path) as conn:
         conn.execute(
-            f"INSERT INTO body_measurements ({cols}) VALUES ({placeholders}) "
-            f"ON CONFLICT(date) DO UPDATE SET {updates}",
-            row,
+            """INSERT INTO body_measurements
+               (date, weight_kg, lean_mass_kg, fat_percent,
+                neck_cm, shoulder_cm, chest_cm,
+                left_bicep_cm, right_bicep_cm, left_forearm_cm, right_forearm_cm,
+                abdomen, waist, hips, left_thigh, right_thigh, left_calf, right_calf)
+               VALUES
+               (:date, :weight_kg, :lean_mass_kg, :fat_percent,
+                :neck_cm, :shoulder_cm, :chest_cm,
+                :left_bicep_cm, :right_bicep_cm, :left_forearm_cm, :right_forearm_cm,
+                :abdomen, :waist, :hips, :left_thigh, :right_thigh, :left_calf, :right_calf)
+               ON CONFLICT(date) DO UPDATE SET
+                 weight_kg=excluded.weight_kg, lean_mass_kg=excluded.lean_mass_kg,
+                 fat_percent=excluded.fat_percent, neck_cm=excluded.neck_cm,
+                 shoulder_cm=excluded.shoulder_cm, chest_cm=excluded.chest_cm,
+                 left_bicep_cm=excluded.left_bicep_cm, right_bicep_cm=excluded.right_bicep_cm,
+                 left_forearm_cm=excluded.left_forearm_cm, right_forearm_cm=excluded.right_forearm_cm,
+                 abdomen=excluded.abdomen, waist=excluded.waist, hips=excluded.hips,
+                 left_thigh=excluded.left_thigh, right_thigh=excluded.right_thigh,
+                 left_calf=excluded.left_calf, right_calf=excluded.right_calf""",
+            {f: m.get(f) for f in [
+                "date", "weight_kg", "lean_mass_kg", "fat_percent",
+                "neck_cm", "shoulder_cm", "chest_cm",
+                "left_bicep_cm", "right_bicep_cm", "left_forearm_cm", "right_forearm_cm",
+                "abdomen", "waist", "hips", "left_thigh", "right_thigh", "left_calf", "right_calf",
+            ]},
         )
 
 

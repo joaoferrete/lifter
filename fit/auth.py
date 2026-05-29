@@ -1,5 +1,6 @@
 """Google OAuth flow for the Fitness API."""
 import os
+import stat
 from pathlib import Path
 
 from config import DB_PATH
@@ -11,11 +12,13 @@ SCOPES = [
     "https://www.googleapis.com/auth/fitness.body.read",
 ]
 
-# Credentials file downloaded from Google Cloud Console
 CREDENTIALS_FILE = Path(os.environ.get("GOOGLE_CREDENTIALS_FILE", "fit_credentials.json"))
-
-# Token stored next to the DB
 TOKEN_FILE = DB_PATH.parent / "fit_token.json"
+
+
+def _write_token(creds) -> None:
+    TOKEN_FILE.write_text(creds.to_json())
+    TOKEN_FILE.chmod(0o600)
 
 
 def get_credentials():
@@ -40,13 +43,21 @@ def get_credentials():
             flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_FILE), SCOPES)
             creds = flow.run_local_server(port=0, open_browser=True)
 
-        TOKEN_FILE.write_text(creds.to_json())
+        _write_token(creds)
 
     return creds
 
 
 def is_connected() -> bool:
-    return TOKEN_FILE.exists()
+    """True only if the token file exists AND contains a usable credential."""
+    if not TOKEN_FILE.exists():
+        return False
+    try:
+        from google.oauth2.credentials import Credentials
+        creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
+        return creds is not None and (creds.valid or bool(creds.refresh_token))
+    except Exception:
+        return False
 
 
 def disconnect() -> None:
