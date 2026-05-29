@@ -150,11 +150,25 @@ def get_coaching(weeks: int = 8) -> dict:
     context = _build_context(weeks)
     prompt = f"{context}\n\nPlease analyse my training and generate a suggested next routine."
 
-    console.print(f"\n[dim]Thinking via {provider_label()}...[/dim]\n")
+    console.print(f"\n[dim]Powered by {provider_label()}[/dim]\n")
+
+    status = console.status(
+        "[bold cyan]Generating coaching report...[/bold cyan]",
+        spinner="dots",
+    )
+    status.start()
+
     full_text = ""
+    first_token = False
     for chunk in stream_complete(prompt, system=_COACH_SYSTEM):
+        if not first_token:
+            status.stop()
+            first_token = True
         print(chunk, end="", flush=True)
         full_text += chunk
+
+    if not first_token:
+        status.stop()
     print()
 
     raw = full_text.strip()
@@ -276,9 +290,10 @@ def _show_and_confirm_routine(routine: dict, session, tool_call: ToolCall) -> No
 
     if questionary.confirm("  Push this routine to your Hevy app?", default=True).ask():
         try:
-            resp = HevyClient().create_routine(routine)
-            routine_id = resp.get("routine", {}).get("id", "")
-            follow = session.submit_tool_result(tool_call, {"success": True, "routine_id": routine_id})
+            with console.status("[dim]Saving routine to Hevy...[/dim]", spinner="dots"):
+                resp = HevyClient().create_routine(routine)
+                routine_id = resp.get("routine", {}).get("id", "")
+                follow = session.submit_tool_result(tool_call, {"success": True, "routine_id": routine_id})
             console.print(f"[green]✓ Routine saved to Hevy[/green] (id: {routine_id})\n")
             if follow.text:
                 console.print(Markdown(follow.text))
@@ -289,7 +304,8 @@ def _show_and_confirm_routine(routine: dict, session, tool_call: ToolCall) -> No
             if follow.text:
                 console.print(Markdown(follow.text))
     else:
-        follow = session.submit_tool_result(tool_call, {"success": False, "message": "User declined"})
+        with console.status("[dim]...[/dim]", spinner="dots"):
+            follow = session.submit_tool_result(tool_call, {"success": False, "message": "User declined"})
         console.print("[dim]Routine not pushed.[/dim]\n")
         if follow.text:
             console.print(Markdown(follow.text))
@@ -309,7 +325,8 @@ def _handle_manage_goals(fc_args: dict, session, tool_call: ToolCall) -> None:
     ))
 
     if not questionary.confirm("  Apply this change?", default=True).ask():
-        follow = session.submit_tool_result(tool_call, {"success": False, "message": "User declined"})
+        with console.status("[dim]...[/dim]", spinner="dots"):
+            follow = session.submit_tool_result(tool_call, {"success": False, "message": "User declined"})
         console.print("[dim]Change not applied.[/dim]\n")
         if follow.text:
             console.print(Markdown(follow.text))
@@ -317,43 +334,45 @@ def _handle_manage_goals(fc_args: dict, session, tool_call: ToolCall) -> None:
         return
 
     try:
-        if action == "add":
-            save_goal(
-                type=fc_args.get("goal_type", "custom"),
-                description=fc_args.get("description", ""),
-                target=fc_args.get("target"),
-                unit=fc_args.get("unit"),
-                exercise_template_id=fc_args.get("exercise_template_id"),
-                exercise_name=fc_args.get("exercise_name"),
-                muscle_group=fc_args.get("muscle_group"),
-            )
-            follow = session.submit_tool_result(tool_call, {"success": True, "action": "added"})
-            console.print("[green]✓ Goal added[/green]\n")
+        with console.status("[dim]Applying goal change...[/dim]", spinner="dots"):
+            if action == "add":
+                save_goal(
+                    type=fc_args.get("goal_type", "custom"),
+                    description=fc_args.get("description", ""),
+                    target=fc_args.get("target"),
+                    unit=fc_args.get("unit"),
+                    exercise_template_id=fc_args.get("exercise_template_id"),
+                    exercise_name=fc_args.get("exercise_name"),
+                    muscle_group=fc_args.get("muscle_group"),
+                )
+                follow = session.submit_tool_result(tool_call, {"success": True, "action": "added"})
+                label = "[green]✓ Goal added[/green]"
 
-        elif action == "update":
-            gid = fc_args.get("goal_id")
-            if not gid:
-                raise ValueError("goal_id is required for update")
-            update_goal_fields(
-                goal_id=int(gid),
-                description=fc_args.get("description"),
-                target=fc_args.get("target"),
-                unit=fc_args.get("unit"),
-            )
-            follow = session.submit_tool_result(tool_call, {"success": True, "action": "updated"})
-            console.print("[green]✓ Goal updated[/green]\n")
+            elif action == "update":
+                gid = fc_args.get("goal_id")
+                if not gid:
+                    raise ValueError("goal_id is required for update")
+                update_goal_fields(
+                    goal_id=int(gid),
+                    description=fc_args.get("description"),
+                    target=fc_args.get("target"),
+                    unit=fc_args.get("unit"),
+                )
+                follow = session.submit_tool_result(tool_call, {"success": True, "action": "updated"})
+                label = "[green]✓ Goal updated[/green]"
 
-        elif action == "remove":
-            gid = fc_args.get("goal_id")
-            if not gid:
-                raise ValueError("goal_id is required for remove")
-            delete_goal(int(gid))
-            follow = session.submit_tool_result(tool_call, {"success": True, "action": "removed"})
-            console.print("[green]✓ Goal removed[/green]\n")
+            elif action == "remove":
+                gid = fc_args.get("goal_id")
+                if not gid:
+                    raise ValueError("goal_id is required for remove")
+                delete_goal(int(gid))
+                follow = session.submit_tool_result(tool_call, {"success": True, "action": "removed"})
+                label = "[green]✓ Goal removed[/green]"
 
-        else:
-            raise ValueError(f"Unknown action: {action}")
+            else:
+                raise ValueError(f"Unknown action: {action}")
 
+        console.print(f"{label}\n")
         if follow.text:
             console.print(Markdown(follow.text))
             console.print()
@@ -465,7 +484,11 @@ def start_enhanced_chat(weeks: int = 8) -> None:
         console.print()
 
         try:
-            response = session.send(user_input)
+            with console.status(
+                "[bold cyan]Coach is thinking...[/bold cyan]",
+                spinner="dots",
+            ):
+                response = session.send(user_input)
 
             if response.text:
                 console.print("[bold cyan]Coach:[/bold cyan]")
@@ -484,9 +507,9 @@ def start_enhanced_chat(weeks: int = 8) -> None:
 
     # ── extract and save memories after session ends ──
     if len(conversation_log) >= 2:
-        console.print("[dim]Analysing conversation for insights to remember...[/dim]")
-        saved = _extract_and_save_memories(conversation_log)
+        with console.status("[dim]Saving insights from conversation...[/dim]", spinner="dots"):
+            saved = _extract_and_save_memories(conversation_log)
         if saved > 0:
-            console.print(f"[dim]Saved {saved} insight(s) for future sessions.[/dim]\n")
+            console.print(f"[dim]✓ {saved} insight(s) saved for future sessions.[/dim]\n")
         else:
             console.print("[dim]No new insights to save.[/dim]\n")
