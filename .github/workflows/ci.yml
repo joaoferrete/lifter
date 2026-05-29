@@ -1,0 +1,135 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  # ── Unit & integration tests ──────────────────────────────────────────────
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests with coverage
+        env:
+          # Dummy values so config.py imports without raising
+          HEVY_API_KEY: "test-key"
+          GEMINI_API_KEY: "test-key"
+          ANTHROPIC_API_KEY: "test-key"
+          AI_PROVIDER: "gemini"
+          DB_PATH: "/tmp/test-lifter.db"
+        run: |
+          pytest tests/ -v --tb=short \
+            --cov=. \
+            --cov-omit="tests/*,*/__pycache__/*" \
+            --cov-report=xml \
+            --cov-report=term-missing
+
+      - name: Upload coverage report
+        if: matrix.python-version == '3.11'
+        uses: codecov/codecov-action@v4
+        with:
+          file: coverage.xml
+          fail_ci_if_error: false   # don't block CI if codecov is down
+
+  # ── Dependency vulnerability scan ────────────────────────────────────────
+  security-deps:
+    name: Dependency audit (pip-audit)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Audit dependencies for known CVEs
+        run: pip-audit -r requirements.txt --desc --format=columns
+
+  # ── Secret hygiene checks ─────────────────────────────────────────────────
+  security-secrets:
+    name: Secret hygiene
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history for secret scanning
+
+      - name: Check .env.example contains no real secrets
+        run: |
+          python3 - <<'EOF'
+          import re, sys
+          content = open(".env.example").read()
+          checks = [
+              (r"HEVY_API_KEY=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}", "Real Hevy API key"),
+              (r"GEMINI_API_KEY=AIza",                                  "Real Gemini API key"),
+              (r"ANTHROPIC_API_KEY=sk-ant-[a-zA-Z0-9]",               "Real Anthropic API key"),
+          ]
+          found = [msg for pat, msg in checks if re.search(pat, content)]
+          if found:
+              print("SECRET LEAK DETECTED in .env.example:", found)
+              sys.exit(1)
+          print("OK — no real secrets in .env.example")
+          EOF
+
+      - name: Check sensitive files are not git-tracked
+        run: |
+          TRACKED=$(git ls-files | grep -E '^(\.env|.*fit_token.*|.*fit_credentials.*|.*\.db)$' || true)
+          if [ -n "$TRACKED" ]; then
+            echo "SENSITIVE FILE TRACKED BY GIT:"
+            echo "$TRACKED"
+            exit 1
+          fi
+          echo "OK — no sensitive files tracked"
+
+      - name: Scan git history for secrets (TruffleHog)
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.before || 'HEAD~1' }}
+          head: HEAD
+          extra_args: --only-verified
+        continue-on-error: true   # informational; don't block merge
+
+  # ── Linting ───────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Run ruff
+        run: ruff check . --ignore E501,E402,F401 --exclude tests/

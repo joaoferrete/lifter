@@ -1,5 +1,8 @@
 # lifter
 
+[![CI](https://github.com/joaoferrete/lifter/actions/workflows/ci.yml/badge.svg)](https://github.com/joaoferrete/lifter/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Personal Hevy workout client with analytics, goal tracking, Google Fit integration, and an AI coach that remembers your conversations.
 
 ---
@@ -110,7 +113,9 @@ Adds sleep, steps, calories, and heart rate data to your analytics and AI contex
    - Application type: **Desktop app**
    - Name: anything
    - Click Create
-6. **Download JSON** → rename the file to `fit_credentials.json` → place it in the `lifter/` folder
+6. **Download JSON** → Google will download a file named something like
+   `client_secret_123456789-abcdefg.apps.googleusercontent.com.json`  
+   **Rename it to `fit_credentials.json`** and place it in the `lifter/` project folder
 
 ### Step 2 — Authenticate
 
