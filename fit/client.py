@@ -23,14 +23,21 @@ class FitClient:
         data_types: list[str],
         start_ms: int,
         end_ms: int,
-        bucket_ms: int = 86_400_000,  # 1 day default
+        bucket_ms: int = 86_400_000,
+        timezone_id: str | None = None,
     ) -> dict:
+        bucket: dict = {"durationMillis": bucket_ms}
+        if timezone_id:
+            # Period-based bucketing aligns to local midnight instead of UTC midnight,
+            # which fixes steps being assigned to the wrong day for non-UTC users.
+            bucket = {"period": {"type": "day", "value": 1, "timeZoneId": timezone_id}}
+
         resp = httpx.post(
             f"{FIT_BASE}/dataset:aggregate",
             headers=self._headers(),
             json={
                 "aggregateBy": [{"dataTypeName": dt} for dt in data_types],
-                "bucketByTime": {"durationMillis": bucket_ms},
+                "bucketByTime": bucket,
                 "startTimeMillis": start_ms,
                 "endTimeMillis": end_ms,
             },

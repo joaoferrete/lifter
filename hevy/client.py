@@ -2,6 +2,8 @@ import httpx
 from typing import Iterator
 from config import BASE_URL, HEVY_API_KEY
 
+_VALID_SET_TYPES = {"warmup", "normal", "failure", "dropset"}
+
 
 class HevyClient:
     def __init__(self, api_key: str = HEVY_API_KEY):
@@ -11,19 +13,19 @@ class HevyClient:
     def _get(self, path: str, params: dict | None = None) -> dict:
         url = f"{BASE_URL}{path}"
         resp = httpx.get(url, headers=self._headers, params=params or {}, timeout=30)
-        resp.raise_for_status()
+        _raise(resp, path)
         return resp.json()
 
     def _post(self, path: str, body: dict) -> dict:
         url = f"{BASE_URL}{path}"
         resp = httpx.post(url, headers=self._headers, json=body, timeout=30)
-        resp.raise_for_status()
+        _raise(resp, path)
         return resp.json()
 
     def _put(self, path: str, body: dict) -> dict:
         url = f"{BASE_URL}{path}"
         resp = httpx.put(url, headers=self._headers, json=body, timeout=30)
-        resp.raise_for_status()
+        _raise(resp, path)
         return resp.json()
 
     def _paginate(self, path: str, key: str, page_size: int = 10, **params) -> Iterator[dict]:
@@ -69,10 +71,10 @@ class HevyClient:
         return self._get(f"/v1/routines/{routine_id}")["routine"]
 
     def create_routine(self, routine: dict) -> dict:
-        return self._post("/v1/routines", {"routine": _sanitize_routine(routine)})
+        return self._post("/v1/routines", {"routine": _sanitize_routine(routine, for_put=False)})
 
     def update_routine(self, routine_id: str, routine: dict) -> dict:
-        return self._put(f"/v1/routines/{routine_id}", {"routine": _sanitize_routine(routine)})
+        return self._put(f"/v1/routines/{routine_id}", {"routine": _sanitize_routine(routine, for_put=True)})
 
     # --- Exercise templates ---
 
@@ -87,8 +89,10 @@ class HevyClient:
 
     # --- Exercise history ---
 
-    def get_exercise_history(self, template_id: str) -> Iterator[dict]:
-        return self._paginate(f"/v1/exercise_history/{template_id}", "history", page_size=10)
+    def get_exercise_history(self, template_id: str) -> list[dict]:
+        # This endpoint is not paginated — returns all history in one response.
+        data = self._get(f"/v1/exercise_history/{template_id}")
+        return data.get("exercise_history", data.get("history", []))
 
     # --- Routine folders ---
 
@@ -110,34 +114,99 @@ class HevyClient:
         return self._post("/v1/body_measurements", {"body_measurement": measurement})
 
     def update_body_measurement(self, date: str, measurement: dict) -> dict:
-        return self._put(f"/v1/body_measurements/{date}", measurement)
+        # Wrap to match POST pattern (spec body is undefined but consistency matters).
+        return self._put(f"/v1/body_measurements/{date}", {"body_measurement": measurement})
 
 
-def _sanitize_routine(routine: dict) -> dict:
-    """Strip fields the Hevy API doesn't accept in POST/PUT /v1/routines."""
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _raise(resp: httpx.Response, path: str) -> None:
+    """Raise with the API error body included so debugging is easier."""
+    if resp.is_success:
+        return
+    try:
+        detail = resp.json()
+    except Exception:
+        detail = resp.text[:400]
+    raise RuntimeError(
+        f"Hevy API {resp.status_code} at {path}: {detail}"
+    )
+
+
+def _sanitize_routine(routine: dict, *, for_put: bool = False) -> dict:
+    """
+    Produce a payload that matches PostRoutinesRequestBody / PutRoutinesRequestBody.
+
+    Key rules enforced here:
+    - reps and rest_seconds must be integers (Gemini returns floats).
+    - weight_kg must be float or None.
+    - set type must be one of the four valid enum values.
+    - exercises without a valid exercise_template_id are dropped.
+    - empty-string fields are treated as absent.
+    - folder_id is only included for POST (not in PutRoutinesRequestBody).
+    """
+    def _int(v) -> int | None:
+        try:
+            return int(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _float(v) -> float | None:
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _str(v) -> str | None:
+        s = str(v).strip() if v is not None else None
+        return s if s else None
+
     def clean_set(s: dict) -> dict:
-        return {k: v for k, v in {
-            "type":             s.get("type", "normal"),
-            "weight_kg":        s.get("weight_kg"),
-            "reps":             s.get("reps"),
-            "distance_meters":  s.get("distance_meters"),
-            "duration_seconds": s.get("duration_seconds"),
-            "custom_metric":    s.get("custom_metric"),
-            "rep_range":        s.get("rep_range"),
-        }.items() if v is not None}
+        set_type = s.get("type", "normal")
+        if set_type not in _VALID_SET_TYPES:
+            set_type = "normal"
+        result = {"type": set_type}
+        if s.get("weight_kg") is not None:
+            result["weight_kg"] = _float(s["weight_kg"])
+        if s.get("reps") is not None:
+            result["reps"] = _int(s["reps"])
+        if s.get("distance_meters") is not None:
+            result["distance_meters"] = _int(s["distance_meters"])
+        if s.get("duration_seconds") is not None:
+            result["duration_seconds"] = _int(s["duration_seconds"])
+        if s.get("custom_metric") is not None:
+            result["custom_metric"] = _float(s["custom_metric"])
+        if s.get("rep_range") is not None:
+            result["rep_range"] = s["rep_range"]
+        return result
 
-    def clean_exercise(ex: dict) -> dict:
-        return {k: v for k, v in {
-            "exercise_template_id": ex["exercise_template_id"],
-            "superset_id":          ex.get("superset_id"),
-            "rest_seconds":         ex.get("rest_seconds"),
-            "notes":                ex.get("notes"),
-            "sets":                 [clean_set(s) for s in ex.get("sets", [])],
-        }.items() if v is not None}
+    def clean_exercise(ex: dict) -> dict | None:
+        tid = _str(ex.get("exercise_template_id"))
+        if not tid:
+            return None
+        sets = [clean_set(s) for s in ex.get("sets", [])]
+        result: dict = {"exercise_template_id": tid, "sets": sets}
+        rest = _int(ex.get("rest_seconds"))
+        if rest is not None:
+            result["rest_seconds"] = rest
+        notes = _str(ex.get("notes"))
+        if notes:
+            result["notes"] = notes
+        sid = ex.get("superset_id")
+        if sid is not None:
+            result["superset_id"] = _int(sid)
+        return result
 
-    return {k: v for k, v in {
-        "title":     routine.get("title", ""),
-        "folder_id": routine.get("folder_id"),
-        "notes":     routine.get("notes"),
-        "exercises": [clean_exercise(ex) for ex in routine.get("exercises", [])],
-    }.items() if v is not None}
+    exercises = [e for ex in routine.get("exercises", []) if (e := clean_exercise(ex))]
+    title = _str(routine.get("title")) or "New Routine"
+    notes = _str(routine.get("notes"))
+
+    payload: dict = {"title": title, "exercises": exercises}
+    if notes:
+        payload["notes"] = notes
+    if not for_put:
+        folder_id = routine.get("folder_id")
+        if folder_id is not None:
+            payload["folder_id"] = folder_id
+
+    return payload
