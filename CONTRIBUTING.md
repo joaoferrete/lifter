@@ -6,7 +6,7 @@ Thanks for wanting to contribute! Here's everything you need to know.
 
 - Check existing issues and PRs to avoid duplicate work
 - For significant changes, open an issue first to discuss the approach
-- All contributions are released under the [MIT License](LICENSE)
+- All contributions are released under the [AGPL-3.0 License](LICENSE)
 
 ## Setup
 

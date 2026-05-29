@@ -77,8 +77,10 @@ def _sync_daily(client: FitClient, start: datetime, end: datetime, counts: dict)
                     row["total_calories"] = vals[0].get("fpVal")
                 elif "heart_rate" in dtype:
                     # aggregate returns [avg, max, min]
-                    if len(vals) >= 1: row["avg_hr"] = vals[0].get("fpVal")
-                    if len(vals) >= 3: row["min_hr"] = vals[2].get("fpVal")
+                    if len(vals) >= 1:
+                        row["avg_hr"] = vals[0].get("fpVal")
+                    if len(vals) >= 3:
+                        row["min_hr"] = vals[2].get("fpVal")
                 elif "active_minutes" in dtype and vals:
                     row["active_minutes"] = vals[0].get("intVal") or int(vals[0].get("fpVal", 0) or 0)
 

@@ -30,18 +30,12 @@ jobs:
 
       - name: Run tests with coverage
         env:
-          # Dummy values so config.py imports without raising
           HEVY_API_KEY: "test-key"
           GEMINI_API_KEY: "test-key"
           ANTHROPIC_API_KEY: "test-key"
           AI_PROVIDER: "gemini"
           DB_PATH: "/tmp/test-lifter.db"
-        run: |
-          pytest tests/ -v --tb=short \
-            --cov=. \
-            --cov-omit="tests/*,*/__pycache__/*" \
-            --cov-report=xml \
-            --cov-report=term-missing
+        run: pytest tests/ -v --cov=. --cov-report=xml --cov-report=term-missing
 
       - name: Upload coverage report
         if: matrix.python-version == '3.11'

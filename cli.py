@@ -44,9 +44,12 @@ def _time_ago(iso_str: str) -> str:
     try:
         dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
         secs = int((datetime.now(timezone.utc) - dt).total_seconds())
-        if secs < 60:    return "just now"
-        if secs < 3600:  return f"{secs // 60}m ago"
-        if secs < 86400: return f"{secs // 3600}h ago"
+        if secs < 60:
+            return "just now"
+        if secs < 3600:
+            return f"{secs // 60}m ago"
+        if secs < 86400:
+            return f"{secs // 3600}h ago"
         return f"{secs // 86400}d ago"
     except Exception:
         return "unknown"
@@ -218,7 +221,7 @@ def _wizard_volume() -> None:
         unit="sets/wk",
         muscle_group=muscle,
     )
-    console.print(f"  [green]✓[/green] Goal saved\n")
+    console.print("  [green]✓[/green] Goal saved\n")
 
 
 def _wizard_custom() -> None:
@@ -229,7 +232,7 @@ def _wizard_custom() -> None:
     ).ask()
     if text:
         save_goal(type="custom", description=text.strip())
-        console.print(f"  [green]✓[/green] Goal saved\n")
+        console.print("  [green]✓[/green] Goal saved\n")
 
 
 def run_goals_wizard(is_update: bool = False) -> None:
@@ -264,13 +267,20 @@ def run_goals_wizard(is_update: bool = False) -> None:
         clear_goals()
 
     for goal_type in selected:
-        if goal_type == "lift_pr":         _wizard_lift_prs()
-        elif goal_type == "frequency":     _wizard_frequency()
-        elif goal_type == "weight_loss":   _wizard_weight("weight_loss")
-        elif goal_type == "weight_gain":   _wizard_weight("weight_gain")
-        elif goal_type == "body_fat":      _wizard_body_fat()
-        elif goal_type == "volume":        _wizard_volume()
-        elif goal_type == "custom":        _wizard_custom()
+        if goal_type == "lift_pr":
+            _wizard_lift_prs()
+        elif goal_type == "frequency":
+            _wizard_frequency()
+        elif goal_type == "weight_loss":
+            _wizard_weight("weight_loss")
+        elif goal_type == "weight_gain":
+            _wizard_weight("weight_gain")
+        elif goal_type == "body_fat":
+            _wizard_body_fat()
+        elif goal_type == "volume":
+            _wizard_volume()
+        elif goal_type == "custom":
+            _wizard_custom()
 
     mark_goals_asked()
     total = len(get_goals())
@@ -458,8 +468,10 @@ def _render_sync_report(counts: dict, is_full: bool) -> None:
             _render_goals_progress()
             return
         parts = []
-        if updated: parts.append(f"[bold green]{updated}[/bold green] new/updated")
-        if deleted: parts.append(f"[bold red]{deleted}[/bold red] deleted")
+        if updated:
+            parts.append(f"[bold green]{updated}[/bold green] new/updated")
+        if deleted:
+            parts.append(f"[bold red]{deleted}[/bold red] deleted")
         console.print(Panel(" · ".join(parts), title="[bold green]Sync complete[/bold green]", border_style="green"))
 
     if updated_ids:
@@ -690,8 +702,10 @@ def _do_progress():
             change = ""
             if prev_e1rm is not None:
                 delta = row["e1rm"] - prev_e1rm
-                if delta > 0:   change = f" [green]+{delta:.1f}[/green]"
-                elif delta < 0: change = f" [red]{delta:.1f}[/red]"
+                if delta > 0:
+                    change = f" [green]+{delta:.1f}[/green]"
+                elif delta < 0:
+                    change = f" [red]{delta:.1f}[/red]"
             t.add_row(str(row["date"]), f"{row['best_weight_kg']} kg", str(row["best_reps"]), f"{row['e1rm']:.1f} kg{change}")
             prev_e1rm = row["e1rm"]
         console.print(t)
@@ -801,7 +815,7 @@ def _do_coach():
                     resp = push_routine_to_hevy(routine)
                     console.print(f"\n[green]✓ Routine pushed to Hevy![/green] (id: {resp.get('routine', {}).get('id')})")
                 except Exception as e:
-                    console.print(f"[red]Failed to push routine. Check your Hevy API key.[/red]")
+                    console.print("[red]Failed to push routine. Check your Hevy API key.[/red]")
                     console.print(f"[dim]{type(e).__name__}[/dim]")
 
 

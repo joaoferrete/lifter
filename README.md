@@ -1,7 +1,7 @@
 # lifter
 
 [![CI](https://github.com/joaoferrete/lifter/actions/workflows/ci.yml/badge.svg)](https://github.com/joaoferrete/lifter/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
 Personal Hevy workout client with analytics, goal tracking, Google Fit integration, and an AI coach that remembers your conversations.
 
