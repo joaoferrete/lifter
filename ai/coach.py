@@ -6,6 +6,8 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
+from datetime import datetime, timezone
+
 from ai.provider import create_chat_session, stream_complete, provider_label, ToolCall
 from ai.sanitize import sanitize_for_prompt, ANTI_INJECTION_PREAMBLE
 from analytics.volume import muscle_group_summary, sets_per_muscle_per_week
@@ -39,6 +41,16 @@ def _build_context(weeks: int = 8) -> str:
 
     safe_name = sanitize_for_prompt(name, max_len=60)
 
+    # Days since last workout — helps the coach assess recovery state
+    last_wkt = query("SELECT start_time FROM workouts ORDER BY start_time DESC LIMIT 1")
+    days_since_last = None
+    if last_wkt:
+        try:
+            last_dt = datetime.fromisoformat(last_wkt[0]["start_time"].replace("Z", "+00:00"))
+            days_since_last = (datetime.now(timezone.utc) - last_dt).days
+        except Exception:
+            pass
+
     lines = [
         f"## Athlete: {safe_name}",
         f"## Training summary (last {weeks} weeks)\n",
@@ -46,6 +58,10 @@ def _build_context(weeks: int = 8) -> str:
         f"- Avg workouts/week: {freq['avg_per_week']}",
         f"- Avg session duration: {freq['avg_duration_minutes']} min",
         f"- Avg rest days between sessions: {freq['rest_day_avg']}",
+    ]
+    if days_since_last is not None:
+        lines.append(f"- Days since last workout: {days_since_last}")
+    lines += [
         "",
         "## Weekly volume (avg kg tonnage) by muscle group",
     ]
@@ -104,6 +120,66 @@ def _build_context(weeks: int = 8) -> str:
             lines += ["", mem_ctx]
     except Exception:
         pass
+
+    # Recent workouts — the actual sessions with exercises and best sets.
+    # This is the most important near-term context: what did the athlete do
+    # last, how heavy, and how long ago.
+    recent_wkts = query(
+        """SELECT id, title, start_time, end_time
+           FROM workouts
+           ORDER BY start_time DESC
+           LIMIT 7"""
+    )
+    if recent_wkts:
+        lines += ["", "## Recent workouts (last sessions, newest first)"]
+        for w in recent_wkts:
+            try:
+                start_dt = datetime.fromisoformat(w["start_time"].replace("Z", "+00:00"))
+                date_str = start_dt.strftime("%a %d %b %Y")
+                end_dt = datetime.fromisoformat(w["end_time"].replace("Z", "+00:00"))
+                dur = int((end_dt - start_dt).total_seconds() / 60)
+                dur_str = f"{dur} min"
+            except Exception:
+                date_str = (w["start_time"] or "")[:10]
+                dur_str = ""
+
+            lines.append(f"\n  {w['title']} — {date_str} ({dur_str})")
+
+            # Best normal set per exercise in this workout
+            ex_rows = query(
+                """SELECT we.title,
+                          ws.weight_kg,
+                          ws.reps,
+                          ws.weight_kg * (1 + ws.reps / 30.0) AS e1rm
+                   FROM workout_exercises we
+                   JOIN workout_sets ws ON ws.workout_exercise_id = we.id
+                   WHERE we.workout_id = ?
+                     AND ws.type = 'normal'
+                     AND ws.weight_kg IS NOT NULL
+                     AND ws.reps IS NOT NULL AND ws.reps > 0
+                   ORDER BY we.idx, e1rm DESC""",
+                (w["id"],),
+            )
+            # One best set per exercise name
+            seen_ex: dict = {}
+            for row in ex_rows:
+                if row["title"] not in seen_ex:
+                    seen_ex[row["title"]] = row
+
+            if seen_ex:
+                for ex_title, row in seen_ex.items():
+                    lines.append(
+                        f"    - {ex_title}: {row['weight_kg']} kg × {row['reps']} reps"
+                        f" (e1RM {row['e1rm']:.1f} kg)"
+                    )
+            else:
+                # Bodyweight / cardio session — just list exercise names
+                bw = query(
+                    "SELECT DISTINCT we.title FROM workout_exercises we WHERE we.workout_id = ?",
+                    (w["id"],),
+                )
+                for b in bw:
+                    lines.append(f"    - {b['title']}")
 
     if known:
         lines += ["", "## Exercise library (use these IDs in routines)"]
