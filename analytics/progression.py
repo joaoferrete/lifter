@@ -1,0 +1,111 @@
+"""Exercise progression tracking and plateau detection."""
+import pandas as pd
+
+from db.store import query
+
+
+def _e1rm(weight_kg: float, reps: int) -> float:
+    """Epley formula for estimated 1RM."""
+    if reps == 1:
+        return weight_kg
+    return weight_kg * (1 + reps / 30)
+
+
+def exercise_progression(template_id: str, weeks: int = 12) -> pd.DataFrame:
+    """Best estimated 1RM per session for a given exercise template."""
+    rows = query(
+        """
+        SELECT w.start_time, ws.weight_kg, ws.reps
+        FROM workout_sets ws
+        JOIN workouts w ON w.id = ws.workout_id
+        WHERE ws.exercise_template_id = ?
+          AND ws.type = 'normal'
+          AND ws.weight_kg IS NOT NULL
+          AND ws.reps IS NOT NULL
+          AND ws.reps > 0
+          AND w.start_time >= datetime('now', ?)
+        ORDER BY w.start_time
+        """,
+        (template_id, f"-{weeks * 7} days"),
+    )
+
+    if not rows:
+        return pd.DataFrame(columns=["date", "best_weight_kg", "best_reps", "e1rm"])
+
+    df = pd.DataFrame(rows)
+    df["start_time"] = pd.to_datetime(df["start_time"], utc=True)
+    df["date"] = df["start_time"].dt.date
+    df["e1rm"] = df.apply(lambda r: _e1rm(r["weight_kg"], r["reps"]), axis=1)
+
+    best = (
+        df.sort_values("e1rm", ascending=False)
+        .groupby("date")
+        .first()
+        .reset_index()[["date", "weight_kg", "reps", "e1rm"]]
+        .rename(columns={"weight_kg": "best_weight_kg", "reps": "best_reps"})
+        .sort_values("date")
+    )
+    return best
+
+
+def all_exercise_progressions(weeks: int = 12) -> dict[str, pd.DataFrame]:
+    """Return progression data for every exercise that has at least 3 sessions."""
+    rows = query(
+        """
+        SELECT DISTINCT ws.exercise_template_id, et.title
+        FROM workout_sets ws
+        JOIN exercise_templates et ON et.id = ws.exercise_template_id
+        WHERE ws.type = 'normal'
+          AND ws.weight_kg IS NOT NULL
+          AND ws.reps IS NOT NULL
+        """
+    )
+
+    result = {}
+    for row in rows:
+        df = exercise_progression(row["exercise_template_id"], weeks)
+        if len(df) >= 3:
+            result[row["title"]] = df
+    return result
+
+
+def detect_plateaus(weeks: int = 8, stall_sessions: int = 3) -> list[dict]:
+    """Find exercises where the e1RM hasn't improved in the last N sessions."""
+    progressions = all_exercise_progressions(weeks)
+    plateaus = []
+    for title, df in progressions.items():
+        if len(df) < stall_sessions:
+            continue
+        tail = df.tail(stall_sessions)
+        if tail["e1rm"].max() <= tail["e1rm"].iloc[0]:
+            plateaus.append(
+                {
+                    "exercise": title,
+                    "sessions_stalled": stall_sessions,
+                    "current_e1rm": round(tail["e1rm"].iloc[-1], 1),
+                    "last_date": str(tail["date"].iloc[-1]),
+                }
+            )
+    return plateaus
+
+
+def top_progressions(weeks: int = 8, top_n: int = 5) -> list[dict]:
+    """Exercises with the best relative e1RM improvement over the period."""
+    progressions = all_exercise_progressions(weeks)
+    improvements = []
+    for title, df in progressions.items():
+        if len(df) < 2:
+            continue
+        start = df["e1rm"].iloc[0]
+        end = df["e1rm"].iloc[-1]
+        if start > 0:
+            pct = (end - start) / start * 100
+            improvements.append(
+                {
+                    "exercise": title,
+                    "improvement_pct": round(pct, 1),
+                    "start_e1rm": round(start, 1),
+                    "current_e1rm": round(end, 1),
+                }
+            )
+    return sorted(improvements, key=lambda x: x["improvement_pct"], reverse=True)[:top_n]
