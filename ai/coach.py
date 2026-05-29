@@ -76,6 +76,14 @@ def _build_context(weeks: int = 8) -> str:
 
     lines += ["", goals_context_for_ai(weeks)]
 
+    try:
+        from fit.analytics import fit_context_for_ai
+        fit_ctx = fit_context_for_ai(7)
+        if "No Google Fit" not in fit_ctx:
+            lines += ["", fit_ctx]
+    except Exception:
+        pass
+
     if known:
         lines += ["", "## Exercise library (use these IDs in routines)"]
         for ex in known:

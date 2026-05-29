@@ -88,6 +88,20 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 value TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS fit_sleep (
+                date           TEXT PRIMARY KEY,
+                total_minutes  INTEGER
+            );
+
+            CREATE TABLE IF NOT EXISTS fit_daily (
+                date            TEXT PRIMARY KEY,
+                steps           INTEGER,
+                total_calories  REAL,
+                avg_hr          REAL,
+                min_hr          REAL,
+                active_minutes  INTEGER
+            );
+
             CREATE TABLE IF NOT EXISTS user_goals (
                 id                   INTEGER PRIMARY KEY AUTOINCREMENT,
                 type                 TEXT NOT NULL,

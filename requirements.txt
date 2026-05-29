@@ -1,6 +1,8 @@
 httpx>=0.27
 pandas>=2.0
 google-genai>=1.0
+google-auth-oauthlib>=1.0
+google-auth>=2.0
 anthropic>=0.40
 rich>=13.0
 python-dotenv>=1.0

@@ -493,11 +493,24 @@ def _show_header() -> None:
     title = f"HEVY  [dim]·[/dim]  {name}" if name else "HEVY TRAINING CLIENT"
     ai_str = f"AI: {provider_label()}"
 
+    # Recovery line from Google Fit (if connected + data available)
+    recovery_str = ""
+    try:
+        from fit.auth import is_connected
+        if is_connected():
+            from fit.analytics import recovery_score
+            rec = recovery_score(3)
+            if rec:
+                recovery_str = f"  ·  Recovery [{rec['color']}]{rec['score']}/100 {rec['label']}[/{rec['color']}]"
+    except Exception:
+        pass
+
     console.print(Panel(
         f"[dim]{sync_str}  ·  {ai_str}[/dim]\n"
         f"[bold]{total}[/bold] workouts total  ·  [bold]{week_count}[/bold] this week  ·  "
         f"[bold]{freq['avg_per_week']}[/bold]/wk avg"
-        + (f"  ·  [yellow]{len(goals)} active goal(s)[/yellow]" if goals else ""),
+        + (f"  ·  [yellow]{len(goals)} active goal(s)[/yellow]" if goals else "")
+        + recovery_str,
         title=f"[bold cyan]{title}[/bold cyan]",
         border_style="cyan",
         padding=(0, 2),
@@ -805,6 +818,163 @@ def _do_chat():
     start_enhanced_chat(weeks=weeks)
 
 
+# ── google fit ────────────────────────────────────────────────────────────────
+
+def _render_recovery_panel() -> None:
+    """Show a compact recovery panel if Fit data exists."""
+    try:
+        from fit.analytics import recovery_score, sleep_summary, activity_summary
+        from fit.auth import is_connected
+        if not is_connected():
+            return
+        rec = recovery_score(3)
+        sleep = sleep_summary(7)
+        activity = activity_summary(7)
+        if not rec and not sleep:
+            return
+        parts = []
+        if rec:
+            parts.append(f"Recovery [{rec['color']}]{rec['score']}/100 {rec['label']}[/{rec['color']}]")
+        if sleep.get("avg_hours"):
+            parts.append(f"Sleep {sleep['avg_hours']}h avg")
+        if activity.get("avg_steps"):
+            parts.append(f"Steps {int(activity['avg_steps']):,}/day")
+        if activity.get("resting_hr"):
+            parts.append(f"RHR {activity['resting_hr']} bpm")
+        if parts:
+            console.print(Panel("  ·  ".join(parts), title="[bold green]Recovery[/bold green]",
+                                border_style="green", padding=(0, 2)))
+            console.print()
+    except Exception:
+        pass
+
+
+def _do_fit():
+    from fit.auth import is_connected, disconnect
+
+    action = questionary.select(
+        "Google Fit:",
+        choices=[
+            questionary.Choice("Sync health data  (sleep, steps, calories, HR)", value="sync"),
+            questionary.Choice("Connect / re-authenticate", value="connect"),
+            questionary.Choice("View recovery dashboard", value="view"),
+            questionary.Choice("Disconnect Google Fit", value="disconnect"),
+        ],
+        style=STYLE,
+    ).ask()
+    if not action:
+        return
+
+    if action == "connect":
+        _fit_setup()
+
+    elif action == "sync":
+        if not is_connected():
+            console.print("[yellow]Not connected. Choose 'Connect' first.[/yellow]")
+            return
+        days_str = questionary.select(
+            "How far back to sync?",
+            choices=["7 days", "14 days", "30 days", "90 days"],
+            default="30 days",
+            style=STYLE,
+        ).ask()
+        if not days_str:
+            return
+        days = int(days_str.split()[0])
+        console.print(f"\n[dim]Syncing {days} days of Fit data...[/dim]")
+        try:
+            from fit.sync import sync_fit
+            counts = sync_fit(days=days)
+            console.print(Panel(
+                f"[bold green]{counts['daily_days']}[/bold green] daily records  ·  "
+                f"[bold green]{counts['sleep_sessions']}[/bold green] sleep sessions",
+                title="[bold green]Google Fit sync complete[/bold green]",
+                border_style="green",
+            ))
+            _render_recovery_panel()
+        except Exception as e:
+            console.print(f"[red]Sync failed: {e}[/red]")
+
+    elif action == "view":
+        if not is_connected():
+            console.print("[yellow]Not connected.[/yellow]")
+            return
+        _render_fit_dashboard()
+
+    elif action == "disconnect":
+        if questionary.confirm("  Disconnect Google Fit? (local data stays)", default=False, style=STYLE).ask():
+            disconnect()
+            console.print("[dim]Disconnected. Local Fit data kept in DB.[/dim]")
+
+
+def _fit_setup() -> None:
+    console.rule("[bold cyan]Connect Google Fit[/bold cyan]")
+    console.print("""
+  [bold]Step 1[/bold] — Create OAuth credentials in Google Cloud Console:
+
+    1. Go to [link]https://console.cloud.google.com[/link]
+    2. Create a new project (or select an existing one)
+    3. Go to [bold]APIs & Services → Library[/bold] and enable [bold]Fitness API[/bold]
+    4. Go to [bold]APIs & Services → OAuth consent screen[/bold]
+       → External → fill in app name → add your Gmail as a test user
+    5. Go to [bold]APIs & Services → Credentials → Create Credentials → OAuth client ID[/bold]
+       → Application type: [bold]Desktop app[/bold]
+    6. Download the JSON file and save it as [bold]fit_credentials.json[/bold]
+       in this project folder
+
+  [bold]Step 2[/bold] — The browser will open for you to approve access.
+""")
+
+    if not questionary.confirm("  Ready to authenticate?", default=True, style=STYLE).ask():
+        return
+
+    try:
+        from fit.auth import get_credentials, CREDENTIALS_FILE
+        get_credentials()
+        console.print("\n[bold green]✓ Connected to Google Fit![/bold green]")
+        console.print("[dim]Run 'Google Fit → Sync health data' to import your data.[/dim]\n")
+    except FileNotFoundError as e:
+        console.print(f"\n[red]{e}[/red]")
+    except Exception as e:
+        console.print(f"\n[red]Authentication failed: {e}[/red]")
+
+
+def _render_fit_dashboard() -> None:
+    from fit.analytics import sleep_summary, activity_summary, recovery_score
+
+    console.rule("[bold green]Recovery Dashboard[/bold green]")
+
+    rec = recovery_score(3)
+    if rec:
+        score = rec["score"]
+        bar_w = int(score / 100 * 30)
+        bar = f"[{rec['color']}]{'█' * bar_w}[/{rec['color']}][dim]{'░' * (30 - bar_w)}[/dim]"
+        console.print(f"\n  Recovery Score  {bar}  [{rec['color']}]{score}/100  {rec['label']}[/{rec['color']}]\n")
+
+    for label, days in [("Last 7 days", 7), ("Last 14 days", 14)]:
+        sleep = sleep_summary(days)
+        activity = activity_summary(days)
+        if not sleep and not activity:
+            continue
+        console.rule(f"[dim]{label}[/dim]")
+        t = Table(box=box.SIMPLE)
+        t.add_column("Metric", style="bold")
+        t.add_column("Value", justify="right")
+        if sleep.get("avg_hours"):
+            t.add_row("Avg sleep", f"{sleep['avg_hours']}h/night")
+            t.add_row("Last night", f"{sleep.get('last_night_hours')}h")
+            t.add_row("Nights ≥7h", f"{sleep['nights_7plus_hours']}/{sleep['nights_tracked']}")
+        if activity.get("avg_steps"):
+            t.add_row("Avg steps / day", f"{int(activity['avg_steps']):,}")
+        if activity.get("avg_calories"):
+            t.add_row("Avg calories / day", f"{int(activity['avg_calories']):,} kcal")
+        if activity.get("resting_hr"):
+            t.add_row("Resting HR", f"{activity['resting_hr']} bpm")
+        if activity.get("avg_active_minutes"):
+            t.add_row("Avg active minutes", str(int(activity["avg_active_minutes"])))
+        console.print(t)
+
+
 # ── first-run & weekly check-in ───────────────────────────────────────────────
 
 def _check_goals_and_checkin() -> None:
@@ -824,16 +994,18 @@ def _check_goals_and_checkin() -> None:
 # ── main loop ─────────────────────────────────────────────────────────────────
 
 MENU_ITEMS = [
-    questionary.Choice("  Sync new workouts",       value="sync"),
-    questionary.Choice("  Dashboard & stats",        value="stats"),
-    questionary.Choice("  Exercise progression",     value="progress"),
-    questionary.Choice("  Personal records",         value="records"),
-    questionary.Choice("  My goals",                 value="goals"),
+    questionary.Choice("  Sync new workouts",        value="sync"),
+    questionary.Choice("  Dashboard & stats",         value="stats"),
+    questionary.Choice("  Exercise progression",      value="progress"),
+    questionary.Choice("  Personal records",          value="records"),
+    questionary.Choice("  My goals",                  value="goals"),
     questionary.Separator("  ─────────────────────────────────"),
-    questionary.Choice("  AI coaching report",       value="coach"),
-    questionary.Choice("  Chat with coach",          value="chat"),
+    questionary.Choice("  Google Fit  (sleep, steps, HR)", value="fit"),
     questionary.Separator("  ─────────────────────────────────"),
-    questionary.Choice("  Exit",                     value="exit"),
+    questionary.Choice("  AI coaching report",        value="coach"),
+    questionary.Choice("  Chat with coach",           value="chat"),
+    questionary.Separator("  ─────────────────────────────────"),
+    questionary.Choice("  Exit",                      value="exit"),
 ]
 
 ACTIONS = {
@@ -842,6 +1014,7 @@ ACTIONS = {
     "progress": _do_progress,
     "records":  _do_records,
     "goals":    _do_goals,
+    "fit":      _do_fit,
     "coach":    _do_coach,
     "chat":     _do_chat,
 }
