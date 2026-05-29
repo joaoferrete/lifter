@@ -69,10 +69,10 @@ class HevyClient:
         return self._get(f"/v1/routines/{routine_id}")["routine"]
 
     def create_routine(self, routine: dict) -> dict:
-        return self._post("/v1/routines", {"routine": routine})
+        return self._post("/v1/routines", {"routine": _sanitize_routine(routine)})
 
     def update_routine(self, routine_id: str, routine: dict) -> dict:
-        return self._put(f"/v1/routines/{routine_id}", {"routine": routine})
+        return self._put(f"/v1/routines/{routine_id}", {"routine": _sanitize_routine(routine)})
 
     # --- Exercise templates ---
 
@@ -111,3 +111,33 @@ class HevyClient:
 
     def update_body_measurement(self, date: str, measurement: dict) -> dict:
         return self._put(f"/v1/body_measurements/{date}", measurement)
+
+
+def _sanitize_routine(routine: dict) -> dict:
+    """Strip fields the Hevy API doesn't accept in POST/PUT /v1/routines."""
+    def clean_set(s: dict) -> dict:
+        return {k: v for k, v in {
+            "type":             s.get("type", "normal"),
+            "weight_kg":        s.get("weight_kg"),
+            "reps":             s.get("reps"),
+            "distance_meters":  s.get("distance_meters"),
+            "duration_seconds": s.get("duration_seconds"),
+            "custom_metric":    s.get("custom_metric"),
+            "rep_range":        s.get("rep_range"),
+        }.items() if v is not None}
+
+    def clean_exercise(ex: dict) -> dict:
+        return {k: v for k, v in {
+            "exercise_template_id": ex["exercise_template_id"],
+            "superset_id":          ex.get("superset_id"),
+            "rest_seconds":         ex.get("rest_seconds"),
+            "notes":                ex.get("notes"),
+            "sets":                 [clean_set(s) for s in ex.get("sets", [])],
+        }.items() if v is not None}
+
+    return {k: v for k, v in {
+        "title":     routine.get("title", ""),
+        "folder_id": routine.get("folder_id"),
+        "notes":     routine.get("notes"),
+        "exercises": [clean_exercise(ex) for ex in routine.get("exercises", [])],
+    }.items() if v is not None}
