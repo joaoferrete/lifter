@@ -1,46 +1,106 @@
-"""hevy — personal Hevy workout client with AI coaching."""
+"""hevy — interactive personal Hevy workout client."""
 import json
+import sys
 from datetime import datetime, timezone
 from typing import Optional
 
-import typer
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
+import questionary
 from rich.columns import Columns
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.table import Table
 from rich import box
 
 from config import HEVY_API_KEY, GEMINI_API_KEY
+from db.store import init_db, query, get_sync_state
 from hevy.client import HevyClient
 from hevy.sync import full_sync, incremental_sync
-from db.store import init_db, query
 from analytics.volume import muscle_group_summary, sets_per_muscle_per_week, weekly_volume
 from analytics.progression import detect_plateaus, top_progressions, exercise_progression
 from analytics.frequency import workout_frequency, muscle_group_frequency
 from analytics.records import all_time_records, recent_prs, body_measurement_trend
 
-app = typer.Typer(help="Personal Hevy workout client with AI coaching.")
 console = Console()
 
+STYLE = questionary.Style([
+    ("qmark",       "fg:#00d7ff bold"),
+    ("question",    "bold"),
+    ("answer",      "fg:#00d7ff bold"),
+    ("pointer",     "fg:#00d7ff bold"),
+    ("highlighted", "fg:#00d7ff bold"),
+    ("selected",    "fg:#00d7ff"),
+    ("separator",   "fg:#555555"),
+    ("instruction", "fg:#555555 italic"),
+])
 
-def _require_api_key() -> HevyClient:
-    if not HEVY_API_KEY:
-        console.print("[red]HEVY_API_KEY not set. Copy .env.example → .env and fill it in.[/red]")
-        raise typer.Exit(1)
-    return HevyClient()
 
+# ── helpers ───────────────────────────────────────────────────────────────────
 
-# ── sync report helpers ────────────────────────────────────────────────────────
+def _time_ago(iso_str: str) -> str:
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        secs = int((datetime.now(timezone.utc) - dt).total_seconds())
+        if secs < 60:
+            return "just now"
+        if secs < 3600:
+            return f"{secs // 60}m ago"
+        if secs < 86400:
+            return f"{secs // 3600}h ago"
+        return f"{secs // 86400}d ago"
+    except Exception:
+        return "unknown"
+
 
 def _fmt_duration(start_iso: str, end_iso: str) -> str:
     try:
         s = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
         e = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
-        mins = int((e - s).total_seconds() / 60)
-        return f"{mins} min"
+        return f"{int((e - s).total_seconds() / 60)} min"
     except Exception:
         return ""
 
+
+def _require_hevy() -> HevyClient:
+    if not HEVY_API_KEY:
+        console.print("[red]HEVY_API_KEY not set in .env[/red]")
+        return None
+    return HevyClient()
+
+
+def _pause():
+    console.print()
+    questionary.press_any_key_to_continue("  Press any key to return to menu...").ask()
+
+
+# ── header ────────────────────────────────────────────────────────────────────
+
+def _show_header():
+    last_sync = get_sync_state("last_sync")
+    counts = query("SELECT COUNT(*) as n FROM workouts")
+    total = counts[0]["n"] if counts else 0
+
+    freq = workout_frequency(4)
+    this_week = query(
+        "SELECT COUNT(*) as n FROM workouts WHERE start_time >= datetime('now', '-7 days')"
+    )
+    week_count = this_week[0]["n"] if this_week else 0
+
+    sync_str = f"Last sync: {_time_ago(last_sync)}" if last_sync else "Never synced — run Sync first"
+    stats_str = f"{total} workouts total  ·  {week_count} this week  ·  {freq['avg_per_week']}/wk avg"
+
+    console.print(
+        Panel(
+            f"[dim]{sync_str}[/dim]\n{stats_str}",
+            title="[bold cyan]HEVY TRAINING CLIENT[/bold cyan]",
+            border_style="cyan",
+            padding=(0, 2),
+        )
+    )
+    console.print()
+
+
+# ── sync report helpers ────────────────────────────────────────────────────────
 
 def _render_workout_cards(workout_ids: list[str]) -> None:
     for wid in workout_ids:
@@ -59,22 +119,19 @@ def _render_workout_cards(workout_ids: list[str]) -> None:
 
         exercises = query(
             """
-            SELECT we.title, we.exercise_template_id, we.id as we_id,
+            SELECT we.title, we.exercise_template_id,
                    ws.weight_kg, ws.reps,
                    ws.weight_kg * (1 + ws.reps / 30.0) as e1rm
             FROM workout_exercises we
             JOIN workout_sets ws ON ws.workout_exercise_id = we.id
             WHERE we.workout_id = ?
               AND ws.type = 'normal'
-              AND ws.weight_kg IS NOT NULL
-              AND ws.reps IS NOT NULL
-              AND ws.reps > 0
+              AND ws.weight_kg IS NOT NULL AND ws.reps IS NOT NULL AND ws.reps > 0
             ORDER BY we.idx, e1rm DESC
             """,
             (wid,),
         )
 
-        # Keep best set per exercise
         best: dict[str, dict] = {}
         for ex in exercises:
             name = ex["title"]
@@ -84,38 +141,26 @@ def _render_workout_cards(workout_ids: list[str]) -> None:
         lines = []
         for name, ex in best.items():
             prev = query(
-                """
-                SELECT MAX(ws.weight_kg * (1 + ws.reps / 30.0)) as top
-                FROM workout_sets ws
-                WHERE ws.exercise_template_id = ?
-                  AND ws.type = 'normal'
-                  AND ws.weight_kg IS NOT NULL
-                  AND ws.reps IS NOT NULL
-                  AND ws.workout_id != ?
-                """,
+                """SELECT MAX(ws.weight_kg * (1 + ws.reps / 30.0)) as top
+                   FROM workout_sets ws
+                   WHERE ws.exercise_template_id = ? AND ws.type = 'normal'
+                     AND ws.weight_kg IS NOT NULL AND ws.workout_id != ?""",
                 (ex["exercise_template_id"], wid),
             )
-            prev_best = prev[0]["top"] if prev and prev[0]["top"] else 0
-            is_pr = ex["e1rm"] > prev_best
-
-            weight_str = f"{ex['weight_kg']} kg × {ex['reps']} reps"
-            if is_pr:
-                lines.append(f"  [bold]{name}[/bold]  {weight_str}  [bold yellow]★ PR[/bold yellow]  [dim](e1RM {ex['e1rm']:.1f} kg)[/dim]")
-            else:
-                lines.append(f"  [bold]{name}[/bold]  {weight_str}")
+            is_pr = ex["e1rm"] > (prev[0]["top"] or 0) if prev else False
+            pr_badge = "  [bold yellow]★ PR[/bold yellow]" if is_pr else ""
+            lines.append(
+                f"  [bold]{name}[/bold]  "
+                f"{ex['weight_kg']} kg × {ex['reps']} reps{pr_badge}"
+            )
 
         if not lines:
-            # Duration-only or bodyweight exercises — just list names
-            bw_exs = query(
-                "SELECT DISTINCT we.title FROM workout_exercises we WHERE we.workout_id = ?",
-                (wid,),
-            )
-            lines = [f"  {e['title']}" for e in bw_exs]
+            bw = query("SELECT DISTINCT we.title FROM workout_exercises we WHERE we.workout_id = ?", (wid,))
+            lines = [f"  {e['title']}" for e in bw]
 
-        body = "\n".join(lines) if lines else "  (no logged sets)"
         console.print(
             Panel(
-                body,
+                "\n".join(lines) if lines else "  (no logged sets)",
                 title=f"[bold cyan]{w['title']}[/bold cyan]  [dim]{date_str} · {duration}[/dim]",
                 border_style="cyan",
                 padding=(0, 1),
@@ -123,49 +168,29 @@ def _render_workout_cards(workout_ids: list[str]) -> None:
         )
 
 
-def _render_streak() -> None:
-    freq = workout_frequency(4)
-    streak = freq.get("longest_streak_days", 0)
-    total = freq.get("total_workouts", 0)
-    if streak >= 2:
-        fires = "🔥" * min(streak, 5)
-        console.print(f"\n  {fires}  [bold]{streak}-day training streak![/bold]  [dim]({total} sessions in last 4 weeks)[/dim]")
-    elif total > 0:
-        console.print(f"\n  [dim]{total} sessions in the last 4 weeks.[/dim]")
-
-
 def _render_volume_delta() -> None:
     df = weekly_volume(2)
     if df.empty:
         return
-
     weeks_sorted = sorted(df["week"].unique())
     if len(weeks_sorted) < 2:
         return
-
     prev_ser = df[df["week"] == weeks_sorted[-2]].set_index("muscle")["volume_kg"]
     curr_ser = df[df["week"] == weeks_sorted[-1]].set_index("muscle")["volume_kg"]
-
     if curr_ser.empty:
         return
-
     max_vol = float(curr_ser.max()) or 1.0
     console.print("\n  [bold]Volume this week vs last week[/bold]")
     for muscle in curr_ser.index:
         curr = float(curr_ser[muscle])
         prev = float(prev_ser.get(muscle, 0))
-
-        bar_width = max(1, int(curr / max_vol * 18))
-        bar = "█" * bar_width + "░" * (18 - bar_width)
-
+        bar = "█" * max(1, int(curr / max_vol * 18)) + "░" * (18 - max(1, int(curr / max_vol * 18)))
         if prev > 0:
             pct = (curr - prev) / prev * 100
             color = "green" if pct >= 0 else "red"
-            sign = "+" if pct >= 0 else ""
-            delta = f" [{color}]{sign}{pct:.0f}%[/{color}]"
+            delta = f" [{color}]{'+'if pct>=0 else ''}{pct:.0f}%[/{color}]"
         else:
             delta = " [dim]new[/dim]"
-
         console.print(f"    {muscle:<14} [cyan]{bar}[/cyan] {curr:>6.0f} kg{delta}")
 
 
@@ -173,75 +198,82 @@ def _render_sync_report(counts: dict, is_full: bool) -> None:
     updated_ids: list[str] = counts.get("updated_ids", [])
 
     if is_full:
-        console.print(
-            Panel(
-                f"[bold green]{counts.get('workouts', 0)}[/bold green] workouts  ·  "
-                f"[bold]{counts.get('templates', 0)}[/bold] exercise templates  ·  "
-                f"[bold]{counts.get('body_measurements', 0)}[/bold] body measurements",
-                title="[bold green]Full sync complete[/bold green]",
-                border_style="green",
-            )
-        )
-        _render_streak()
-        _render_volume_delta()
-        return
-
-    updated = counts.get("updated", 0)
-    deleted = counts.get("deleted", 0)
-
-    if updated == 0 and deleted == 0:
-        console.print("[dim]Already up to date.[/dim]")
-        return
-
-    parts = []
-    if updated:
-        parts.append(f"[bold green]{updated}[/bold green] new/updated")
-    if deleted:
-        parts.append(f"[bold red]{deleted}[/bold red] deleted")
-
-    console.print(Panel(" · ".join(parts), title="[bold green]Sync complete[/bold green]", border_style="green"))
+        console.print(Panel(
+            f"[bold green]{counts.get('workouts', 0)}[/bold green] workouts  ·  "
+            f"[bold]{counts.get('templates', 0)}[/bold] exercise templates  ·  "
+            f"[bold]{counts.get('body_measurements', 0)}[/bold] body measurements",
+            title="[bold green]Full sync complete[/bold green]",
+            border_style="green",
+        ))
+    else:
+        updated = counts.get("updated", 0)
+        deleted = counts.get("deleted", 0)
+        if updated == 0 and deleted == 0:
+            console.print(Panel("[dim]Already up to date.[/dim]", border_style="green"))
+            return
+        parts = []
+        if updated:
+            parts.append(f"[bold green]{updated}[/bold green] new/updated")
+        if deleted:
+            parts.append(f"[bold red]{deleted}[/bold red] deleted")
+        console.print(Panel(" · ".join(parts), title="[bold green]Sync complete[/bold green]", border_style="green"))
 
     if updated_ids:
-        show_ids = updated_ids[:4]
-        _render_workout_cards(show_ids)
+        show = updated_ids[:4]
+        _render_workout_cards(show)
         if len(updated_ids) > 4:
-            console.print(f"  [dim]...and {len(updated_ids) - 4} more workout(s)[/dim]")
+            console.print(f"  [dim]...and {len(updated_ids) - 4} more[/dim]")
 
-    _render_streak()
+    # Streak
+    freq = workout_frequency(4)
+    streak = freq.get("longest_streak_days", 0)
+    if streak >= 2:
+        fires = "🔥" * min(streak, 5)
+        console.print(f"\n  {fires}  [bold]{streak}-day streak![/bold]  [dim]({freq['total_workouts']} sessions in last 4w)[/dim]")
+
     _render_volume_delta()
     console.print()
 
 
-# ── sync ──────────────────────────────────────────────────────────────────────
+# ── menu actions ──────────────────────────────────────────────────────────────
 
-@app.command()
-def sync(
-    full: bool = typer.Option(False, "--full", "-f", help="Force a full re-sync instead of incremental."),
-):
-    """Sync workout data from Hevy and show a summary of what changed."""
-    init_db()
-    client = _require_api_key()
+def _do_sync():
+    client = _require_hevy()
+    if not client:
+        return
 
-    if full:
-        console.print("[bold]Running full sync...[/bold]")
-        counts = full_sync(client)
-    else:
-        counts = incremental_sync(client)
+    sync_type = questionary.select(
+        "Sync type:",
+        choices=[
+            questionary.Choice("Incremental  (only fetch what's new)", value="inc"),
+            questionary.Choice("Full  (re-download everything)", value="full"),
+        ],
+        style=STYLE,
+    ).ask()
+    if not sync_type:
+        return
 
-    _render_sync_report(counts, is_full=full)
+    console.print()
+    is_full = sync_type == "full"
+    counts = full_sync(client) if is_full else incremental_sync(client)
+    _render_sync_report(counts, is_full)
 
 
-# ── stats ─────────────────────────────────────────────────────────────────────
+def _do_stats():
+    weeks_str = questionary.select(
+        "Time period:",
+        choices=["4 weeks", "8 weeks", "12 weeks", "24 weeks"],
+        default="8 weeks",
+        style=STYLE,
+    ).ask()
+    if not weeks_str:
+        return
+    weeks = int(weeks_str.split()[0])
 
-@app.command()
-def stats(
-    weeks: int = typer.Option(8, "--weeks", "-w", help="How many weeks to analyse."),
-):
-    """Show training analytics summary."""
     freq = workout_frequency(weeks)
     if freq["total_workouts"] == 0:
-        console.print("[yellow]No workout data found. Run `hevy sync` first.[/yellow]")
-        raise typer.Exit(0)
+        console.print("[yellow]No data. Run Sync first.[/yellow]")
+        return
 
     console.rule(f"[bold cyan]Training Stats — last {weeks} weeks[/bold cyan]")
 
@@ -252,7 +284,7 @@ def stats(
     t.add_row("Avg workouts / week", str(freq["avg_per_week"]))
     t.add_row("Avg session duration", f"{freq['avg_duration_minutes']} min")
     t.add_row("Avg rest between sessions", f"{freq['rest_day_avg']} days")
-    t.add_row("Longest training streak", f"{freq['longest_streak_days']} days")
+    t.add_row("Longest streak", f"{freq['longest_streak_days']} days")
     console.print(t)
 
     console.rule("[bold]Volume by muscle group[/bold]")
@@ -262,8 +294,8 @@ def stats(
     max_vol = max(muscle_vol.values()) if muscle_vol else 1.0
 
     t2 = Table(box=box.SIMPLE)
-    t2.add_column("Muscle group", style="bold")
-    t2.add_column("Weekly volume", no_wrap=True)
+    t2.add_column("Muscle", style="bold")
+    t2.add_column("Volume", no_wrap=True)
     t2.add_column("Tonnage", justify="right")
     t2.add_column("Sets/wk", justify="right")
     t2.add_column("Sessions/wk", justify="right")
@@ -305,45 +337,34 @@ def stats(
 
     plateaus = detect_plateaus(weeks)
     if plateaus:
-        console.rule("[bold yellow]Plateau warnings[/bold yellow]")
+        console.rule("[bold yellow]Plateaus[/bold yellow]")
         for p in plateaus:
             console.print(f"  [yellow]•[/yellow] {p['exercise']} — stalled {p['sessions_stalled']} sessions (e1RM {p['current_e1rm']} kg)")
 
 
-# ── progress ──────────────────────────────────────────────────────────────────
+def _do_progress():
+    choice = questionary.select(
+        "What to show?",
+        choices=[
+            questionary.Choice("Top gainers", value="top"),
+            questionary.Choice("Specific exercise", value="exercise"),
+        ],
+        style=STYLE,
+    ).ask()
+    if not choice:
+        return
 
-@app.command()
-def progress(
-    exercise: Optional[str] = typer.Argument(None, help="Exercise name to inspect (partial match). Omit for top gainers."),
-    weeks: int = typer.Option(12, "--weeks", "-w"),
-):
-    """Show progression for a specific exercise or list the biggest gainers."""
-    if exercise:
-        rows = query(
-            "SELECT id, title FROM exercise_templates WHERE lower(title) LIKE lower(?)",
-            (f"%{exercise}%",),
-        )
-        if not rows:
-            console.print(f"[red]No exercise found matching '{exercise}'[/red]")
-            raise typer.Exit(1)
+    weeks_str = questionary.select(
+        "Time period:",
+        choices=["8 weeks", "12 weeks", "24 weeks", "52 weeks"],
+        default="12 weeks",
+        style=STYLE,
+    ).ask()
+    if not weeks_str:
+        return
+    weeks = int(weeks_str.split()[0])
 
-        template = rows[0]
-        console.rule(f"[bold]{template['title']}[/bold]")
-
-        df = exercise_progression(template["id"], weeks)
-        if df.empty:
-            console.print("[yellow]No progression data.[/yellow]")
-            return
-
-        t = Table(box=box.SIMPLE)
-        t.add_column("Date")
-        t.add_column("Best weight", justify="right")
-        t.add_column("Reps", justify="right")
-        t.add_column("e1RM", justify="right")
-        for _, row in df.iterrows():
-            t.add_row(str(row["date"]), f"{row['best_weight_kg']} kg", str(row["best_reps"]), f"{row['e1rm']:.1f} kg")
-        console.print(t)
-    else:
+    if choice == "top":
         console.rule(f"[bold]Top progressions — last {weeks} weeks[/bold]")
         top = top_progressions(weeks, top_n=10)
         if not top:
@@ -358,15 +379,61 @@ def progress(
             t.add_row(g["exercise"], f"+{g['improvement_pct']}%", f"{g['start_e1rm']} kg", f"{g['current_e1rm']} kg")
         console.print(t)
 
+    else:
+        exercises = query("SELECT DISTINCT title FROM exercise_templates ORDER BY title")
+        names = [e["title"] for e in exercises]
+        if not names:
+            console.print("[yellow]No exercises found. Run Sync first.[/yellow]")
+            return
 
-# ── records ───────────────────────────────────────────────────────────────────
+        name = questionary.autocomplete(
+            "Search exercise:",
+            choices=names,
+            style=STYLE,
+            validate=lambda v: v in names or "Pick from the list",
+        ).ask()
+        if not name:
+            return
 
-@app.command()
-def records():
-    """Show all-time personal records."""
+        rows = query("SELECT id FROM exercise_templates WHERE title = ?", (name,))
+        if not rows:
+            console.print(f"[red]Exercise not found.[/red]")
+            return
+
+        console.rule(f"[bold]{name}[/bold]")
+        df = exercise_progression(rows[0]["id"], weeks)
+        if df.empty:
+            console.print("[yellow]No progression data for this exercise.[/yellow]")
+            return
+
+        t = Table(box=box.SIMPLE)
+        t.add_column("Date")
+        t.add_column("Best weight", justify="right")
+        t.add_column("Reps", justify="right")
+        t.add_column("e1RM", justify="right")
+        prev_e1rm = None
+        for _, row in df.iterrows():
+            change = ""
+            if prev_e1rm is not None:
+                delta = row["e1rm"] - prev_e1rm
+                if delta > 0:
+                    change = f" [green]+{delta:.1f}[/green]"
+                elif delta < 0:
+                    change = f" [red]{delta:.1f}[/red]"
+            t.add_row(
+                str(row["date"]),
+                f"{row['best_weight_kg']} kg",
+                str(row["best_reps"]),
+                f"{row['e1rm']:.1f} kg{change}",
+            )
+            prev_e1rm = row["e1rm"]
+        console.print(t)
+
+
+def _do_records():
     prs = all_time_records()
     if not prs:
-        console.print("[yellow]No records yet. Run `hevy sync` first.[/yellow]")
+        console.print("[yellow]No records yet. Run Sync first.[/yellow]")
         return
 
     console.rule("[bold]All-time personal records[/bold]")
@@ -381,18 +448,20 @@ def records():
     console.print(t)
 
 
-# ── coach ─────────────────────────────────────────────────────────────────────
-
-@app.command()
-def coach(
-    weeks: int = typer.Option(8, "--weeks", "-w", help="Weeks of history to analyse."),
-    push: bool = typer.Option(False, "--push", help="Push the generated routine to Hevy after review."),
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Save full JSON response to file."),
-):
-    """Get AI-powered coaching insights and a suggested next routine."""
+def _do_coach():
     if not GEMINI_API_KEY:
         console.print("[red]GEMINI_API_KEY not set in .env[/red]")
-        raise typer.Exit(1)
+        return
+
+    weeks_str = questionary.select(
+        "Weeks to analyse:",
+        choices=["4 weeks", "8 weeks", "12 weeks", "16 weeks"],
+        default="8 weeks",
+        style=STYLE,
+    ).ask()
+    if not weeks_str:
+        return
+    weeks = int(weeks_str.split()[0])
 
     from ai.coach import get_coaching, push_routine_to_hevy
 
@@ -402,7 +471,7 @@ def coach(
         result = get_coaching(weeks=weeks, stream=True)
     except Exception as e:
         console.print(f"[red]Gemini error: {e}[/red]")
-        raise typer.Exit(1)
+        return
 
     console.rule("[bold green]Strengths[/bold green]")
     for s in result.get("strengths", []):
@@ -433,55 +502,94 @@ def coach(
             if ex.get("notes"):
                 console.print(f"    [dim italic]{ex['notes']}[/dim italic]")
 
-    if output:
-        with open(output, "w") as f:
-            json.dump(result, f, indent=2)
-        console.print(f"\n[dim]Full response saved to {output}[/dim]")
+        console.print()
+        push = questionary.confirm(
+            f"  Push '{routine.get('title')}' to your Hevy app?",
+            default=False,
+            style=STYLE,
+        ).ask()
+        if push:
+            client = _require_hevy()
+            if client:
+                try:
+                    resp = push_routine_to_hevy(routine)
+                    console.print(f"\n[green]✓ Routine pushed to Hevy![/green] (id: {resp.get('routine', {}).get('id')})")
+                except Exception as e:
+                    console.print(f"[red]Failed: {e}[/red]")
 
-    if push and routine:
-        console.print("\n[bold]Pushing routine to Hevy...[/bold]")
-        try:
-            _require_api_key()
-            resp = push_routine_to_hevy(routine)
-            console.print(f"[green]Routine created: {resp.get('routine', {}).get('id')}[/green]")
-        except Exception as e:
-            console.print(f"[red]Failed to push routine: {e}[/red]")
-    elif routine and not push:
-        console.print("\n[dim]Tip: run with --push to send this routine directly to your Hevy app.[/dim]")
 
-
-# ── chat ──────────────────────────────────────────────────────────────────────
-
-@app.command()
-def chat(
-    weeks: int = typer.Option(8, "--weeks", "-w", help="Weeks of history to load as context."),
-):
-    """Interactive AI chat about your training. Ask anything."""
+def _do_chat():
     if not GEMINI_API_KEY:
         console.print("[red]GEMINI_API_KEY not set in .env[/red]")
-        raise typer.Exit(1)
+        return
 
-    from ai.coach import start_chat
+    weeks_str = questionary.select(
+        "Training context:",
+        choices=["4 weeks", "8 weeks", "12 weeks", "All time (16 weeks)"],
+        default="8 weeks",
+        style=STYLE,
+    ).ask()
+    if not weeks_str:
+        return
+    weeks = int(weeks_str.split()[0])
 
-    freq = workout_frequency(4)
-    if freq["total_workouts"] == 0:
-        console.print("[yellow]No workout data. Run `hevy sync` first.[/yellow]")
-        raise typer.Exit(0)
-
-    console.rule("[bold cyan]AI Training Chat[/bold cyan]")
-    console.print(
-        f"  [dim]Context: last {weeks} weeks · {freq['total_workouts']} sessions · "
-        f"{freq['avg_per_week']}/wk avg[/dim]"
-    )
-    console.print("  [dim]Type your question. Ctrl+C or 'quit' to exit.[/dim]\n")
-
-    try:
-        start_chat(weeks=weeks)
-    except KeyboardInterrupt:
-        console.print("\n[dim]See you at the gym![/dim]")
+    from ai.coach import start_enhanced_chat
+    start_enhanced_chat(weeks=weeks)
 
 
-# ── main ──────────────────────────────────────────────────────────────────────
+# ── main loop ─────────────────────────────────────────────────────────────────
+
+MENU_ITEMS = [
+    questionary.Choice("  Sync new workouts",        value="sync"),
+    questionary.Choice("  Dashboard & stats",         value="stats"),
+    questionary.Choice("  Exercise progression",      value="progress"),
+    questionary.Choice("  Personal records",          value="records"),
+    questionary.Separator("  ─────────────────────────────────"),
+    questionary.Choice("  AI coaching report",        value="coach"),
+    questionary.Choice("  Chat with coach",           value="chat"),
+    questionary.Separator("  ─────────────────────────────────"),
+    questionary.Choice("  Exit",                      value="exit"),
+]
+
+ACTIONS = {
+    "sync":     _do_sync,
+    "stats":    _do_stats,
+    "progress": _do_progress,
+    "records":  _do_records,
+    "coach":    _do_coach,
+    "chat":     _do_chat,
+}
+
+# Actions that manage their own "return to menu" flow
+_NO_PAUSE = {"chat"}
+
+
+def main():
+    init_db()
+
+    while True:
+        console.clear()
+        _show_header()
+
+        choice = questionary.select(
+            "What do you want to do?",
+            choices=MENU_ITEMS,
+            style=STYLE,
+        ).ask()
+
+        if choice is None or choice == "exit":
+            console.print("\n[dim]See you at the gym![/dim]\n")
+            break
+
+        console.clear()
+
+        action = ACTIONS.get(choice)
+        if action:
+            action()
+
+        if choice not in _NO_PAUSE:
+            _pause()
+
 
 if __name__ == "__main__":
-    app()
+    main()
