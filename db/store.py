@@ -88,6 +88,26 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 value TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS user_goals (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                type                 TEXT NOT NULL,
+                description          TEXT NOT NULL,
+                target               REAL,
+                unit                 TEXT,
+                exercise_template_id TEXT,
+                exercise_name        TEXT,
+                muscle_group         TEXT,
+                start_value          REAL,
+                created_at           TEXT,
+                achieved_at          TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                key        TEXT PRIMARY KEY,
+                value      TEXT,
+                updated_at TEXT
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sets_workout ON workout_sets(workout_id);
             CREATE INDEX IF NOT EXISTS idx_sets_template ON workout_sets(exercise_template_id);
             CREATE INDEX IF NOT EXISTS idx_exercises_workout ON workout_exercises(workout_id);
