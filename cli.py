@@ -490,7 +490,7 @@ def _show_header() -> None:
 
     from ai.provider import provider_label
     sync_str = f"Last sync: {_time_ago(last_sync)}" if last_sync else "Never synced — run Sync first"
-    title = f"HEVY  [dim]·[/dim]  {name}" if name else "HEVY TRAINING CLIENT"
+    title = f"LIFTER  [dim]·[/dim]  {name}" if name else "LIFTER"
     ai_str = f"AI: {provider_label()}"
 
     # Recovery line from Google Fit (if connected + data available)

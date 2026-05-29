@@ -1,4 +1,4 @@
-# hevy-proxy
+# lifter
 
 Personal Hevy workout client with analytics, goal tracking, Google Fit integration, and an AI coach that remembers your conversations.
 
@@ -33,7 +33,7 @@ Personal Hevy workout client with analytics, goal tracking, Google Fit integrati
 ### 1. Install dependencies
 
 ```bash
-cd hevy-proxy
+cd lifter
 pip install -r requirements.txt
 ```
 
@@ -104,13 +104,13 @@ Adds sleep, steps, calories, and heart rate data to your analytics and AI contex
 3. **APIs & Services → Library** → search for **Fitness API** → Enable it
 4. **APIs & Services → OAuth consent screen**
    - User type: External
-   - Fill in app name (anything, e.g. "hevy-proxy")
+   - Fill in app name (anything, e.g. "lifter")
    - Add your Gmail as a **Test user** → Save
 5. **APIs & Services → Credentials → Create Credentials → OAuth client ID**
    - Application type: **Desktop app**
    - Name: anything
    - Click Create
-6. **Download JSON** → rename the file to `fit_credentials.json` → place it in the `hevy-proxy/` folder
+6. **Download JSON** → rename the file to `fit_credentials.json` → place it in the `lifter/` folder
 
 ### Step 2 — Authenticate
 
@@ -243,7 +243,7 @@ All goal changes and routine pushes require your explicit confirmation before an
 ## Architecture
 
 ```
-hevy-proxy/
+lifter/
 ├── hevy/
 │   ├── client.py        API wrapper (all Hevy endpoints + payload sanitization)
 │   └── sync.py          Full + incremental sync via /v1/workouts/events
