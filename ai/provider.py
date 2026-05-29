@@ -29,9 +29,9 @@ class GeminiChatSession:
         from google.genai import types
 
         self._types = types
-        client = genai.Client(api_key=GEMINI_API_KEY)
+        self._client = genai.Client(api_key=GEMINI_API_KEY)
         tool_obj = types.Tool(function_declarations=tools) if tools else None
-        self._chat = client.chats.create(
+        self._chat = self._client.chats.create(
             model=AI_MODEL,
             config=types.GenerateContentConfig(
                 system_instruction=system,
