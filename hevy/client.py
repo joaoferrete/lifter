@@ -206,7 +206,9 @@ def _sanitize_routine(routine: dict, *, for_put: bool = False) -> dict:
         payload["notes"] = notes
     if not for_put:
         folder_id = routine.get("folder_id")
-        if folder_id is not None:
+        # Only include if it's a real integer — the AI sometimes returns
+        # the string "undefined" or null for this optional field.
+        if isinstance(folder_id, int):
             payload["folder_id"] = folder_id
 
     return payload

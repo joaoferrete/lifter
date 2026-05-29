@@ -229,6 +229,7 @@ def goals_context_for_ai(weeks: int = 8) -> str:
     progress = compute_goal_progress()
     prog_by_id = {p["id"]: p for p in progress}
 
+    from ai.sanitize import sanitize_for_prompt
     lines = ["## User goals"]
     for g in goals:
         p = prog_by_id.get(g["id"], {})
@@ -236,6 +237,7 @@ def goals_context_for_ai(weeks: int = 8) -> str:
         pct = p.get("pct")
         pct_str = f" ({pct:.0f}%)" if pct is not None else ""
         current_str = f" — current: {current} {g.get('unit') or ''}" if current is not None else ""
-        lines.append(f"  - {g['description']}{current_str}{pct_str}")
+        safe_desc = sanitize_for_prompt(g["description"], max_len=150)
+        lines.append(f"  - {safe_desc}{current_str}{pct_str}")
 
     return "\n".join(lines)

@@ -7,6 +7,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 from ai.provider import create_chat_session, stream_complete, provider_label, ToolCall
+from ai.sanitize import sanitize_for_prompt, ANTI_INJECTION_PREAMBLE
 from analytics.volume import muscle_group_summary, sets_per_muscle_per_week
 from analytics.progression import detect_plateaus, top_progressions
 from analytics.frequency import workout_frequency, muscle_group_frequency
@@ -36,8 +37,10 @@ def _build_context(weeks: int = 8) -> str:
            ORDER BY et.primary_muscle_group, et.title"""
     )
 
+    safe_name = sanitize_for_prompt(name, max_len=60)
+
     lines = [
-        f"## Athlete: {name}",
+        f"## Athlete: {safe_name}",
         f"## Training summary (last {weeks} weeks)\n",
         f"- Total workouts: {freq['total_workouts']}",
         f"- Avg workouts/week: {freq['avg_per_week']}",
@@ -81,7 +84,8 @@ def _build_context(weeks: int = 8) -> str:
     if active_goals:
         lines += ["", "## Active goals with IDs (use these IDs in manage_goals)"]
         for g in active_goals:
-            lines.append(f"  - id={g['id']} | {g['description']} | target={g['target']} {g.get('unit') or ''}")
+            safe_desc = sanitize_for_prompt(g["description"], max_len=150)
+            lines.append(f"  - id={g['id']} | {safe_desc} | target={g['target']} {g.get('unit') or ''}")
 
     # Fit / recovery data
     try:
@@ -111,7 +115,7 @@ def _build_context(weeks: int = 8) -> str:
 
 # ── one-shot coaching report ──────────────────────────────────────────────────
 
-_COACH_SYSTEM = """You are an experienced strength and hypertrophy coach.
+_COACH_SYSTEM = f"""{ANTI_INJECTION_PREAMBLE}You are an experienced strength and hypertrophy coach.
 Analyze the athlete's training data, taking their stated goals into account, and return
 a JSON response with this exact structure:
 
@@ -148,7 +152,12 @@ Rules:
 
 def get_coaching(weeks: int = 8) -> dict:
     context = _build_context(weeks)
-    prompt = f"{context}\n\nPlease analyse my training and generate a suggested next routine."
+    prompt = (
+        "<training_data>\n"
+        f"{context}\n"
+        "</training_data>\n\n"
+        "Please analyse my training and generate a suggested next routine."
+    )
 
     console.print(f"\n[dim]Powered by {provider_label()}[/dim]\n")
 
@@ -184,16 +193,18 @@ def push_routine_to_hevy(routine_data: dict) -> dict:
 
 # ── tools ─────────────────────────────────────────────────────────────────────
 
-_CHAT_SYSTEM_BASE = """\
-You are a personal fitness coach assistant. You have the athlete's complete training history,
-their stated goals, and memories from previous conversations.
-Answer questions conversationally and reference their actual numbers.
-Be encouraging but honest. Keep answers concise unless asked to elaborate.
-When the athlete asks you to create, build, add, or push a routine, use the push_routine tool.
-When the athlete explicitly asks to change, add, or remove a goal, use the manage_goals tool —
-always describe the exact change in changes_summary so the user can confirm.
-Only use exercise_template_ids from the exercise library provided.
-Address the athlete by their name when appropriate."""
+_CHAT_SYSTEM_BASE = (
+    ANTI_INJECTION_PREAMBLE
+    + "You are a personal fitness coach assistant. You have the athlete's complete training "
+    "history, their stated goals, and memories from previous conversations.\n"
+    "Answer questions conversationally and reference their actual numbers.\n"
+    "Be encouraging but honest. Keep answers concise unless asked to elaborate.\n"
+    "When the athlete asks you to create, build, add, or push a routine, use the push_routine tool.\n"
+    "When the athlete explicitly asks to change, add, or remove a goal, use the manage_goals tool — "
+    "always describe the exact change in changes_summary so the user can confirm.\n"
+    "Only use exercise_template_ids from the exercise library provided.\n"
+    "Address the athlete by their name when appropriate."
+)
 
 _PUSH_ROUTINE_TOOL: dict = {
     "name": "push_routine",
@@ -289,6 +300,24 @@ def _show_and_confirm_routine(routine: dict, session, tool_call: ToolCall) -> No
 
     console.print(Panel("\n".join(lines), title="[bold cyan]Proposed routine[/bold cyan]", border_style="cyan"))
 
+    # Validate every exercise_template_id against the local DB.
+    # If the AI hallucinated or was injection-manipulated into using a fake ID,
+    # we catch it before hitting the Hevy API.
+    invalid_ids = [
+        ex.get("exercise_template_id", "")
+        for ex in routine.get("exercises", [])
+        if ex.get("exercise_template_id")
+        and not query(
+            "SELECT 1 FROM exercise_templates WHERE id = ?",
+            (ex["exercise_template_id"],),
+        )
+    ]
+    if invalid_ids:
+        console.print(
+            f"[yellow]⚠ {len(invalid_ids)} exercise ID(s) not found in your library "
+            f"and will be skipped: {', '.join(invalid_ids[:3])}[/yellow]"
+        )
+
     if questionary.confirm("  Push this routine to your Hevy app?", default=True).ask():
         try:
             with console.status("[dim]Saving routine to Hevy...[/dim]", spinner="dots"):
@@ -314,13 +343,27 @@ def _show_and_confirm_routine(routine: dict, session, tool_call: ToolCall) -> No
 
 
 def _handle_manage_goals(fc_args: dict, session, tool_call: ToolCall) -> None:
-    from db.goals import save_goal, delete_goal, update_goal_fields
+    from db.goals import save_goal, delete_goal, update_goal_fields, get_goals
 
     action = fc_args.get("action")
     summary = fc_args.get("changes_summary", "Modify a goal")
 
+    # Validate that goal_id refers to an actual goal before touching anything.
+    if action in ("update", "remove"):
+        gid = fc_args.get("goal_id")
+        valid_ids = {g["id"] for g in get_goals()}
+        if gid is None or int(gid) not in valid_ids:
+            follow = session.submit_tool_result(
+                tool_call,
+                {"success": False, "error": f"Goal ID {gid} does not exist"},
+            )
+            console.print(f"[red]⚠ AI referenced a non-existent goal (id={gid}). Change blocked.[/red]\n")
+            if follow.text:
+                console.print(Markdown(follow.text))
+            return
+
     console.print(Panel(
-        f"[bold]{summary}[/bold]",
+        f"[bold]{sanitize_for_prompt(summary, max_len=200)}[/bold]",
         title="[bold yellow]Goal Change Requested[/bold yellow]",
         border_style="yellow",
     ))
@@ -444,7 +487,11 @@ def _extract_and_save_memories(conversation_log: list[dict]) -> int:
         saved = 0
         for mem in memories[:8]:
             if isinstance(mem, str) and len(mem.strip()) > 15:
-                save_memory(mem.strip())
+                # Sanitize before storing — prevents injected text from
+                # persisting as a "memory" across future sessions.
+                clean = sanitize_for_prompt(mem.strip(), max_len=300)
+                if clean:
+                    save_memory(clean)
                 saved += 1
         return saved
     except Exception:
@@ -456,7 +503,14 @@ def _extract_and_save_memories(conversation_log: list[dict]) -> int:
 def start_enhanced_chat(weeks: int = 8) -> None:
     """Interactive chat with tool calling, goal management, and memory persistence."""
     context = _build_context(weeks)
-    system = f"{_CHAT_SYSTEM_BASE}\n\n--- TRAINING DATA ---\n{context}\n--- END DATA ---"
+    # Use XML-like delimiters so the model can clearly distinguish
+    # instructions (above) from untrusted data (below).
+    system = (
+        f"{_CHAT_SYSTEM_BASE}\n\n"
+        "<training_data>\n"
+        f"{context}\n"
+        "</training_data>"
+    )
 
     session = create_chat_session(system=system, tools=[_PUSH_ROUTINE_TOOL, _MANAGE_GOALS_TOOL])
 
