@@ -284,7 +284,8 @@ def _show_and_confirm_routine(routine: dict, session, tool_call: ToolCall) -> No
             for s in ex.get("sets", [])
         )
         note = f"\n    [dim italic]{ex['notes']}[/dim italic]" if ex.get("notes") else ""
-        lines.append(f"  • [bold]{ex['title']}[/bold]  {sets_desc}{note}")
+        ex_title = ex.get("title") or ex.get("exercise_template_id", "Exercise")
+        lines.append(f"  • [bold]{ex_title}[/bold]  {sets_desc}{note}")
 
     console.print(Panel("\n".join(lines), title="[bold cyan]Proposed routine[/bold cyan]", border_style="cyan"))
 

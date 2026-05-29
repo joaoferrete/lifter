@@ -800,10 +800,11 @@ def _do_coach():
         console.print(f"  [dim]{routine.get('notes')}[/dim]\n")
         for ex in routine.get("exercises", []):
             sets_str = "  ".join(
-                f"[dim]{s['type']}[/dim] {s.get('weight_kg') or 'BW'}kg×{s.get('reps', '?')}"
+                f"[dim]{s.get('type', 'normal')}[/dim] {s.get('weight_kg') or 'BW'}kg×{s.get('reps', '?')}"
                 for s in ex.get("sets", [])
             )
-            console.print(f"  [bold]{ex['title']}[/bold]")
+            ex_title = ex.get("title") or ex.get("exercise_template_id", "Exercise")
+            console.print(f"  [bold]{ex_title}[/bold]")
             console.print(f"    {sets_str}")
             if ex.get("notes"):
                 console.print(f"    [dim italic]{ex['notes']}[/dim italic]")
