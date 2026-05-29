@@ -799,9 +799,12 @@ def _do_coach():
         console.rule(f"[bold]Suggested routine: {routine.get('title')}[/bold]")
         console.print(f"  [dim]{routine.get('notes')}[/dim]\n")
         for ex in routine.get("exercises", []):
+            if not isinstance(ex, dict):
+                continue
             sets_str = "  ".join(
                 f"[dim]{s.get('type', 'normal')}[/dim] {s.get('weight_kg') or 'BW'}kg×{s.get('reps', '?')}"
                 for s in ex.get("sets", [])
+                if isinstance(s, dict)
             )
             ex_title = ex.get("title") or ex.get("exercise_template_id", "Exercise")
             console.print(f"  [bold]{ex_title}[/bold]")

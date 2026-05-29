@@ -368,9 +368,12 @@ def _show_and_confirm_routine(routine: dict, session, tool_call: ToolCall) -> No
         lines.append(f"[dim]{routine['notes']}[/dim]")
     lines.append("")
     for ex in routine.get("exercises", []):
+        if not isinstance(ex, dict):
+            continue
         sets_desc = "  ".join(
             f"[dim]{s.get('type', 'normal')}[/dim] {s.get('weight_kg') or 'BW'}kg×{s.get('reps', '?')}"
             for s in ex.get("sets", [])
+            if isinstance(s, dict)
         )
         note = f"\n    [dim italic]{ex['notes']}[/dim italic]" if ex.get("notes") else ""
         ex_title = ex.get("title") or ex.get("exercise_template_id", "Exercise")
@@ -379,12 +382,10 @@ def _show_and_confirm_routine(routine: dict, session, tool_call: ToolCall) -> No
     console.print(Panel("\n".join(lines), title="[bold cyan]Proposed routine[/bold cyan]", border_style="cyan"))
 
     # Validate every exercise_template_id against the local DB.
-    # If the AI hallucinated or was injection-manipulated into using a fake ID,
-    # we catch it before hitting the Hevy API.
     invalid_ids = [
         ex.get("exercise_template_id", "")
         for ex in routine.get("exercises", [])
-        if ex.get("exercise_template_id")
+        if isinstance(ex, dict) and ex.get("exercise_template_id")
         and not query(
             "SELECT 1 FROM exercise_templates WHERE id = ?",
             (ex["exercise_template_id"],),

@@ -161,7 +161,12 @@ def _sanitize_routine(routine: dict, *, for_put: bool = False) -> dict:
         s = str(v).strip() if v is not None else None
         return s if s else None
 
-    def clean_set(s: dict) -> dict:
+    def clean_set(s) -> dict | None:
+        # Gemini sometimes returns sets as [[{...}]] instead of [{...}]
+        if isinstance(s, list):
+            s = s[0] if s and isinstance(s[0], dict) else None
+        if not isinstance(s, dict):
+            return None
         set_type = s.get("type", "normal")
         if set_type not in _VALID_SET_TYPES:
             set_type = "normal"
@@ -180,11 +185,16 @@ def _sanitize_routine(routine: dict, *, for_put: bool = False) -> dict:
             result["rep_range"] = s["rep_range"]
         return result
 
-    def clean_exercise(ex: dict) -> dict | None:
+    def clean_exercise(ex) -> dict | None:
+        # Gemini sometimes returns exercises as [[{...}]] instead of [{...}]
+        if isinstance(ex, list):
+            ex = ex[0] if ex and isinstance(ex[0], dict) else None
+        if not isinstance(ex, dict):
+            return None
         tid = _str(ex.get("exercise_template_id"))
         if not tid:
             return None
-        sets = [clean_set(s) for s in ex.get("sets", [])]
+        sets = [cs for s in ex.get("sets", []) if (cs := clean_set(s)) is not None]
         result: dict = {"exercise_template_id": tid, "sets": sets}
         rest = _int(ex.get("rest_seconds"))
         if rest is not None:
