@@ -206,9 +206,10 @@ def _sanitize_routine(routine: dict, *, for_put: bool = False) -> dict:
         payload["notes"] = notes
     if not for_put:
         folder_id = routine.get("folder_id")
-        # Only include if it's a real integer — the AI sometimes returns
-        # the string "undefined" or null for this optional field.
-        if isinstance(folder_id, int):
-            payload["folder_id"] = folder_id
+        # The Hevy API requires folder_id to be explicitly null (not absent)
+        # to route the routine to the default "My Routines" folder. When the
+        # field is missing entirely, the Node.js server reads undefined and
+        # returns "Invalid routine folder id: undefined".
+        payload["folder_id"] = int(folder_id) if isinstance(folder_id, int) else None
 
     return payload
