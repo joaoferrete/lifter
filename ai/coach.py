@@ -115,7 +115,8 @@ def _build_context(weeks: int = 8) -> str:
 
 # ── one-shot coaching report ──────────────────────────────────────────────────
 
-_COACH_SYSTEM = f"""{ANTI_INJECTION_PREAMBLE}You are an experienced strength and hypertrophy coach.
+_COACH_SYSTEM = ANTI_INJECTION_PREAMBLE + """\
+You are an experienced strength and hypertrophy coach.
 Analyze the athlete's training data, taking their stated goals into account, and return
 a JSON response with this exact structure:
 
@@ -147,7 +148,8 @@ Rules:
 - Only use exercise_template_ids from the "Exercise library" section.
 - The routine should target 4-6 exercises and address identified weaknesses.
 - Set weights should reflect the athlete's current strength level.
-- Return ONLY the JSON object, no markdown fences or extra text."""
+- Return ONLY the JSON object, no markdown fences or extra text.\
+"""
 
 
 def get_coaching(weeks: int = 8) -> dict:
