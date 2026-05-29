@@ -1,4 +1,4 @@
-"""AI coaching — analyzes workout data and generates suggestions."""
+"""AI coaching — analyzes workout data, generates suggestions, manages goals."""
 import json
 
 import questionary
@@ -12,7 +12,7 @@ from analytics.progression import detect_plateaus, top_progressions
 from analytics.frequency import workout_frequency, muscle_group_frequency
 from analytics.records import all_time_records, recent_prs, body_measurement_trend
 from db.store import query
-from db.goals import goals_context_for_ai, get_pref
+from db.goals import goals_context_for_ai, get_pref, get_goals
 
 console = Console()
 
@@ -76,11 +76,28 @@ def _build_context(weeks: int = 8) -> str:
 
     lines += ["", goals_context_for_ai(weeks)]
 
+    # Include current goals with IDs so the AI can reference them for updates
+    active_goals = get_goals()
+    if active_goals:
+        lines += ["", "## Active goals with IDs (use these IDs in manage_goals)"]
+        for g in active_goals:
+            lines.append(f"  - id={g['id']} | {g['description']} | target={g['target']} {g.get('unit') or ''}")
+
+    # Fit / recovery data
     try:
         from fit.analytics import fit_context_for_ai
         fit_ctx = fit_context_for_ai(7)
         if "No Google Fit" not in fit_ctx:
             lines += ["", fit_ctx]
+    except Exception:
+        pass
+
+    # Memories from past conversations
+    try:
+        from db.memories import memories_as_context
+        mem_ctx = memories_as_context()
+        if mem_ctx:
+            lines += ["", mem_ctx]
     except Exception:
         pass
 
@@ -122,7 +139,7 @@ a JSON response with this exact structure:
 }
 
 Rules:
-- Tailor recommendations to the athlete's stated goals.
+- Tailor recommendations to the athlete's stated goals and memories from past conversations.
 - Only use exercise_template_ids from the "Exercise library" section.
 - The routine should target 4-6 exercises and address identified weaknesses.
 - Set weights should reflect the athlete's current strength level.
@@ -151,23 +168,22 @@ def push_routine_to_hevy(routine_data: dict) -> dict:
     return HevyClient().create_routine(routine_data)
 
 
-# ── enhanced chat ─────────────────────────────────────────────────────────────
+# ── tools ─────────────────────────────────────────────────────────────────────
 
 _CHAT_SYSTEM_BASE = """\
-You are a personal fitness coach assistant. You have the athlete's complete training history
-and their stated goals. Answer questions conversationally and reference their actual numbers.
+You are a personal fitness coach assistant. You have the athlete's complete training history,
+their stated goals, and memories from previous conversations.
+Answer questions conversationally and reference their actual numbers.
 Be encouraging but honest. Keep answers concise unless asked to elaborate.
-When the athlete asks you to create, build, add, or push a routine or training plan, use the
-push_routine tool — don't just describe it, call the function to save it to their app.
+When the athlete asks you to create, build, add, or push a routine, use the push_routine tool.
+When the athlete explicitly asks to change, add, or remove a goal, use the manage_goals tool —
+always describe the exact change in changes_summary so the user can confirm.
 Only use exercise_template_ids from the exercise library provided.
 Address the athlete by their name when appropriate."""
 
 _PUSH_ROUTINE_TOOL: dict = {
     "name": "push_routine",
-    "description": (
-        "Push a new workout routine to the user's Hevy app. "
-        "Call this when the user asks to create, save, add, or push a routine."
-    ),
+    "description": "Push a new workout routine to the user's Hevy app.",
     "parameters": {
         "type": "object",
         "required": ["title", "exercises"],
@@ -202,6 +218,44 @@ _PUSH_ROUTINE_TOOL: dict = {
     },
 }
 
+_MANAGE_GOALS_TOOL: dict = {
+    "name": "manage_goals",
+    "description": (
+        "Add, update, or remove a training goal. Use when the athlete explicitly asks to "
+        "change, add, or remove a goal. Always describe what will change in changes_summary."
+    ),
+    "parameters": {
+        "type": "object",
+        "required": ["action", "changes_summary"],
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["add", "update", "remove"],
+            },
+            "changes_summary": {
+                "type": "string",
+                "description": "Exact description of the change shown to the user for confirmation",
+            },
+            "goal_id": {
+                "type": "integer",
+                "description": "ID of the goal to update or remove (from the active goals list)",
+            },
+            "goal_type": {
+                "type": "string",
+                "enum": ["lift_pr", "frequency", "weight_loss", "weight_gain", "body_fat", "volume", "custom"],
+            },
+            "description": {"type": "string", "description": "Human-readable goal label"},
+            "target": {"type": "number"},
+            "unit": {"type": "string"},
+            "exercise_template_id": {"type": "string"},
+            "exercise_name": {"type": "string"},
+            "muscle_group": {"type": "string"},
+        },
+    },
+}
+
+
+# ── tool handlers ─────────────────────────────────────────────────────────────
 
 def _show_and_confirm_routine(routine: dict, session, tool_call: ToolCall) -> None:
     from hevy.client import HevyClient
@@ -220,9 +274,7 @@ def _show_and_confirm_routine(routine: dict, session, tool_call: ToolCall) -> No
 
     console.print(Panel("\n".join(lines), title="[bold cyan]Proposed routine[/bold cyan]", border_style="cyan"))
 
-    confirm = questionary.confirm("  Push this routine to your Hevy app?", default=True).ask()
-
-    if confirm:
+    if questionary.confirm("  Push this routine to your Hevy app?", default=True).ask():
         try:
             resp = HevyClient().create_routine(routine)
             routine_id = resp.get("routine", {}).get("id", "")
@@ -237,28 +289,165 @@ def _show_and_confirm_routine(routine: dict, session, tool_call: ToolCall) -> No
             if follow.text:
                 console.print(Markdown(follow.text))
     else:
-        follow = session.submit_tool_result(
-            tool_call, {"success": False, "message": "User chose not to push the routine"}
-        )
+        follow = session.submit_tool_result(tool_call, {"success": False, "message": "User declined"})
         console.print("[dim]Routine not pushed.[/dim]\n")
         if follow.text:
             console.print(Markdown(follow.text))
             console.print()
 
 
+def _handle_manage_goals(fc_args: dict, session, tool_call: ToolCall) -> None:
+    from db.goals import save_goal, delete_goal, update_goal_fields
+
+    action = fc_args.get("action")
+    summary = fc_args.get("changes_summary", "Modify a goal")
+
+    console.print(Panel(
+        f"[bold]{summary}[/bold]",
+        title="[bold yellow]Goal Change Requested[/bold yellow]",
+        border_style="yellow",
+    ))
+
+    if not questionary.confirm("  Apply this change?", default=True).ask():
+        follow = session.submit_tool_result(tool_call, {"success": False, "message": "User declined"})
+        console.print("[dim]Change not applied.[/dim]\n")
+        if follow.text:
+            console.print(Markdown(follow.text))
+            console.print()
+        return
+
+    try:
+        if action == "add":
+            save_goal(
+                type=fc_args.get("goal_type", "custom"),
+                description=fc_args.get("description", ""),
+                target=fc_args.get("target"),
+                unit=fc_args.get("unit"),
+                exercise_template_id=fc_args.get("exercise_template_id"),
+                exercise_name=fc_args.get("exercise_name"),
+                muscle_group=fc_args.get("muscle_group"),
+            )
+            follow = session.submit_tool_result(tool_call, {"success": True, "action": "added"})
+            console.print("[green]✓ Goal added[/green]\n")
+
+        elif action == "update":
+            gid = fc_args.get("goal_id")
+            if not gid:
+                raise ValueError("goal_id is required for update")
+            update_goal_fields(
+                goal_id=int(gid),
+                description=fc_args.get("description"),
+                target=fc_args.get("target"),
+                unit=fc_args.get("unit"),
+            )
+            follow = session.submit_tool_result(tool_call, {"success": True, "action": "updated"})
+            console.print("[green]✓ Goal updated[/green]\n")
+
+        elif action == "remove":
+            gid = fc_args.get("goal_id")
+            if not gid:
+                raise ValueError("goal_id is required for remove")
+            delete_goal(int(gid))
+            follow = session.submit_tool_result(tool_call, {"success": True, "action": "removed"})
+            console.print("[green]✓ Goal removed[/green]\n")
+
+        else:
+            raise ValueError(f"Unknown action: {action}")
+
+        if follow.text:
+            console.print(Markdown(follow.text))
+            console.print()
+
+    except Exception as e:
+        follow = session.submit_tool_result(tool_call, {"success": False, "error": str(e)})
+        console.print(f"[red]Failed: {e}[/red]\n")
+        if follow.text:
+            console.print(Markdown(follow.text))
+
+
+# ── memory extraction ─────────────────────────────────────────────────────────
+
+_MEMORY_SYSTEM = (
+    "You extract memorable fitness coaching facts from conversations. "
+    "Return ONLY a JSON array of strings, no markdown fences or extra text."
+)
+
+_MEMORY_PROMPT = """\
+Review this fitness coaching conversation and extract facts worth remembering for future sessions.
+
+Extract ONLY:
+- User preferences (exercises liked/disliked, equipment, training time/location)
+- Physical limitations, injuries, or health conditions mentioned
+- Personal context affecting training (schedule, stress, sleep issues, job)
+- Explicit feedback on recommendations ("tried X, it didn't work because...")
+- Strong opinions about training style, intensity, or volume
+
+Do NOT extract: general Q&A, stats, routine details, or things obvious from the training data.
+
+Return a JSON array of concise strings (max 2 sentences each). Return [] if nothing memorable.
+
+Conversation:
+"""
+
+
+def _extract_and_save_memories(conversation_log: list[dict]) -> int:
+    """Extract key facts from the conversation and persist them."""
+    if len(conversation_log) < 2:
+        return 0
+
+    text_messages = [
+        m for m in conversation_log if isinstance(m.get("content"), str)
+    ]
+    if len(text_messages) < 2:
+        return 0
+
+    conv_text = "\n".join(
+        f"{m['role'].upper()}: {m['content']}" for m in text_messages
+    )
+    if len(conv_text) < 150:
+        return 0
+
+    try:
+        full_text = ""
+        for chunk in stream_complete(_MEMORY_PROMPT + conv_text[:5000], system=_MEMORY_SYSTEM):
+            full_text += chunk
+
+        raw = full_text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+
+        memories = json.loads(raw)
+        if not isinstance(memories, list):
+            return 0
+
+        from db.memories import save_memory
+        saved = 0
+        for mem in memories[:8]:
+            if isinstance(mem, str) and len(mem.strip()) > 15:
+                save_memory(mem.strip())
+                saved += 1
+        return saved
+    except Exception:
+        return 0
+
+
+# ── enhanced chat ─────────────────────────────────────────────────────────────
+
 def start_enhanced_chat(weeks: int = 8) -> None:
-    """Interactive chat with tool calling — the coach can push routines to Hevy."""
+    """Interactive chat with tool calling, goal management, and memory persistence."""
     context = _build_context(weeks)
     system = f"{_CHAT_SYSTEM_BASE}\n\n--- TRAINING DATA ---\n{context}\n--- END DATA ---"
 
-    session = create_chat_session(system=system, tools=[_PUSH_ROUTINE_TOOL])
+    session = create_chat_session(system=system, tools=[_PUSH_ROUTINE_TOOL, _MANAGE_GOALS_TOOL])
 
     console.rule("[bold cyan]Chat with AI Coach[/bold cyan]")
     console.print(
         f"  [dim]Provider: {provider_label()} · {weeks} weeks of context loaded.[/dim]\n"
-        "  [dim]Ask anything. The coach can create routines directly in your Hevy app.[/dim]\n"
+        "  [dim]The coach can create routines, modify goals, and remembers past conversations.[/dim]\n"
         "  [dim]Type [bold]quit[/bold] or press Ctrl+C to return to the menu.[/dim]\n"
     )
+
+    conversation_log: list[dict] = []
 
     while True:
         try:
@@ -272,7 +461,9 @@ def start_enhanced_chat(weeks: int = 8) -> None:
         if user_input.lower() in ("quit", "exit", "q", "bye", "sair", "voltar", "menu"):
             break
 
+        conversation_log.append({"role": "user", "content": user_input})
         console.print()
+
         try:
             response = session.send(user_input)
 
@@ -280,10 +471,22 @@ def start_enhanced_chat(weeks: int = 8) -> None:
                 console.print("[bold cyan]Coach:[/bold cyan]")
                 console.print(Markdown(response.text))
                 console.print()
+                conversation_log.append({"role": "assistant", "content": response.text})
 
             for tc in response.tool_calls:
                 if tc.name == "push_routine":
                     _show_and_confirm_routine(dict(tc.args), session, tc)
+                elif tc.name == "manage_goals":
+                    _handle_manage_goals(dict(tc.args), session, tc)
 
         except Exception as e:
             console.print(f"[red]Error: {e}[/red]\n")
+
+    # ── extract and save memories after session ends ──
+    if len(conversation_log) >= 2:
+        console.print("[dim]Analysing conversation for insights to remember...[/dim]")
+        saved = _extract_and_save_memories(conversation_log)
+        if saved > 0:
+            console.print(f"[dim]Saved {saved} insight(s) for future sessions.[/dim]\n")
+        else:
+            console.print("[dim]No new insights to save.[/dim]\n")

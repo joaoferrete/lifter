@@ -78,6 +78,26 @@ def mark_goal_achieved(goal_id: int) -> None:
         )
 
 
+def delete_goal(goal_id: int) -> None:
+    with _conn() as conn:
+        conn.execute("DELETE FROM user_goals WHERE id = ?", (goal_id,))
+
+
+def update_goal_fields(
+    goal_id: int,
+    description: str | None = None,
+    target: float | None = None,
+    unit: str | None = None,
+) -> None:
+    with _conn() as conn:
+        if description is not None:
+            conn.execute("UPDATE user_goals SET description = ? WHERE id = ?", (description, goal_id))
+        if target is not None:
+            conn.execute("UPDATE user_goals SET target = ? WHERE id = ?", (target, goal_id))
+        if unit is not None:
+            conn.execute("UPDATE user_goals SET unit = ? WHERE id = ?", (unit, goal_id))
+
+
 # ── goals check-in timing ─────────────────────────────────────────────────────
 
 def should_ask_goals() -> bool:

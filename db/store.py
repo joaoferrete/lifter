@@ -122,6 +122,13 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 updated_at TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS chat_memories (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT,
+                summary    TEXT NOT NULL,
+                category   TEXT DEFAULT 'general'
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sets_workout ON workout_sets(workout_id);
             CREATE INDEX IF NOT EXISTS idx_sets_template ON workout_sets(exercise_template_id);
             CREATE INDEX IF NOT EXISTS idx_exercises_workout ON workout_exercises(workout_id);
