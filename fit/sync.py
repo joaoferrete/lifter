@@ -116,6 +116,9 @@ def sync_fit(days: int = 30) -> dict:
     return counts
 
 
+_AGGREGATE_CHUNK_DAYS = 14  # Google Fit period-bucket API rejects ranges > 14 days
+
+
 def _sync_daily(
     client: FitClient,
     start: datetime,
@@ -123,20 +126,28 @@ def _sync_daily(
     tz_id: str | None,
     counts: dict,
 ) -> None:
-    data = client.aggregate(
-        data_types=[
-            "com.google.step_count.delta",
-            "com.google.calories.expended",
-            "com.google.heart_rate.bpm",
-            "com.google.active_minutes",
-        ],
-        start_ms=_ms(start),
-        end_ms=_ms(end),
-        timezone_id=tz_id,
-    )
+    data_types = [
+        "com.google.step_count.delta",
+        "com.google.calories.expended",
+        "com.google.heart_rate.bpm",
+        "com.google.active_minutes",
+    ]
+
+    all_buckets: list[dict] = []
+    chunk_start = start
+    while chunk_start < end:
+        chunk_end = min(chunk_start + timedelta(days=_AGGREGATE_CHUNK_DAYS), end)
+        chunk_data = client.aggregate(
+            data_types=data_types,
+            start_ms=_ms(chunk_start),
+            end_ms=_ms(chunk_end),
+            timezone_id=tz_id,
+        )
+        all_buckets.extend(chunk_data.get("bucket", []))
+        chunk_start = chunk_end
 
     with _conn() as conn:
-        for bucket in data.get("bucket", []):
+        for bucket in all_buckets:
             date = _date_of_ms(bucket["startTimeMillis"])
             row: dict = {
                 "date": date,

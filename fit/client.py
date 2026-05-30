@@ -79,11 +79,22 @@ class FitClient:
         return resp.json()
 
     def get_sleep_sessions(self, start_iso: str, end_iso: str) -> list[dict]:
-        resp = httpx.get(
-            f"{FIT_BASE}/sessions",
-            headers=self._headers(),
-            params={"startTime": start_iso, "endTime": end_iso, "activityType": 72},
-            timeout=30,
-        )
-        self._check(resp, "get_sleep_sessions")
-        return resp.json().get("session", [])
+        sessions: list[dict] = []
+        page_token: str | None = None
+        while True:
+            params: dict = {"startTime": start_iso, "endTime": end_iso, "activityType": 72}
+            if page_token:
+                params["pageToken"] = page_token
+            resp = httpx.get(
+                f"{FIT_BASE}/sessions",
+                headers=self._headers(),
+                params=params,
+                timeout=30,
+            )
+            self._check(resp, "get_sleep_sessions")
+            data = resp.json()
+            sessions.extend(data.get("session", []))
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+        return sessions
