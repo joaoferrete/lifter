@@ -1,11 +1,17 @@
-"""AI provider abstraction — Gemini and Claude with a unified interface."""
+"""AI provider abstraction — Gemini, Claude, OpenRouter, Groq, GitHub Models, Bedrock."""
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
 from typing import Iterator
 
-from config import AI_PROVIDER, AI_MODEL, GEMINI_API_KEY, ANTHROPIC_API_KEY
+from config import (
+    AI_PROVIDER, AI_MODEL,
+    GEMINI_API_KEY, ANTHROPIC_API_KEY,
+    OPENROUTER_API_KEY, GROQ_API_KEY, GITHUB_TOKEN,
+    AWS_REGION, PROVIDER_BASE_URLS,
+    get_provider_api_key,
+)
 
 
 @dataclass
@@ -27,7 +33,6 @@ class GeminiChatSession:
     def __init__(self, system: str, tools: list[dict] | None = None):
         from google import genai
         from google.genai import types
-
         self._types = types
         self._client = genai.Client(api_key=GEMINI_API_KEY)
         tool_obj = types.Tool(function_declarations=tools) if tools else None
@@ -62,7 +67,7 @@ class GeminiChatSession:
         return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls)
 
 
-# ── Claude ────────────────────────────────────────────────────────────────────
+# ── Claude (Anthropic direct) ─────────────────────────────────────────────────
 
 class ClaudeChatSession:
     def __init__(self, system: str, tools: list[dict] | None = None):
@@ -104,11 +109,125 @@ class ClaudeChatSession:
         return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls)
 
 
+# ── OpenAI-compatible (OpenRouter / Groq / GitHub Models) ────────────────────
+
+class OpenAICompatibleChatSession:
+    """Works with any provider that speaks the OpenAI Chat Completions API."""
+
+    def __init__(self, system: str, tools: list[dict] | None = None):
+        from openai import OpenAI
+        base_url = PROVIDER_BASE_URLS[AI_PROVIDER]
+        api_key = get_provider_api_key()
+        self._client = OpenAI(base_url=base_url, api_key=api_key)
+        self._tools = [
+            {"type": "function", "function": {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": t["parameters"],
+            }}
+            for t in (tools or [])
+        ]
+        self._messages: list[dict] = [{"role": "system", "content": system}]
+
+    def send(self, user_message: str) -> ChatResponse:
+        self._messages.append({"role": "user", "content": user_message})
+        return self._call()
+
+    def submit_tool_result(self, tool_call: ToolCall, result: dict) -> ChatResponse:
+        self._messages.append({
+            "role": "tool",
+            "tool_call_id": tool_call.id,
+            "content": json.dumps(result),
+        })
+        return self._call()
+
+    def _call(self) -> ChatResponse:
+        kwargs: dict = dict(model=AI_MODEL, messages=self._messages, max_tokens=4096)
+        if self._tools:
+            kwargs["tools"] = self._tools
+        response = self._client.chat.completions.create(**kwargs)
+        msg = response.choices[0].message
+
+        # Persist assistant turn (including any tool_calls) for next round
+        msg_dict: dict = {"role": "assistant"}
+        if msg.content:
+            msg_dict["content"] = msg.content
+        if msg.tool_calls:
+            msg_dict["tool_calls"] = [
+                {"id": tc.id, "type": "function",
+                 "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                for tc in msg.tool_calls
+            ]
+        self._messages.append(msg_dict)
+
+        return self._parse(msg)
+
+    def _parse(self, msg) -> ChatResponse:
+        texts, tool_calls = [], []
+        if msg.content:
+            texts.append(msg.content)
+        for tc in (msg.tool_calls or []):
+            try:
+                args = json.loads(tc.function.arguments)
+            except Exception:
+                args = {}
+            tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, args=args))
+        return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls)
+
+
+# ── Amazon Bedrock ────────────────────────────────────────────────────────────
+
+class BedrockChatSession:
+    """Requires: pip install 'anthropic[bedrock]' and AWS credentials configured."""
+
+    def __init__(self, system: str, tools: list[dict] | None = None):
+        import anthropic
+        self._client = anthropic.AnthropicBedrock(aws_region=AWS_REGION)
+        self._system = system
+        self._tools = [
+            {"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
+            for t in (tools or [])
+        ]
+        self._messages: list[dict] = []
+
+    def send(self, user_message: str) -> ChatResponse:
+        self._messages.append({"role": "user", "content": user_message})
+        return self._call()
+
+    def submit_tool_result(self, tool_call: ToolCall, result: dict) -> ChatResponse:
+        self._messages.append({
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": tool_call.id, "content": json.dumps(result)}],
+        })
+        return self._call()
+
+    def _call(self) -> ChatResponse:
+        kwargs: dict = dict(model=AI_MODEL, system=self._system, messages=self._messages, max_tokens=4096)
+        if self._tools:
+            kwargs["tools"] = self._tools
+        response = self._client.messages.create(**kwargs)
+        self._messages.append({"role": "assistant", "content": response.content})
+        texts, tool_calls = [], []
+        for block in response.content:
+            if block.type == "text":
+                texts.append(block.text)
+            elif block.type == "tool_use":
+                tool_calls.append(ToolCall(id=block.id, name=block.name, args=block.input))
+        return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls)
+
+
 # ── factory + one-shot streaming ──────────────────────────────────────────────
 
-def create_chat_session(system: str, tools: list[dict] | None = None) -> GeminiChatSession | ClaudeChatSession:
+_OPENAI_COMPAT = {"openrouter", "groq", "github"}
+
+
+def create_chat_session(system: str, tools: list[dict] | None = None):
     if AI_PROVIDER == "claude":
         return ClaudeChatSession(system=system, tools=tools)
+    if AI_PROVIDER in _OPENAI_COMPAT:
+        return OpenAICompatibleChatSession(system=system, tools=tools)
+    if AI_PROVIDER == "bedrock":
+        return BedrockChatSession(system=system, tools=tools)
     return GeminiChatSession(system=system, tools=tools)
 
 
@@ -118,19 +237,44 @@ def stream_complete(prompt: str, system: str) -> Iterator[str]:
         import anthropic
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         with client.messages.stream(
-            model=AI_MODEL,
-            system=system,
+            model=AI_MODEL, system=system,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=4096,
         ) as stream:
             yield from stream.text_stream
+
+    elif AI_PROVIDER in _OPENAI_COMPAT:
+        from openai import OpenAI
+        client = OpenAI(base_url=PROVIDER_BASE_URLS[AI_PROVIDER], api_key=get_provider_api_key())
+        stream = client.chat.completions.create(
+            model=AI_MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=4096,
+            stream=True,
+        )
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+
+    elif AI_PROVIDER == "bedrock":
+        import anthropic
+        client = anthropic.AnthropicBedrock(aws_region=AWS_REGION)
+        with client.messages.stream(
+            model=AI_MODEL, system=system,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=4096,
+        ) as stream:
+            yield from stream.text_stream
+
     else:
         from google import genai
         from google.genai import types
         client = genai.Client(api_key=GEMINI_API_KEY)
         for chunk in client.models.generate_content_stream(
-            model=AI_MODEL,
-            contents=prompt,
+            model=AI_MODEL, contents=prompt,
             config=types.GenerateContentConfig(system_instruction=system, temperature=0.4),
         ):
             if chunk.text:
@@ -138,4 +282,13 @@ def stream_complete(prompt: str, system: str) -> Iterator[str]:
 
 
 def provider_label() -> str:
-    return f"{AI_PROVIDER.capitalize()} ({AI_MODEL})"
+    labels = {
+        "openrouter": "OpenRouter",
+        "groq":       "Groq",
+        "github":     "GitHub Models",
+        "bedrock":    "Amazon Bedrock",
+        "claude":     "Claude",
+        "gemini":     "Gemini",
+    }
+    name = labels.get(AI_PROVIDER, AI_PROVIDER.capitalize())
+    return f"{name} ({AI_MODEL})"

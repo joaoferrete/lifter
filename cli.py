@@ -11,7 +11,7 @@ from rich.table import Table
 from rich import box
 
 from rich.markup import escape as _esc
-from config import HEVY_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY, AI_PROVIDER
+from config import HEVY_API_KEY, AI_PROVIDER, get_provider_api_key
 from db.store import init_db, query
 from db.goals import (
     get_pref, set_pref, get_goals, clear_goals, save_goal,
@@ -72,11 +72,19 @@ def _require_hevy() -> Optional[HevyClient]:
 
 
 def _require_ai() -> bool:
-    if AI_PROVIDER == "claude" and not ANTHROPIC_API_KEY:
-        console.print("[red]ANTHROPIC_API_KEY not set in .env (AI_PROVIDER=claude)[/red]")
-        return False
-    if AI_PROVIDER == "gemini" and not GEMINI_API_KEY:
-        console.print("[red]GEMINI_API_KEY not set in .env (AI_PROVIDER=gemini)[/red]")
+    if AI_PROVIDER == "bedrock":
+        return True  # uses boto3 env credentials — no API key to check here
+    key = get_provider_api_key()
+    if not key:
+        key_names = {
+            "gemini":     "GEMINI_API_KEY",
+            "claude":     "ANTHROPIC_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
+            "groq":       "GROQ_API_KEY",
+            "github":     "GITHUB_TOKEN",
+        }
+        var = key_names.get(AI_PROVIDER, "the relevant API key")
+        console.print(f"[red]{var} not set in .env (AI_PROVIDER={AI_PROVIDER})[/red]")
         return False
     return True
 
@@ -845,6 +853,80 @@ def _do_chat():
     start_enhanced_chat(weeks=weeks)
 
 
+# ── settings & reset ─────────────────────────────────────────────────────────
+
+def _do_reset():
+    action = questionary.select(
+        "What do you want to reset?",
+        choices=[
+            questionary.Choice("Clear coach memories  (forget past conversations)", value="memories"),
+            questionary.Choice("Clear all goals",                                   value="goals"),
+            questionary.Choice("Clear sync state  (next sync will re-download all)", value="sync_state"),
+            questionary.Choice("Wipe everything  (delete all local data)",           value="all"),
+            questionary.Separator("  ───"),
+            questionary.Choice("Cancel",                                             value="cancel"),
+        ],
+        style=STYLE,
+    ).ask()
+
+    if not action or action == "cancel":
+        return
+
+    if action == "memories":
+        if questionary.confirm(
+            "  Delete all memories from past conversations?", default=False, style=STYLE
+        ).ask():
+            from db.memories import clear_memories
+            clear_memories()
+            console.print("[green]✓ Memories cleared.[/green]")
+
+    elif action == "goals":
+        if questionary.confirm("  Delete all goals?", default=False, style=STYLE).ask():
+            from db.goals import clear_goals
+            clear_goals()
+            console.print("[green]✓ Goals cleared.[/green]")
+
+    elif action == "sync_state":
+        if questionary.confirm(
+            "  Reset sync state? The next sync will re-download all workouts.", default=False, style=STYLE
+        ).ask():
+            from db.store import set_sync_state
+            set_sync_state("last_sync", "1970-01-01T00:00:00Z")
+            console.print("[green]✓ Sync state reset. Run Sync → Incremental to re-download.[/green]")
+
+    elif action == "all":
+        console.print(
+            "\n  [bold red]This will delete hevy.db and disconnect Google Fit.[/bold red]\n"
+            "  All workouts, goals, memories, and health data will be removed from this device.\n"
+            "  Your data on Hevy and Google Fit is NOT affected.\n"
+        )
+        confirm1 = questionary.confirm("  Are you sure?", default=False, style=STYLE).ask()
+        if not confirm1:
+            return
+        confirm2 = questionary.confirm(
+            "  Really? This cannot be undone.", default=False, style=STYLE
+        ).ask()
+        if not confirm2:
+            return
+
+        import os
+        from config import DB_PATH
+        try:
+            from fit.auth import TOKEN_FILE, disconnect as fit_disconnect
+            fit_disconnect()
+        except Exception:
+            pass
+        try:
+            os.remove(DB_PATH)
+        except FileNotFoundError:
+            pass
+
+        console.print(
+            "\n[bold green]✓ Everything wiped.[/bold green]\n"
+            "  Run [bold]Sync → Full[/bold] to re-download your workouts."
+        )
+
+
 # ── google fit ────────────────────────────────────────────────────────────────
 
 def _render_recovery_panel() -> None:
@@ -1034,6 +1116,7 @@ MENU_ITEMS = [
     questionary.Choice("  AI coaching report",        value="coach"),
     questionary.Choice("  Chat with coach",           value="chat"),
     questionary.Separator("  ─────────────────────────────────"),
+    questionary.Choice("  Settings & reset",          value="reset"),
     questionary.Choice("  Exit",                      value="exit"),
 ]
 
@@ -1046,6 +1129,7 @@ ACTIONS = {
     "fit":      _do_fit,
     "coach":    _do_coach,
     "chat":     _do_chat,
+    "reset":    _do_reset,
 }
 
 _NO_PAUSE = {"chat"}

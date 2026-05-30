@@ -27,20 +27,48 @@ def _iso(dt: datetime) -> str:
 
 
 def _local_tz_id() -> str | None:
-    """Best-effort local timezone name (e.g. 'America/Sao_Paulo')."""
+    """Return a valid IANA timezone ID for the local machine (e.g. 'America/Sao_Paulo').
+
+    str(tzinfo) returns offsets like '-03:00' which the Google Fit API rejects.
+    We need the IANA name (a slash-separated string like 'America/Sao_Paulo').
+    """
+    # Most reliable: /etc/timezone on Linux/Debian/Ubuntu
     try:
-        import zoneinfo
-        return str(datetime.now().astimezone().tzinfo)
-    except Exception:
-        pass
-    # Fallback: read /etc/timezone on Linux
-    try:
-        tz = open("/etc/timezone").read().strip()
-        if tz:
+        from pathlib import Path
+        tz = Path("/etc/timezone").read_text().strip()
+        if tz and "/" in tz:
             return tz
     except Exception:
         pass
-    return None
+
+    # /etc/localtime is a symlink to the zoneinfo file on most Linux/macOS
+    try:
+        import os
+        from pathlib import Path
+        link = Path("/etc/localtime").resolve()
+        for marker in ("zoneinfo/", "zoneinfo\\"):
+            idx = str(link).find(marker)
+            if idx != -1:
+                candidate = str(link)[idx + len(marker):]
+                if "/" in candidate:
+                    return candidate
+    except Exception:
+        pass
+
+    # Python 3.9+ zoneinfo: ZoneInfo objects have a .key attribute
+    try:
+        tz_info = datetime.now().astimezone().tzinfo
+        if hasattr(tz_info, "key") and "/" in tz_info.key:
+            return tz_info.key
+    except Exception:
+        pass
+
+    # TZ env variable (sometimes set explicitly)
+    tz = os.environ.get("TZ", "")
+    if tz and "/" in tz:
+        return tz
+
+    return None  # fall back to UTC bucket alignment
 
 
 def _sum_points(points: list[dict], field: str = "intVal") -> int | float | None:

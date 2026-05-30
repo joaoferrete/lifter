@@ -245,6 +245,35 @@ All goal changes and routine pushes require your explicit confirmation before an
 
 ---
 
+### Settings & reset
+
+**Menu → Settings & reset** gives you granular control over local data. Nothing on Hevy or Google Fit is ever touched — only the local cache on your machine.
+
+| Option | What it clears |
+|---|---|
+| **Clear coach memories** | Deletes everything extracted from past chat sessions — the coach starts fresh with no prior context |
+| **Clear all goals** | Removes all active goals; the wizard runs again on next launch |
+| **Clear sync state** | Resets the sync timestamp so the next incremental sync re-downloads all workouts (existing local data is kept) |
+| **Wipe everything** | Double-confirmed — deletes `hevy.db` and disconnects Google Fit (`fit_token.json`). Run **Sync → Full** afterwards to restore |
+
+You can also reset individual pieces manually:
+
+```bash
+# Delete the local database entirely
+rm hevy.db
+
+# Disconnect Google Fit (keeps DB data)
+rm fit_token.json
+
+# Force the next sync to re-download everything
+sqlite3 hevy.db "UPDATE sync_state SET value='1970-01-01T00:00:00Z' WHERE key='last_sync';"
+
+# Clear only coach memories
+sqlite3 hevy.db "DELETE FROM chat_memories;"
+```
+
+---
+
 ## Architecture
 
 ```
