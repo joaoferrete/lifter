@@ -22,6 +22,9 @@ GITHUB_TOKEN: str = os.environ.get("GITHUB_TOKEN", "")
 
 # Amazon Bedrock — uses boto3 (pip install anthropic[bedrock])
 AWS_REGION: str = os.environ.get("AWS_REGION", "us-east-1")
+AWS_ACCESS_KEY_ID: str = os.environ.get("AWS_ACCESS_KEY_ID", "")
+AWS_SECRET_ACCESS_KEY: str = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
+AWS_SESSION_TOKEN: str = os.environ.get("AWS_SESSION_TOKEN", "")
 
 # OpenAI-compatible provider base URLs
 PROVIDER_BASE_URLS: dict[str, str] = {

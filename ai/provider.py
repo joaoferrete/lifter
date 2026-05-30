@@ -9,7 +9,8 @@ from config import (
     AI_PROVIDER, AI_MODEL,
     GEMINI_API_KEY, ANTHROPIC_API_KEY,
     OPENROUTER_API_KEY, GROQ_API_KEY, GITHUB_TOKEN,
-    AWS_REGION, PROVIDER_BASE_URLS,
+    AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
+    PROVIDER_BASE_URLS,
     get_provider_api_key,
 )
 
@@ -49,8 +50,14 @@ class GeminiChatSession:
         return self._parse(self._chat.send_message(user_message))
 
     def submit_tool_result(self, tool_call: ToolCall, result: dict) -> ChatResponse:
-        part = self._types.Part.from_function_response(name=tool_call.name, response=result)
-        return self._parse(self._chat.send_message(part))
+        return self.submit_tool_results([(tool_call, result)])
+
+    def submit_tool_results(self, results: list[tuple[ToolCall, dict]]) -> ChatResponse:
+        parts = [
+            self._types.Part.from_function_response(name=tc.name, response=r)
+            for tc, r in results
+        ]
+        return self._parse(self._chat.send_message(parts))
 
     def _parse(self, response) -> ChatResponse:
         texts, tool_calls = [], []
@@ -85,9 +92,15 @@ class ClaudeChatSession:
         return self._call()
 
     def submit_tool_result(self, tool_call: ToolCall, result: dict) -> ChatResponse:
+        return self.submit_tool_results([(tool_call, result)])
+
+    def submit_tool_results(self, results: list[tuple[ToolCall, dict]]) -> ChatResponse:
         self._messages.append({
             "role": "user",
-            "content": [{"type": "tool_result", "tool_use_id": tool_call.id, "content": json.dumps(result)}],
+            "content": [
+                {"type": "tool_result", "tool_use_id": tc.id, "content": json.dumps(r)}
+                for tc, r in results
+            ],
         })
         return self._call()
 
@@ -134,11 +147,11 @@ class OpenAICompatibleChatSession:
         return self._call()
 
     def submit_tool_result(self, tool_call: ToolCall, result: dict) -> ChatResponse:
-        self._messages.append({
-            "role": "tool",
-            "tool_call_id": tool_call.id,
-            "content": json.dumps(result),
-        })
+        return self.submit_tool_results([(tool_call, result)])
+
+    def submit_tool_results(self, results: list[tuple[ToolCall, dict]]) -> ChatResponse:
+        for tc, r in results:
+            self._messages.append({"role": "tool", "tool_call_id": tc.id, "content": json.dumps(r)})
         return self._call()
 
     def _call(self) -> ChatResponse:
@@ -182,7 +195,20 @@ class BedrockChatSession:
 
     def __init__(self, system: str, tools: list[dict] | None = None):
         import anthropic
-        self._client = anthropic.AnthropicBedrock(aws_region=AWS_REGION)
+        try:
+            self._client = anthropic.AnthropicBedrock(
+                aws_region=AWS_REGION,
+                aws_access_key=AWS_ACCESS_KEY_ID or None,
+                aws_secret_key=AWS_SECRET_ACCESS_KEY or None,
+                aws_session_token=AWS_SESSION_TOKEN or None,
+            )
+        except Exception as exc:
+            if "botocore" in str(exc) or "boto3" in str(exc):
+                raise RuntimeError(
+                    'Bedrock requires the AWS SDK extras.\n'
+                    'Run: pip install "anthropic[bedrock]"'
+                ) from exc
+            raise
         self._system = system
         self._tools = [
             {"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
@@ -195,9 +221,15 @@ class BedrockChatSession:
         return self._call()
 
     def submit_tool_result(self, tool_call: ToolCall, result: dict) -> ChatResponse:
+        return self.submit_tool_results([(tool_call, result)])
+
+    def submit_tool_results(self, results: list[tuple[ToolCall, dict]]) -> ChatResponse:
         self._messages.append({
             "role": "user",
-            "content": [{"type": "tool_result", "tool_use_id": tool_call.id, "content": json.dumps(result)}],
+            "content": [
+                {"type": "tool_result", "tool_use_id": tc.id, "content": json.dumps(r)}
+                for tc, r in results
+            ],
         })
         return self._call()
 
@@ -261,7 +293,20 @@ def stream_complete(prompt: str, system: str) -> Iterator[str]:
 
     elif AI_PROVIDER == "bedrock":
         import anthropic
-        client = anthropic.AnthropicBedrock(aws_region=AWS_REGION)
+        try:
+            client = anthropic.AnthropicBedrock(
+                aws_region=AWS_REGION,
+                aws_access_key=AWS_ACCESS_KEY_ID or None,
+                aws_secret_key=AWS_SECRET_ACCESS_KEY or None,
+                aws_session_token=AWS_SESSION_TOKEN or None,
+            )
+        except Exception as exc:
+            if "botocore" in str(exc) or "boto3" in str(exc):
+                raise RuntimeError(
+                    'Bedrock requires the AWS SDK extras.\n'
+                    'Run: pip install "anthropic[bedrock]"'
+                ) from exc
+            raise
         with client.messages.stream(
             model=AI_MODEL, system=system,
             messages=[{"role": "user", "content": prompt}],
