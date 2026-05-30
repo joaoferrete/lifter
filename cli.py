@@ -11,7 +11,7 @@ from rich.table import Table
 from rich import box
 
 from rich.markup import escape as _esc
-from config import HEVY_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY, AI_PROVIDER
+from config import HEVY_API_KEY, AI_PROVIDER, get_provider_api_key
 from db.store import init_db, query
 from db.goals import (
     get_pref, set_pref, get_goals, clear_goals, save_goal,
@@ -72,11 +72,19 @@ def _require_hevy() -> Optional[HevyClient]:
 
 
 def _require_ai() -> bool:
-    if AI_PROVIDER == "claude" and not ANTHROPIC_API_KEY:
-        console.print("[red]ANTHROPIC_API_KEY not set in .env (AI_PROVIDER=claude)[/red]")
-        return False
-    if AI_PROVIDER == "gemini" and not GEMINI_API_KEY:
-        console.print("[red]GEMINI_API_KEY not set in .env (AI_PROVIDER=gemini)[/red]")
+    if AI_PROVIDER == "bedrock":
+        return True  # uses boto3 env credentials — no API key to check here
+    key = get_provider_api_key()
+    if not key:
+        key_names = {
+            "gemini":     "GEMINI_API_KEY",
+            "claude":     "ANTHROPIC_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
+            "groq":       "GROQ_API_KEY",
+            "github":     "GITHUB_TOKEN",
+        }
+        var = key_names.get(AI_PROVIDER, "the relevant API key")
+        console.print(f"[red]{var} not set in .env (AI_PROVIDER={AI_PROVIDER})[/red]")
         return False
     return True
 

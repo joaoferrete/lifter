@@ -7,16 +7,49 @@ FIT_BASE = "https://www.googleapis.com/fitness/v1/users/me"
 
 class FitClient:
     def __init__(self):
-        from fit.auth import get_credentials
+        from fit.auth import get_credentials, disconnect, TOKEN_FILE
         from google.auth.transport.requests import Request
 
+        self._token_file = TOKEN_FILE
+        self._disconnect = disconnect
         self._creds = get_credentials()
         self._refresh = Request()
 
     def _headers(self) -> dict:
-        if not self._creds.valid:
-            self._creds.refresh(self._refresh)
+        from google.auth.exceptions import RefreshError
+        try:
+            if not self._creds.valid:
+                self._creds.refresh(self._refresh)
+        except RefreshError:
+            self._disconnect()
+            raise RuntimeError(
+                "Google Fit token expired and could not be refreshed.\n"
+                "Go to Menu → Google Fit → Connect to re-authenticate."
+            )
         return {"Authorization": f"Bearer {self._creds.token}"}
+
+    def _check(self, resp: httpx.Response, operation: str) -> None:
+        if resp.is_success:
+            return
+        if resp.status_code == 401:
+            self._disconnect()
+            raise RuntimeError(
+                "Google Fit: not authorised (401). Token has been cleared.\n"
+                "Go to Menu → Google Fit → Connect to re-authenticate."
+            )
+        if resp.status_code == 403:
+            raise RuntimeError(
+                "Google Fit: access denied (403). Make sure you approved "
+                "all Fitness API scopes during the OAuth setup."
+            )
+        if resp.status_code == 400:
+            raise RuntimeError(
+                f"Google Fit: bad request (400) during {operation}.\n"
+                f"Detail: {resp.text[:300]}"
+            )
+        raise RuntimeError(
+            f"Google Fit API error {resp.status_code} during {operation}: {resp.text[:200]}"
+        )
 
     def aggregate(
         self,
@@ -26,11 +59,10 @@ class FitClient:
         bucket_ms: int = 86_400_000,
         timezone_id: str | None = None,
     ) -> dict:
-        bucket: dict = {"durationMillis": bucket_ms}
         if timezone_id:
-            # Period-based bucketing aligns to local midnight instead of UTC midnight,
-            # which fixes steps being assigned to the wrong day for non-UTC users.
-            bucket = {"period": {"type": "day", "value": 1, "timeZoneId": timezone_id}}
+            bucket: dict = {"period": {"type": "day", "value": 1, "timeZoneId": timezone_id}}
+        else:
+            bucket = {"durationMillis": bucket_ms}
 
         resp = httpx.post(
             f"{FIT_BASE}/dataset:aggregate",
@@ -43,7 +75,7 @@ class FitClient:
             },
             timeout=30,
         )
-        resp.raise_for_status()
+        self._check(resp, "aggregate")
         return resp.json()
 
     def get_sleep_sessions(self, start_iso: str, end_iso: str) -> list[dict]:
@@ -53,5 +85,5 @@ class FitClient:
             params={"startTime": start_iso, "endTime": end_iso, "activityType": 72},
             timeout=30,
         )
-        resp.raise_for_status()
+        self._check(resp, "get_sleep_sessions")
         return resp.json().get("session", [])
