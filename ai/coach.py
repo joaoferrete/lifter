@@ -360,7 +360,8 @@ _MANAGE_GOALS_TOOL: dict = {
 
 # ── tool handlers ─────────────────────────────────────────────────────────────
 
-def _show_and_confirm_routine(routine: dict, session, tool_call: ToolCall) -> None:
+def _show_and_confirm_routine(routine: dict) -> dict:
+    """Show the proposed routine, ask for confirmation, push if approved. Returns tool result."""
     from hevy.client import HevyClient
 
     lines = [f"[bold]{routine.get('title')}[/bold]"]
@@ -381,7 +382,6 @@ def _show_and_confirm_routine(routine: dict, session, tool_call: ToolCall) -> No
 
     console.print(Panel("\n".join(lines), title="[bold cyan]Proposed routine[/bold cyan]", border_style="cyan"))
 
-    # Validate every exercise_template_id against the local DB.
     invalid_ids = [
         ex.get("exercise_template_id", "")
         for ex in routine.get("exercises", [])
@@ -397,50 +397,35 @@ def _show_and_confirm_routine(routine: dict, session, tool_call: ToolCall) -> No
             f"and will be skipped: {', '.join(invalid_ids[:3])}[/yellow]"
         )
 
-    if questionary.confirm("  Push this routine to your Hevy app?", default=True).ask():
-        try:
-            with console.status("[dim]Saving routine to Hevy...[/dim]", spinner="dots"):
-                from hevy.client import _routine_id
-                resp = HevyClient().create_routine(routine)
-                routine_id = _routine_id(resp)
-                follow = session.submit_tool_result(tool_call, {"success": True, "routine_id": routine_id})
-            console.print(f"[green]✓ Routine saved to Hevy[/green] (id: {routine_id})\n")
-            if follow.text:
-                console.print(Markdown(follow.text))
-                console.print()
-        except Exception as e:
-            follow = session.submit_tool_result(tool_call, {"success": False, "error": str(e)})
-            console.print(f"[red]Failed: {e}[/red]\n")
-            if follow.text:
-                console.print(Markdown(follow.text))
-    else:
-        with console.status("[dim]...[/dim]", spinner="dots"):
-            follow = session.submit_tool_result(tool_call, {"success": False, "message": "User declined"})
+    if not questionary.confirm("  Push this routine to your Hevy app?", default=True).ask():
         console.print("[dim]Routine not pushed.[/dim]\n")
-        if follow.text:
-            console.print(Markdown(follow.text))
-            console.print()
+        return {"success": False, "message": "User declined"}
+
+    try:
+        with console.status("[dim]Saving routine to Hevy...[/dim]", spinner="dots"):
+            from hevy.client import _routine_id
+            resp = HevyClient().create_routine(routine)
+            routine_id = _routine_id(resp)
+        console.print(f"[green]✓ Routine saved to Hevy[/green] (id: {routine_id})\n")
+        return {"success": True, "routine_id": routine_id}
+    except Exception as e:
+        console.print(f"[red]Failed: {e}[/red]\n")
+        return {"success": False, "error": str(e)}
 
 
-def _handle_manage_goals(fc_args: dict, session, tool_call: ToolCall) -> None:
+def _handle_manage_goals(fc_args: dict) -> dict:
+    """Handle a goal add/update/remove request. Returns tool result."""
     from db.goals import save_goal, delete_goal, update_goal_fields, get_goals
 
     action = fc_args.get("action")
     summary = fc_args.get("changes_summary", "Modify a goal")
 
-    # Validate that goal_id refers to an actual goal before touching anything.
     if action in ("update", "remove"):
         gid = fc_args.get("goal_id")
         valid_ids = {g["id"] for g in get_goals()}
         if gid is None or int(gid) not in valid_ids:
-            follow = session.submit_tool_result(
-                tool_call,
-                {"success": False, "error": f"Goal ID {gid} does not exist"},
-            )
             console.print(f"[red]⚠ AI referenced a non-existent goal (id={gid}). Change blocked.[/red]\n")
-            if follow.text:
-                console.print(Markdown(follow.text))
-            return
+            return {"success": False, "error": f"Goal ID {gid} does not exist"}
 
     console.print(Panel(
         f"[bold]{sanitize_for_prompt(summary, max_len=200)}[/bold]",
@@ -449,13 +434,8 @@ def _handle_manage_goals(fc_args: dict, session, tool_call: ToolCall) -> None:
     ))
 
     if not questionary.confirm("  Apply this change?", default=True).ask():
-        with console.status("[dim]...[/dim]", spinner="dots"):
-            follow = session.submit_tool_result(tool_call, {"success": False, "message": "User declined"})
         console.print("[dim]Change not applied.[/dim]\n")
-        if follow.text:
-            console.print(Markdown(follow.text))
-            console.print()
-        return
+        return {"success": False, "message": "User declined"}
 
     try:
         with console.status("[dim]Applying goal change...[/dim]", spinner="dots"):
@@ -469,8 +449,8 @@ def _handle_manage_goals(fc_args: dict, session, tool_call: ToolCall) -> None:
                     exercise_name=fc_args.get("exercise_name"),
                     muscle_group=fc_args.get("muscle_group"),
                 )
-                follow = session.submit_tool_result(tool_call, {"success": True, "action": "added"})
                 label = "[green]✓ Goal added[/green]"
+                result: dict = {"success": True, "action": "added"}
 
             elif action == "update":
                 gid = fc_args.get("goal_id")
@@ -482,30 +462,26 @@ def _handle_manage_goals(fc_args: dict, session, tool_call: ToolCall) -> None:
                     target=fc_args.get("target"),
                     unit=fc_args.get("unit"),
                 )
-                follow = session.submit_tool_result(tool_call, {"success": True, "action": "updated"})
                 label = "[green]✓ Goal updated[/green]"
+                result = {"success": True, "action": "updated"}
 
             elif action == "remove":
                 gid = fc_args.get("goal_id")
                 if not gid:
                     raise ValueError("goal_id is required for remove")
                 delete_goal(int(gid))
-                follow = session.submit_tool_result(tool_call, {"success": True, "action": "removed"})
                 label = "[green]✓ Goal removed[/green]"
+                result = {"success": True, "action": "removed"}
 
             else:
                 raise ValueError(f"Unknown action: {action}")
 
         console.print(f"{label}\n")
-        if follow.text:
-            console.print(Markdown(follow.text))
-            console.print()
+        return result
 
     except Exception as e:
-        follow = session.submit_tool_result(tool_call, {"success": False, "error": str(e)})
         console.print(f"[red]Failed: {e}[/red]\n")
-        if follow.text:
-            console.print(Markdown(follow.text))
+        return {"success": False, "error": str(e)}
 
 
 # ── memory extraction ─────────────────────────────────────────────────────────
@@ -631,11 +607,23 @@ def start_enhanced_chat(weeks: int = 8) -> None:
                 console.print()
                 conversation_log.append({"role": "assistant", "content": response.text})
 
-            for tc in response.tool_calls:
-                if tc.name == "push_routine":
-                    _show_and_confirm_routine(dict(tc.args), session, tc)
-                elif tc.name == "manage_goals":
-                    _handle_manage_goals(dict(tc.args), session, tc)
+            if response.tool_calls:
+                tool_results: list[tuple] = []
+                for tc in response.tool_calls:
+                    if tc.name == "push_routine":
+                        result = _show_and_confirm_routine(dict(tc.args))
+                    elif tc.name == "manage_goals":
+                        result = _handle_manage_goals(dict(tc.args))
+                    else:
+                        result = {"error": f"Unknown tool: {tc.name}"}
+                    tool_results.append((tc, result))
+
+                follow = session.submit_tool_results(tool_results)
+                if follow.text:
+                    console.print("[bold cyan]Coach:[/bold cyan]")
+                    console.print(Markdown(follow.text))
+                    console.print()
+                    conversation_log.append({"role": "assistant", "content": follow.text})
 
         except Exception as e:
             console.print(f"[red]Error: {e}[/red]\n")
