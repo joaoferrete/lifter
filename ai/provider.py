@@ -49,6 +49,9 @@ class GeminiChatSession:
     def send(self, user_message: str) -> ChatResponse:
         return self._parse(self._chat.send_message(user_message))
 
+    def discard_pending_user(self) -> None:
+        pass  # Gemini SDK owns history; rollback not supported
+
     def submit_tool_result(self, tool_call: ToolCall, result: dict) -> ChatResponse:
         return self.submit_tool_results([(tool_call, result)])
 
@@ -90,6 +93,10 @@ class ClaudeChatSession:
     def send(self, user_message: str) -> ChatResponse:
         self._messages.append({"role": "user", "content": user_message})
         return self._call()
+
+    def discard_pending_user(self) -> None:
+        if self._messages and self._messages[-1].get("role") != "assistant":
+            self._messages.pop()
 
     def submit_tool_result(self, tool_call: ToolCall, result: dict) -> ChatResponse:
         return self.submit_tool_results([(tool_call, result)])
@@ -146,6 +153,10 @@ class OpenAICompatibleChatSession:
         self._messages.append({"role": "user", "content": user_message})
         return self._call()
 
+    def discard_pending_user(self) -> None:
+        if self._messages and self._messages[-1].get("role") not in ("assistant", "system"):
+            self._messages.pop()
+
     def submit_tool_result(self, tool_call: ToolCall, result: dict) -> ChatResponse:
         return self.submit_tool_results([(tool_call, result)])
 
@@ -188,10 +199,10 @@ class OpenAICompatibleChatSession:
         return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls)
 
 
-# ── Amazon Bedrock ────────────────────────────────────────────────────────────
+# ── Amazon Bedrock (Claude via Anthropic SDK) ─────────────────────────────────
 
 class BedrockChatSession:
-    """Requires: pip install 'anthropic[bedrock]' and AWS credentials configured."""
+    """Claude-on-Bedrock via anthropic.AnthropicBedrock. Requires: pip install 'anthropic[bedrock]'."""
 
     def __init__(self, system: str, tools: list[dict] | None = None):
         import anthropic
@@ -219,6 +230,10 @@ class BedrockChatSession:
     def send(self, user_message: str) -> ChatResponse:
         self._messages.append({"role": "user", "content": user_message})
         return self._call()
+
+    def discard_pending_user(self) -> None:
+        if self._messages and self._messages[-1].get("role") != "assistant":
+            self._messages.pop()
 
     def submit_tool_result(self, tool_call: ToolCall, result: dict) -> ChatResponse:
         return self.submit_tool_results([(tool_call, result)])
@@ -248,6 +263,85 @@ class BedrockChatSession:
         return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls)
 
 
+# ── Amazon Bedrock (non-Claude models via boto3 Converse API) ─────────────────
+
+def _boto3_bedrock_client():
+    import boto3
+    kwargs: dict = {"region_name": AWS_REGION}
+    if AWS_ACCESS_KEY_ID:
+        kwargs["aws_access_key_id"] = AWS_ACCESS_KEY_ID
+    if AWS_SECRET_ACCESS_KEY:
+        kwargs["aws_secret_access_key"] = AWS_SECRET_ACCESS_KEY
+    if AWS_SESSION_TOKEN:
+        kwargs["aws_session_token"] = AWS_SESSION_TOKEN
+    return boto3.client("bedrock-runtime", **kwargs)
+
+
+class BedrockConverseChatSession:
+    """Non-Claude models on Bedrock (Gemma, Llama, etc.) via boto3 Converse API."""
+
+    def __init__(self, system: str, tools: list[dict] | None = None):
+        self._client = _boto3_bedrock_client()
+        self._system = [{"text": system}]
+        self._tool_config: dict | None = None
+        if tools:
+            self._tool_config = {
+                "tools": [
+                    {
+                        "toolSpec": {
+                            "name": t["name"],
+                            "description": t["description"],
+                            "inputSchema": {"json": t["parameters"]},
+                        }
+                    }
+                    for t in tools
+                ]
+            }
+        self._messages: list[dict] = []
+
+    def send(self, user_message: str) -> ChatResponse:
+        self._messages.append({"role": "user", "content": [{"text": user_message}]})
+        return self._call()
+
+    def discard_pending_user(self) -> None:
+        if self._messages and self._messages[-1].get("role") != "assistant":
+            self._messages.pop()
+
+    def submit_tool_result(self, tool_call: ToolCall, result: dict) -> ChatResponse:
+        return self.submit_tool_results([(tool_call, result)])
+
+    def submit_tool_results(self, results: list[tuple[ToolCall, dict]]) -> ChatResponse:
+        self._messages.append({
+            "role": "user",
+            "content": [
+                {"toolResult": {"toolUseId": tc.id, "content": [{"text": json.dumps(r)}]}}
+                for tc, r in results
+            ],
+        })
+        return self._call()
+
+    def _call(self) -> ChatResponse:
+        kwargs: dict = {
+            "modelId": AI_MODEL,
+            "system": self._system,
+            "messages": self._messages,
+            "inferenceConfig": {"maxTokens": 4096},
+        }
+        if self._tool_config:
+            kwargs["toolConfig"] = self._tool_config
+        response = self._client.converse(**kwargs)
+        msg = response["output"]["message"]
+        self._messages.append(msg)
+        texts, tool_calls = [], []
+        for item in msg.get("content", []):
+            if "text" in item:
+                texts.append(item["text"])
+            elif "toolUse" in item:
+                tu = item["toolUse"]
+                tool_calls.append(ToolCall(id=tu["toolUseId"], name=tu["name"], args=tu["input"]))
+        return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls)
+
+
 # ── factory + one-shot streaming ──────────────────────────────────────────────
 
 _OPENAI_COMPAT = {"openrouter", "groq", "github"}
@@ -259,7 +353,9 @@ def create_chat_session(system: str, tools: list[dict] | None = None):
     if AI_PROVIDER in _OPENAI_COMPAT:
         return OpenAICompatibleChatSession(system=system, tools=tools)
     if AI_PROVIDER == "bedrock":
-        return BedrockChatSession(system=system, tools=tools)
+        if AI_MODEL.startswith("anthropic."):
+            return BedrockChatSession(system=system, tools=tools)
+        return BedrockConverseChatSession(system=system, tools=tools)
     return GeminiChatSession(system=system, tools=tools)
 
 
@@ -292,27 +388,41 @@ def stream_complete(prompt: str, system: str) -> Iterator[str]:
                 yield chunk.choices[0].delta.content
 
     elif AI_PROVIDER == "bedrock":
-        import anthropic
-        try:
-            client = anthropic.AnthropicBedrock(
-                aws_region=AWS_REGION,
-                aws_access_key=AWS_ACCESS_KEY_ID or None,
-                aws_secret_key=AWS_SECRET_ACCESS_KEY or None,
-                aws_session_token=AWS_SESSION_TOKEN or None,
+        if AI_MODEL.startswith("anthropic."):
+            import anthropic
+            try:
+                client = anthropic.AnthropicBedrock(
+                    aws_region=AWS_REGION,
+                    aws_access_key=AWS_ACCESS_KEY_ID or None,
+                    aws_secret_key=AWS_SECRET_ACCESS_KEY or None,
+                    aws_session_token=AWS_SESSION_TOKEN or None,
+                )
+            except Exception as exc:
+                if "botocore" in str(exc) or "boto3" in str(exc):
+                    raise RuntimeError(
+                        'Bedrock requires the AWS SDK extras.\n'
+                        'Run: pip install "anthropic[bedrock]"'
+                    ) from exc
+                raise
+            with client.messages.stream(
+                model=AI_MODEL, system=system,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=4096,
+            ) as stream:
+                yield from stream.text_stream
+        else:
+            client = _boto3_bedrock_client()
+            response = client.converse_stream(
+                modelId=AI_MODEL,
+                system=[{"text": system}],
+                messages=[{"role": "user", "content": [{"text": prompt}]}],
+                inferenceConfig={"maxTokens": 4096},
             )
-        except Exception as exc:
-            if "botocore" in str(exc) or "boto3" in str(exc):
-                raise RuntimeError(
-                    'Bedrock requires the AWS SDK extras.\n'
-                    'Run: pip install "anthropic[bedrock]"'
-                ) from exc
-            raise
-        with client.messages.stream(
-            model=AI_MODEL, system=system,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=4096,
-        ) as stream:
-            yield from stream.text_stream
+            for event in response.get("stream", []):
+                if "contentBlockDelta" in event:
+                    delta = event["contentBlockDelta"].get("delta", {})
+                    if "text" in delta:
+                        yield delta["text"]
 
     else:
         from google import genai
