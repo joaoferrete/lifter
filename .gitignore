@@ -1,5 +1,5 @@
 .env
-hevy.db
+hevy.db*
 *.db
 fit_credentials.json
 fit_token.json

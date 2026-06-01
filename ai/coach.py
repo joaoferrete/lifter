@@ -1,5 +1,7 @@
 """AI coaching — analyzes workout data, generates suggestions, manages goals."""
 import json
+import readline
+from pathlib import Path
 
 import questionary
 from rich.console import Console
@@ -18,6 +20,8 @@ from db.store import query
 from db.goals import goals_context_for_ai, get_pref, get_goals
 
 console = Console()
+
+_CHAT_HISTORY_FILE = Path.home() / ".hevy_chat_history"
 
 # ── context builder ───────────────────────────────────────────────────────────
 
@@ -277,9 +281,12 @@ _CHAT_SYSTEM_BASE = (
     "history, their stated goals, and memories from previous conversations.\n"
     "Answer questions conversationally and reference their actual numbers.\n"
     "Be encouraging but honest. Keep answers concise unless asked to elaborate.\n"
-    "When the athlete asks you to create, build, add, or push a routine, use the push_routine tool.\n"
-    "When the athlete explicitly asks to change, add, or remove a goal, use the manage_goals tool — "
-    "always describe the exact change in changes_summary so the user can confirm.\n"
+    "TOOL USE RULES — follow these exactly:\n"
+    "- When the athlete asks you to create, send, push, or build a routine, you MUST call the "
+    "push_routine tool immediately. Do NOT describe or list the routine in plain text. Just call the tool.\n"
+    "- When the athlete explicitly asks to change, add, or remove a goal, you MUST call the "
+    "manage_goals tool — always describe the exact change in changes_summary so the user can confirm.\n"
+    "- Never simulate tool actions in text. If an action requires a tool, call the tool.\n"
     "Only use exercise_template_ids from the exercise library provided.\n"
     "Address the athlete by their name when appropriate."
 )
@@ -295,27 +302,13 @@ _PUSH_ROUTINE_TOOL: dict = {
             "notes": {"type": "string"},
             "exercises": {
                 "type": "array",
-                "items": {
-                    "type": "object",
-                    "required": ["exercise_template_id", "title", "sets"],
-                    "properties": {
-                        "exercise_template_id": {"type": "string"},
-                        "title": {"type": "string"},
-                        "rest_seconds": {"type": "integer"},
-                        "notes": {"type": "string"},
-                        "sets": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "type": {"type": "string", "enum": ["warmup", "normal", "failure", "dropset"]},
-                                    "weight_kg": {"type": "number"},
-                                    "reps": {"type": "integer"},
-                                },
-                            },
-                        },
-                    },
-                },
+                "description": (
+                    "List of exercises. Each exercise object: "
+                    "{exercise_template_id: string (from library), title: string, "
+                    "rest_seconds: integer, notes: string, "
+                    "sets: [{type: 'warmup'|'normal'|'failure'|'dropset', weight_kg: number, reps: integer}]}"
+                ),
+                "items": {"type": "object"},
             },
         },
     },
@@ -484,6 +477,35 @@ def _handle_manage_goals(fc_args: dict) -> dict:
         return {"success": False, "error": str(e)}
 
 
+# ── weak-model tool-call nudge ────────────────────────────────────────────────
+
+_ROUTINE_SIGNALS = ["sets", "reps", "treino", "workout", "routine", "exercício", "exercise",
+                    "warmup", "normal", "dropset", "kg×", "kg x", "agachamento", "supino",
+                    "remada", "rosca", "tríceps", "desenvolvimento", "levantamento"]
+_GOAL_SIGNALS = ["goal", "meta", "objetivo", "target", "alvo", "added", "removed", "updated"]
+
+
+def _missed_tool_call_nudge(text: str) -> str | None:
+    """Return a nudge prompt when the model described a tool action in plain text instead of calling it."""
+    lower = text.lower()
+    routine_hits = sum(1 for s in _ROUTINE_SIGNALS if s in lower)
+    goal_hits = sum(1 for s in _GOAL_SIGNALS if s in lower)
+
+    if routine_hits >= 4:
+        return (
+            "[INSTRUCTION] You described a workout routine in plain text but did not call "
+            "push_routine. You MUST call the push_routine tool now with the routine data. "
+            "Do not write any more plain-text descriptions — call the tool immediately."
+        )
+    if goal_hits >= 2:
+        return (
+            "[INSTRUCTION] You described a goal change in plain text but did not call "
+            "manage_goals. You MUST call the manage_goals tool now with the change details. "
+            "Call the tool immediately."
+        )
+    return None
+
+
 # ── memory extraction ─────────────────────────────────────────────────────────
 
 _MEMORY_SYSTEM = (
@@ -577,6 +599,12 @@ def start_enhanced_chat(weeks: int = 8) -> None:
         "  [dim]Type [bold]quit[/bold] or press Ctrl+C to return to the menu.[/dim]\n"
     )
 
+    try:
+        readline.read_history_file(_CHAT_HISTORY_FILE)
+        readline.set_history_length(200)
+    except OSError:
+        pass
+
     conversation_log: list[dict] = []
 
     while True:
@@ -594,39 +622,79 @@ def start_enhanced_chat(weeks: int = 8) -> None:
         conversation_log.append({"role": "user", "content": user_input})
         console.print()
 
+        # ── main call ────────────────────────────────────────────────────────
         try:
             with console.status(
-                "[bold cyan]Coach is thinking...[/bold cyan]",
+                "[bold cyan]Coach is thinking... [dim](Ctrl+C to cancel)[/dim][/bold cyan]",
                 spinner="dots",
             ):
                 response = session.send(user_input)
-
-            if response.text:
-                console.print("[bold cyan]Coach:[/bold cyan]")
-                console.print(Markdown(response.text))
-                console.print()
-                conversation_log.append({"role": "assistant", "content": response.text})
-
-            if response.tool_calls:
-                tool_results: list[tuple] = []
-                for tc in response.tool_calls:
-                    if tc.name == "push_routine":
-                        result = _show_and_confirm_routine(dict(tc.args))
-                    elif tc.name == "manage_goals":
-                        result = _handle_manage_goals(dict(tc.args))
-                    else:
-                        result = {"error": f"Unknown tool: {tc.name}"}
-                    tool_results.append((tc, result))
-
-                follow = session.submit_tool_results(tool_results)
-                if follow.text:
-                    console.print("[bold cyan]Coach:[/bold cyan]")
-                    console.print(Markdown(follow.text))
-                    console.print()
-                    conversation_log.append({"role": "assistant", "content": follow.text})
-
+        except KeyboardInterrupt:
+            session.discard_pending_user()
+            console.print("[dim]Cancelled.[/dim]\n")
+            continue
         except Exception as e:
             console.print(f"[red]Error: {e}[/red]\n")
+            continue
+
+        if response.text:
+            console.print("[bold cyan]Coach:[/bold cyan]")
+            console.print(Markdown(response.text))
+            console.print()
+            conversation_log.append({"role": "assistant", "content": response.text})
+
+        # ── weak-model nudge ─────────────────────────────────────────────────
+        if response.text and not response.tool_calls:
+            nudge = _missed_tool_call_nudge(response.text)
+            if nudge:
+                try:
+                    with console.status(
+                        "[bold cyan]Coach is thinking...[/bold cyan]",
+                        spinner="dots",
+                    ):
+                        response = session.send(nudge)
+                except KeyboardInterrupt:
+                    session.discard_pending_user()
+                    console.print("[dim]Cancelled.[/dim]\n")
+                    continue
+                except Exception:
+                    continue
+
+        # ── tool call handling ───────────────────────────────────────────────
+        if response.tool_calls:
+            tool_results: list[tuple] = []
+            for tc in response.tool_calls:
+                if tc.name == "push_routine":
+                    result = _show_and_confirm_routine(dict(tc.args))
+                elif tc.name == "manage_goals":
+                    result = _handle_manage_goals(dict(tc.args))
+                else:
+                    result = {"error": f"Unknown tool: {tc.name}"}
+                tool_results.append((tc, result))
+
+            try:
+                with console.status(
+                    "[bold cyan]Coach is thinking...[/bold cyan]",
+                    spinner="dots",
+                ):
+                    follow = session.submit_tool_results(tool_results)
+            except KeyboardInterrupt:
+                console.print("[dim]Cancelled.[/dim]\n")
+                continue
+            except Exception as e:
+                console.print(f"[red]Error: {e}[/red]\n")
+                continue
+
+            if follow.text:
+                console.print("[bold cyan]Coach:[/bold cyan]")
+                console.print(Markdown(follow.text))
+                console.print()
+                conversation_log.append({"role": "assistant", "content": follow.text})
+
+    try:
+        readline.write_history_file(_CHAT_HISTORY_FILE)
+    except OSError:
+        pass
 
     # ── extract and save memories after session ends ──
     if len(conversation_log) >= 2:
