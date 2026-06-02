@@ -12,3 +12,10 @@ dist/
 build/
 .venv/
 venv/
+
+# test & coverage artefacts
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+.ruff_cache/

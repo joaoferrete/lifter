@@ -447,3 +447,9 @@ GOOGLE_CREDENTIALS_FILE=fit_credentials.json   # path to downloaded OAuth JSON
 # Database
 DB_PATH=hevy.db           # path to local SQLite file
 ```
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, branch naming, commit format, CI checks, and the PR template.
