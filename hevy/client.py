@@ -140,9 +140,28 @@ def _raise(resp: httpx.Response, path: str) -> None:
         detail = resp.json()
     except Exception:
         detail = resp.text[:400]
-    raise RuntimeError(
-        f"Hevy API {resp.status_code} at {path}: {detail}"
-    )
+
+    code = resp.status_code
+    if code == 429:
+        retry_after = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
+        if retry_after:
+            msg = f"Hevy API rate limit reached. Try again in {retry_after} seconds. (error 429)"
+        else:
+            msg = "Hevy API rate limit reached. Please wait a moment and try again. (error 429)"
+    elif code == 401:
+        msg = "Hevy API key is invalid or expired. Check your HEVY_API_KEY in .env. (error 401)"
+    elif code == 403:
+        msg = "Access denied to Hevy. Check your API key permissions. (error 403)"
+    elif code == 404:
+        msg = f"Hevy resource not found at {path}. (error 404)"
+    elif code == 422:
+        msg = f"Hevy rejected the request data at {path}: {detail} (error 422)"
+    elif code >= 500:
+        msg = f"Hevy server error. Try again in a moment. (error {code})"
+    else:
+        msg = f"Hevy API error at {path}: {detail} (error {code})"
+
+    raise RuntimeError(msg)
 
 
 def _sanitize_routine(routine: dict, *, for_put: bool = False) -> dict:

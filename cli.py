@@ -783,8 +783,8 @@ def _do_coach():
     try:
         result = get_coaching(weeks=weeks)
     except Exception as e:
-        console.print("[red]AI request failed. Check your API key and network connection.[/red]")
-        console.print(f"[dim]{type(e).__name__}[/dim]")
+        from ai.coach import _friendly_error
+        console.print(f"[red]{_friendly_error(e)}[/red]")
         return
 
     console.rule("[bold green]Strengths[/bold green]")
@@ -828,8 +828,7 @@ def _do_coach():
                     resp = push_routine_to_hevy(routine)
                     console.print(f"\n[green]✓ Routine pushed to Hevy![/green] (id: {_routine_id(resp)})")
                 except Exception as e:
-                    console.print("[red]Failed to push routine. Check your Hevy API key.[/red]")
-                    console.print(f"[dim]{type(e).__name__}[/dim]")
+                    console.print(f"[red]{e}[/red]")
 
 
 def _do_chat():
@@ -1002,8 +1001,7 @@ def _do_fit():
             ))
             _render_recovery_panel()
         except Exception as e:
-            console.print("[red]Google Fit sync failed. Check your credentials and internet connection.[/red]")
-            console.print(f"[dim]{type(e).__name__}[/dim]")
+            console.print(f"[red]{e}[/red]")
 
     elif action == "view":
         if not is_connected():
