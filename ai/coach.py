@@ -57,7 +57,7 @@ def _friendly_error(e: Exception) -> str:
     if status == 403:
         return "Access denied to AI service. Check your API key permissions. (error 403)"
     if status == 400:
-        return f"AI rejected the request. (error 400)"
+        return "AI rejected the request. (error 400)"
     if status is not None and status >= 500:
         return f"AI service is temporarily unavailable. Try again in a moment. (error {status})"
     if status is not None:
