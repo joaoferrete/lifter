@@ -1086,6 +1086,58 @@ def _render_fit_dashboard() -> None:
 
 # ── first-run & weekly check-in ───────────────────────────────────────────────
 
+def _check_stale_sync() -> None:
+    """Prompt to sync if Hevy or Google Fit data is older than 24 hours."""
+    from db.store import get_sync_state
+
+    def _is_stale(key: str) -> bool:
+        val = get_sync_state(key)
+        if not val:
+            return False
+        try:
+            dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
+            return (datetime.now(timezone.utc) - dt).total_seconds() > 86400
+        except Exception:
+            return False
+
+    stale_hevy = _is_stale("last_sync")
+
+    from fit.auth import is_connected as _fit_connected
+    fit_ok = _fit_connected()
+    stale_fit = fit_ok and _is_stale("fit_last_sync")
+
+    if not stale_hevy and not stale_fit:
+        return
+
+    console.print()
+
+    if stale_hevy:
+        if questionary.confirm(
+            "  Hevy hasn't been synced in over 24h. Sync now?", default=True, style=STYLE
+        ).ask():
+            client = _require_hevy()
+            if client:
+                counts = incremental_sync(client)
+                console.print(
+                    f"[green]Hevy sync done:[/green] "
+                    f"{counts['updated']} updated · {counts['deleted']} deleted."
+                )
+
+    if stale_fit:
+        if questionary.confirm(
+            "  Google Fit hasn't been synced in over 24h. Sync now?", default=True, style=STYLE
+        ).ask():
+            try:
+                from fit.sync import sync_fit
+                counts = sync_fit(days=90)
+                console.print(
+                    f"[green]Google Fit sync done:[/green] "
+                    f"{counts['daily_days']} days · {counts['sleep_sessions']} sleep sessions."
+                )
+            except Exception as e:
+                console.print(f"[red]Fit sync failed: {e}[/red]")
+
+
 def _check_goals_and_checkin() -> None:
     if should_ask_goals():
         goals = get_goals()
@@ -1136,6 +1188,7 @@ _NO_PAUSE = {"chat"}
 def main():
     init_db()
     _check_goals_and_checkin()
+    _check_stale_sync()
 
     while True:
         console.clear()
