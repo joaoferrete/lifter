@@ -77,6 +77,20 @@ def tmp_db(db_path, monkeypatch) -> Path:
     except Exception:
         pass
 
+    # ── fit.analytics ─────────────────────────────────────────────────────────
+    try:
+        import fit.analytics as fit_analytics_mod
+        monkeypatch.setattr(fit_analytics_mod, "query", _query)
+    except Exception:
+        pass
+
+    # ── ai.coach ─────────────────────────────────────────────────────────────
+    try:
+        import ai.coach as coach_mod
+        monkeypatch.setattr(coach_mod, "query", _query)
+    except Exception:
+        pass
+
     # Initialise schema in the test DB
     store_mod.init_db(db_path)
     return db_path

@@ -12,7 +12,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/fitness.body.read",
 ]
 
-CREDENTIALS_FILE = Path(os.environ.get("GOOGLE_CREDENTIALS_FILE", "fit_credentials.json"))
+CREDENTIALS_FILE = Path(os.environ.get("GOOGLE_CREDENTIALS_FILE", Path(__file__).resolve().parent.parent / "fit_credentials.json"))
 TOKEN_FILE = DB_PATH.parent / "fit_token.json"
 
 

@@ -2,11 +2,16 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+_PROJECT_DIR = Path(__file__).resolve().parent
+load_dotenv(_PROJECT_DIR / ".env")
 
 HEVY_API_KEY: str = os.environ.get("HEVY_API_KEY", "")
 BASE_URL: str = "https://api.hevyapp.com"
-DB_PATH: Path = Path(os.environ.get("DB_PATH", "hevy.db"))
+_raw_db = os.environ.get("DB_PATH")
+DB_PATH: Path = (
+    Path(_raw_db) if (_raw_db and Path(_raw_db).is_absolute())
+    else _PROJECT_DIR / (_raw_db or "hevy.db")
+)
 
 # ── AI provider ───────────────────────────────────────────────────────────────
 

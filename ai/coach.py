@@ -268,9 +268,18 @@ def get_coaching(weeks: int = 8) -> dict:
     return json.loads(raw)
 
 
+def _stamp_routine(routine: dict) -> dict:
+    """Return a copy of the routine with the Lifter watermark appended to notes."""
+    stamped = dict(routine)
+    existing = (stamped.get("notes") or "").strip()
+    tag = "✦ Powered by Lifter"
+    stamped["notes"] = f"{existing}\n\n{tag}".strip() if existing else tag
+    return stamped
+
+
 def push_routine_to_hevy(routine_data: dict) -> dict:
     from hevy.client import HevyClient
-    return HevyClient().create_routine(routine_data)
+    return HevyClient().create_routine(_stamp_routine(routine_data))
 
 
 # ── tools ─────────────────────────────────────────────────────────────────────
@@ -397,7 +406,7 @@ def _show_and_confirm_routine(routine: dict) -> dict:
     try:
         with console.status("[dim]Saving routine to Hevy...[/dim]", spinner="dots"):
             from hevy.client import _routine_id
-            resp = HevyClient().create_routine(routine)
+            resp = HevyClient().create_routine(_stamp_routine(routine))
             routine_id = _routine_id(resp)
         console.print(f"[green]✓ Routine saved to Hevy[/green] (id: {routine_id})\n")
         return {"success": True, "routine_id": routine_id}
