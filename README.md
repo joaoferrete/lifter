@@ -18,7 +18,7 @@ Personal Hevy workout client with analytics, goal tracking, Google Fit integrati
 | **AI Chat** | Interactive coach that knows your full history, can push routines to Hevy, and can update your goals — all with your approval. |
 | **Memory** | After every chat the AI extracts key insights (injuries, preferences, feedback) and saves them. Future sessions start with that context already loaded. |
 | **Google Fit** | Syncs sleep, steps, calories, and resting HR. Recovery score shown in the header. Coach uses recovery data when making suggestions. |
-| **Multi-model** | Works with Gemini (default) or Claude — swap with one env variable. |
+| **Multi-model** | Works with Gemini (default), Claude, OpenRouter, Groq, GitHub Models, or Amazon Bedrock — swap with one env variable. |
 
 ---
 
@@ -26,7 +26,7 @@ Personal Hevy workout client with analytics, goal tracking, Google Fit integrati
 
 - Python 3.11+
 - [Hevy Pro](https://hevy.com) subscription (API access is Pro-only)
-- One of: Gemini API key **or** Anthropic API key
+- One of: Gemini API key, Anthropic API key, OpenRouter API key, Groq API key, GitHub token, or AWS credentials
 - (Optional) Google account with Fitness data
 
 ---
@@ -86,6 +86,59 @@ ANTHROPIC_API_KEY=sk-ant-your-key-here
 
 > **Note:** Claude Code Pro and claude.ai subscriptions do not include API access. You need a separate API account at console.anthropic.com.
 
+**Option C — OpenRouter (access to many models through one API key):**
+
+1. Create an account at [openrouter.ai](https://openrouter.ai) and generate an API key
+2. Add to `.env`:
+
+```
+AI_PROVIDER=openrouter
+OPENROUTER_API_KEY=your-key-here
+# AI_MODEL=anthropic/claude-3-5-sonnet   ← optional, defaults to anthropic/claude-3-5-sonnet
+```
+
+**Option D — Groq (fast inference, free tier available):**
+
+1. Create an account at [console.groq.com](https://console.groq.com) and generate an API key
+2. Add to `.env`:
+
+```
+AI_PROVIDER=groq
+GROQ_API_KEY=your-key-here
+# AI_MODEL=llama-3.3-70b-versatile   ← optional, defaults to llama-3.3-70b-versatile
+```
+
+**Option E — GitHub Models (free if you have a GitHub account):**
+
+1. Go to [github.com/marketplace/models](https://github.com/marketplace/models) and generate a personal access token
+2. Add to `.env`:
+
+```
+AI_PROVIDER=github
+GITHUB_TOKEN=your-token-here
+# AI_MODEL=gpt-4o   ← optional, defaults to gpt-4o
+```
+
+**Option F — Amazon Bedrock:**
+
+Requires an AWS account with Bedrock model access enabled. Credentials are read from the environment using the standard AWS credential chain (IAM role, `~/.aws/credentials`, or explicit keys).
+
+1. Install the Bedrock extras: `pip install "anthropic[bedrock]"` (only needed for Claude models on Bedrock)
+2. Add to `.env`:
+
+```
+AI_PROVIDER=bedrock
+AWS_REGION=us-east-1
+# For Claude models:
+# AI_MODEL=anthropic.claude-3-5-sonnet-20241022-v2:0   ← default
+# For non-Claude models (Llama, Mistral, etc.) use their Bedrock model ID.
+
+# Explicit credentials (optional — omit if using IAM role or aws configure):
+# AWS_ACCESS_KEY_ID=
+# AWS_SECRET_ACCESS_KEY=
+# AWS_SESSION_TOKEN=      ← only needed for temporary credentials
+```
+
 ### 5. Run the initial sync
 
 ```bash
@@ -93,6 +146,44 @@ python3 cli.py
 ```
 
 The interactive menu opens. Select **Sync new workouts → Full** to download your entire Hevy history.
+
+---
+
+## Install system-wide (optional)
+
+After completing the setup above you can make `lifter` available as a global command so you can run it from any directory without typing `python3 cli.py`.
+
+This uses [pipx](https://pipx.pypa.io), which installs Python applications into isolated environments and exposes their commands on your `PATH`. The source code stays in this directory — the global command just points here.
+
+### Install
+
+```bash
+make install
+```
+
+`lifter` is now available everywhere. The first time you run it from a new directory it will still read your `.env` and use the database in this folder.
+
+### Update
+
+After pulling new changes:
+
+```bash
+pipx reinstall lifter
+```
+
+Or equivalently:
+
+```bash
+make uninstall && make install
+```
+
+### Uninstall
+
+```bash
+make uninstall
+```
+
+> **Note:** `pipx` installs commands to `~/.local/bin`. Make sure that directory is on your `PATH` (most modern shells include it by default). If `lifter` is not found after install, add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile and reload it.
 
 ---
 
@@ -221,6 +312,8 @@ Analyses your training data against your goals and generates:
 
 Select the number of weeks to analyse (4 / 8 / 12 / 16). After the report, the app asks if you want to push the routine directly to your Hevy app.
 
+Pushed routines include a `✦ Powered by Lifter` note in the routine description.
+
 ### Chat with coach
 
 Interactive conversation with the AI. The coach has full access to:
@@ -239,7 +332,7 @@ Interactive conversation with the AI. The coach has full access to:
 | Update a goal | "Change my bench goal to 130kg" |
 | Remove a goal | "Remove my weight loss goal" |
 
-All goal changes and routine pushes require your explicit confirmation before anything is saved.
+All goal changes and routine pushes require your explicit confirmation before anything is saved. Pushed routines include a `✦ Powered by Lifter` note in the routine description.
 
 **After the conversation ends**, the AI analyses the full transcript and extracts memorable facts (injuries mentioned, exercise preferences, feedback on suggestions, lifestyle context). These are saved and automatically included in all future sessions.
 
@@ -296,7 +389,7 @@ lifter/
 │   ├── frequency.py     Workout cadence and session duration
 │   └── records.py       Personal records and body measurement trends
 ├── ai/
-│   ├── provider.py      Unified ChatSession abstraction (Gemini + Claude)
+│   ├── provider.py      Unified ChatSession abstraction (Gemini, Claude, OpenRouter, Groq, GitHub Models, Bedrock)
 │   └── coach.py         Coaching report, chat loop, goal tools, memory extraction
 ├── cli.py               Interactive menu (questionary + Rich)
 ├── config.py            .env loader
@@ -333,11 +426,20 @@ All settings live in `.env`:
 # Hevy
 HEVY_API_KEY=             # from hevy.com/settings?developer
 
-# AI provider — choose one
-AI_PROVIDER=gemini        # "gemini" or "claude"
+# AI provider — pick one value for AI_PROVIDER, set the matching key
+AI_PROVIDER=gemini        # gemini | claude | openrouter | groq | github | bedrock
 GEMINI_API_KEY=
 ANTHROPIC_API_KEY=
-AI_MODEL=                 # optional override (defaults: gemini-2.5-pro / claude-opus-4-8)
+OPENROUTER_API_KEY=
+GROQ_API_KEY=
+GITHUB_TOKEN=
+AI_MODEL=                 # optional — overrides the provider default (see setup section)
+
+# Amazon Bedrock (only when AI_PROVIDER=bedrock)
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=        # optional if using IAM role or aws configure
+AWS_SECRET_ACCESS_KEY=
+AWS_SESSION_TOKEN=        # optional, for temporary credentials
 
 # Google Fit
 GOOGLE_CREDENTIALS_FILE=fit_credentials.json   # path to downloaded OAuth JSON
