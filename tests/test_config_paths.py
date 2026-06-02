@@ -9,9 +9,15 @@ def test_project_dir_is_config_file_parent():
     assert config._PROJECT_DIR == Path(config.__file__).resolve().parent
 
 
-def test_db_path_is_under_project_dir():
-    import config
-    assert config.DB_PATH.parent == config._PROJECT_DIR
+def test_db_path_respects_resolution_rules():
+    import os, config
+    raw = os.environ.get("DB_PATH")
+    if raw and Path(raw).is_absolute():
+        # Absolute override must be honoured as-is
+        assert config.DB_PATH == Path(raw)
+    else:
+        # Relative or unset → must resolve under project dir
+        assert config.DB_PATH.parent == config._PROJECT_DIR
 
 
 def test_credentials_file_is_under_project_dir():
