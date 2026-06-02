@@ -23,6 +23,47 @@ console = Console()
 
 _CHAT_HISTORY_FILE = Path.home() / ".hevy_chat_history"
 
+
+def _friendly_error(e: Exception) -> str:
+    """Return a user-friendly error message for AI provider exceptions."""
+    msg = str(e)
+    status = getattr(e, "status_code", None) or getattr(e, "code", None)
+
+    # Try to extract status from common exception attribute patterns
+    if status is None:
+        for attr in ("response", "_response"):
+            resp = getattr(e, attr, None)
+            if resp is not None:
+                status = getattr(resp, "status_code", None)
+                break
+
+    if status == 429:
+        retry_after = None
+        for attr in ("response", "_response"):
+            resp = getattr(e, attr, None)
+            if resp is not None:
+                headers = getattr(resp, "headers", {}) or {}
+                retry_after = headers.get("Retry-After") or headers.get("retry-after")
+                break
+        if not retry_after and "retry after" in msg.lower():
+            import re
+            m = re.search(r"(\d+)\s*s", msg, re.IGNORECASE)
+            retry_after = m.group(1) if m else None
+        if retry_after:
+            return f"AI rate limit reached. Try again in {retry_after} seconds. (error 429)"
+        return "AI rate limit reached. Please wait a moment and try again. (error 429)"
+    if status == 401:
+        return "AI API key is invalid or expired. Check your API key in .env. (error 401)"
+    if status == 403:
+        return "Access denied to AI service. Check your API key permissions. (error 403)"
+    if status == 400:
+        return f"AI rejected the request. (error 400)"
+    if status is not None and status >= 500:
+        return f"AI service is temporarily unavailable. Try again in a moment. (error {status})"
+    if status is not None:
+        return f"AI request failed. (error {status})"
+    return f"AI request failed. Check your API key and network connection. ({type(e).__name__})"
+
 # ── context builder ───────────────────────────────────────────────────────────
 
 def _build_context(weeks: int = 8) -> str:
@@ -643,7 +684,7 @@ def start_enhanced_chat(weeks: int = 8) -> None:
             console.print("[dim]Cancelled.[/dim]\n")
             continue
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]\n")
+            console.print(f"[red]{_friendly_error(e)}[/red]\n")
             continue
 
         if response.text:
@@ -691,7 +732,7 @@ def start_enhanced_chat(weeks: int = 8) -> None:
                 console.print("[dim]Cancelled.[/dim]\n")
                 continue
             except Exception as e:
-                console.print(f"[red]Error: {e}[/red]\n")
+                console.print(f"[red]{_friendly_error(e)}[/red]\n")
                 continue
 
             if follow.text:

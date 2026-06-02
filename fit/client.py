@@ -34,21 +34,30 @@ class FitClient:
         if resp.status_code == 401:
             self._disconnect()
             raise RuntimeError(
-                "Google Fit: not authorised (401). Token has been cleared.\n"
-                "Go to Menu → Google Fit → Connect to re-authenticate."
+                "Google Fit session expired. Token has been cleared — "
+                "go to Menu → Google Fit → Connect to re-authenticate. (error 401)"
             )
         if resp.status_code == 403:
             raise RuntimeError(
-                "Google Fit: access denied (403). Make sure you approved "
-                "all Fitness API scopes during the OAuth setup."
+                "Google Fit access denied. Make sure you approved all Fitness API scopes "
+                "during the OAuth setup. (error 403)"
             )
         if resp.status_code == 400:
             raise RuntimeError(
-                f"Google Fit: bad request (400) during {operation}.\n"
-                f"Detail: {resp.text[:300]}"
+                f"Google Fit: bad request during {operation}. "
+                f"Detail: {resp.text[:300]} (error 400)"
+            )
+        if resp.status_code == 429:
+            retry_after = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
+            if retry_after:
+                raise RuntimeError(
+                    f"Google Fit rate limit reached. Try again in {retry_after} seconds. (error 429)"
+                )
+            raise RuntimeError(
+                "Google Fit rate limit reached. Please wait a moment and try again. (error 429)"
             )
         raise RuntimeError(
-            f"Google Fit API error {resp.status_code} during {operation}: {resp.text[:200]}"
+            f"Google Fit error during {operation}: {resp.text[:200]} (error {resp.status_code})"
         )
 
     def aggregate(
