@@ -102,7 +102,7 @@ def muscle_group_frequency(weeks: int = 8) -> dict[str, float]:
 
     df = pd.DataFrame(rows)
     df["start_time"] = pd.to_datetime(df["start_time"], utc=True)
-    df["week"] = df["start_time"].dt.to_period("W")
+    df["week"] = df["start_time"].dt.tz_convert(None).dt.to_period("W")
 
     total_weeks = df["week"].nunique() or 1
     counts = df.groupby("muscle").size() / total_weeks

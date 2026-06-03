@@ -94,6 +94,142 @@ def _pause():
     questionary.press_any_key_to_continue("  Press any key to return to menu...").ask()
 
 
+# ── unit helpers ──────────────────────────────────────────────────────────────
+
+def _get_units() -> str:
+    return get_pref("units") or "kg"
+
+
+def _kg_to_lbs(kg: float) -> float:
+    return round(float(kg) * 2.20462, 1)
+
+
+def _fmt_weight(kg_val) -> str:
+    if kg_val is None:
+        return "—"
+    val = float(kg_val)
+    if _get_units() == "lbs":
+        lbs = _kg_to_lbs(val)
+        return f"{int(lbs) if lbs == int(lbs) else lbs} lbs"
+    return f"{int(val) if val == int(val) else val} kg"
+
+
+# ── score & muscle-distribution helpers ──────────────────────────────────────
+
+_MUSCLE_GROUPS: dict = {
+    "Chest":     ["chest", "pectorals"],
+    "Back":      ["lats", "upper_back", "lower_back", "trapezius"],
+    "Legs":      ["quadriceps", "hamstrings", "glutes", "calves", "hip_flexors"],
+    "Shoulders": ["shoulders", "deltoids"],
+    "Arms":      ["biceps", "triceps", "forearms"],
+    "Core":      ["abdominals", "core", "obliques"],
+    "Cardio":    ["cardio", "full_body"],
+}
+
+
+def _sets_by_group(weeks: int = 4) -> dict:
+    spw = sets_per_muscle_per_week(weeks)
+    groups: dict = {}
+    other = 0.0
+    for muscle, s in spw.items():
+        placed = False
+        for group, muscles in _MUSCLE_GROUPS.items():
+            if muscle.lower() in muscles:
+                groups[group] = groups.get(group, 0.0) + float(s)
+                placed = True
+                break
+        if not placed:
+            other += float(s)
+    if other > 0:
+        groups["Other"] = other
+    return groups
+
+
+def _score_color(score: int) -> str:
+    if score >= 80:
+        return "green"
+    if score >= 60:
+        return "cyan"
+    if score >= 40:
+        return "yellow"
+    return "red"
+
+
+def _fmt_score_bar(label: str, score: int, bar_width: int = 12) -> str:
+    color = _score_color(score)
+    filled = max(1, int(score / 100 * bar_width))
+    bar = f"[{color}]{'█' * filled}[/{color}][dim]{'░' * (bar_width - filled)}[/dim]"
+    return f"[bold]{label:<10}[/bold] {bar}  [{color}][bold]{score:>3}[/bold][/{color}]"
+
+
+def _render_snapshot_panel() -> None:
+    """Compact at-a-glance panel shown below the header on the main menu."""
+    lines = []
+
+    # Scores from last AI report
+    ws_raw = get_pref("last_workout_score")
+    hs_raw = get_pref("last_health_score")
+    cs_raw = get_pref("last_combined_score")
+    if ws_raw or cs_raw:
+        score_lines = []
+        if ws_raw:
+            score_lines.append(_fmt_score_bar("Training", int(ws_raw)))
+        if hs_raw:
+            score_lines.append(_fmt_score_bar("Health", int(hs_raw)))
+        if cs_raw:
+            score_lines.append(_fmt_score_bar("Overall", int(cs_raw)))
+        lines.append("[bold dim]Last report scores[/bold dim]")
+        lines.extend(score_lines)
+        lines.append("")
+
+    # Volume distribution by group (last 4 weeks)
+    groups = _sets_by_group(4)
+    if groups:
+        total = sum(groups.values()) or 1
+        max_s = max(groups.values())
+        dist_parts = []
+        for grp, s in sorted(groups.items(), key=lambda x: -x[1]):
+            pct = s / total * 100
+            bw = max(1, int(s / max_s * 0.7 * 6))
+            dist_parts.append(f"[bold]{grp}[/bold] [cyan]{'█' * bw}[/cyan] {pct:.0f}%")
+        lines.append("[bold dim]Volume split (4w)[/bold dim]")
+        lines.append("  ".join(dist_parts))
+        lines.append("")
+
+    # Compact goal progress
+    from db.goals import compute_goal_progress
+    progress = compute_goal_progress()
+    numeric = [g for g in progress if g.get("pct") is not None and not g["achieved"]]
+    achieved = [g for g in progress if g["achieved"]]
+    if numeric or achieved:
+        lines.append("[bold dim]Goals[/bold dim]")
+        for g in numeric[:4]:
+            pct = float(g["pct"])
+            color = _score_color(int(pct))
+            bw = max(1, int(pct / 100 * 8))
+            bar = f"[{color}]{'█' * bw}[/{color}][dim]{'░' * (8 - bw)}[/dim]"
+            desc = g["description"][:30]
+            lines.append(f"  {bar} [{color}]{pct:.0f}%[/{color}]  [dim]{desc}[/dim]")
+        if len(numeric) > 4:
+            lines.append(f"  [dim]...and {len(numeric) - 4} more goal(s)[/dim]")
+        for g in achieved[:2]:
+            lines.append(f"  [bold green]✓[/bold green] [dim]{g['description'][:35]}[/dim]")
+        custom = [g for g in progress if g.get("pct") is None and not g["achieved"]]
+        for g in custom[:2]:
+            lines.append(f"  [dim]◦ {g['description'][:35]} (custom)[/dim]")
+
+    if not lines:
+        return
+
+    console.print(Panel(
+        "\n".join(lines).strip(),
+        title="[bold dim]Quick view[/bold dim]",
+        border_style="dim",
+        padding=(0, 2),
+    ))
+    console.print()
+
+
 # ── goals wizard ──────────────────────────────────────────────────────────────
 
 def _wizard_lift_prs() -> None:
@@ -103,6 +239,7 @@ def _wizard_lift_prs() -> None:
         return
     names = [e["title"] for e in exercises]
     id_by_name = {e["title"]: e["id"] for e in exercises}
+    units = _get_units()
 
     console.print("\n  [dim]Add one or more lift targets. Leave blank to stop.[/dim]")
 
@@ -122,25 +259,28 @@ def _wizard_lift_prs() -> None:
                AND ws.type='normal' AND ws.weight_kg IS NOT NULL""",
             (template_id,),
         )
-        current_e1rm = round(rows[0]["e1rm"], 1) if rows and rows[0]["e1rm"] else 0
+        current_e1rm_kg = round(rows[0]["e1rm"], 1) if rows and rows[0]["e1rm"] else 0
+        current_display = _fmt_weight(current_e1rm_kg)
 
         target_str = questionary.text(
-            f"  Target weight in kg? (your current e1RM: {current_e1rm} kg)",
+            f"  Target weight in {units}? (your current e1RM: {current_display})",
             style=STYLE,
             validate=lambda v: (v == "" or v.replace(".", "").isdigit()) or "Enter a number",
         ).ask()
         if not target_str:
             break
-        target = float(target_str)
+        target_input = float(target_str)
+        target_kg = round(target_input / 2.20462, 2) if units == "lbs" else target_input
+        target_label = f"{int(target_input)} {units}"
         save_goal(
             type="lift_pr",
-            description=f"{name} — {int(target)} kg",
-            target=target,
+            description=f"{name} — {target_label}",
+            target=target_kg,
             unit="kg",
             exercise_template_id=template_id,
             exercise_name=name,
         )
-        console.print(f"  [green]✓[/green] Goal saved: {name} {int(target)} kg\n")
+        console.print(f"  [green]✓[/green] Goal saved: {name} {target_label}\n")
 
         if not questionary.confirm("  Add another lift goal?", default=False, style=STYLE).ask():
             break
@@ -161,26 +301,29 @@ def _wizard_frequency() -> None:
 
 def _wizard_weight(goal_type: str) -> None:
     rows = query("SELECT weight_kg FROM body_measurements WHERE weight_kg IS NOT NULL ORDER BY date DESC LIMIT 1")
-    current = rows[0]["weight_kg"] if rows else None
-    hint = f" (current: {current} kg)" if current else ""
+    current_kg = rows[0]["weight_kg"] if rows else None
+    units = _get_units()
+    hint = f" (current: {_fmt_weight(current_kg)})" if current_kg else ""
 
     target_str = questionary.text(
-        f"  Target body weight in kg{hint}:",
+        f"  Target body weight in {units}{hint}:",
         style=STYLE,
         validate=lambda v: v.replace(".", "").isdigit() or "Enter a number",
     ).ask()
     if not target_str:
         return
-    target = float(target_str)
+    target_input = float(target_str)
+    target_kg = round(target_input / 2.20462, 2) if units == "lbs" else target_input
+    target_label = f"{target_input} {units}"
     direction = "Lose" if goal_type == "weight_loss" else "Gain"
     save_goal(
         type=goal_type,
-        description=f"{direction} weight to {target} kg",
-        target=target,
+        description=f"{direction} weight to {target_label}",
+        target=target_kg,
         unit="kg",
-        start_value=current,
+        start_value=current_kg,
     )
-    console.print(f"  [green]✓[/green] Goal saved: {direction} to {target} kg\n")
+    console.print(f"  [green]✓[/green] Goal saved: {direction} to {target_label}\n")
 
 
 def _wizard_body_fat() -> None:
@@ -357,7 +500,10 @@ def _render_goals_progress() -> None:
         unit = g.get("unit", "")
 
         if current is not None and target is not None:
-            detail = f"  {current} {unit} → {target} {unit}  ({pct:.0f}%)"
+            if unit == "kg":
+                detail = f"  {_fmt_weight(current)} → {_fmt_weight(target)}  ({pct:.0f}%)"
+            else:
+                detail = f"  {current} {unit} → {target} {unit}  ({pct:.0f}%)"
         else:
             detail = f"  {pct:.0f}%"
 
@@ -416,7 +562,7 @@ def _render_workout_cards(workout_ids: list[str]) -> None:
             )
             is_pr = ex["e1rm"] > (prev[0]["top"] or 0) if prev else False
             pr_badge = "  [bold yellow]★ PR[/bold yellow]" if is_pr else ""
-            lines.append(f"  [bold]{name}[/bold]  {ex['weight_kg']} kg × {ex['reps']} reps{pr_badge}")
+            lines.append(f"  [bold]{name}[/bold]  {_fmt_weight(ex['weight_kg'])} × {ex['reps']} reps{pr_badge}")
 
         if not lines:
             bw = query("SELECT DISTINCT we.title FROM workout_exercises we WHERE we.workout_id = ?", (wid,))
@@ -454,7 +600,7 @@ def _render_volume_delta() -> None:
             delta = f" [{color}]{'+'if pct>=0 else ''}{pct:.0f}%[/{color}]"
         else:
             delta = " [dim]new[/dim]"
-        console.print(f"    {muscle:<14} [cyan]{bar}[/cyan] {curr:>6.0f} kg{delta}")
+        console.print(f"    {muscle:<14} [cyan]{bar}[/cyan] {_fmt_weight(curr):>12}{delta}")
 
 
 def _render_sync_report(counts: dict, is_full: bool) -> None:
@@ -509,12 +655,36 @@ def _show_header() -> None:
     goals = get_goals()
     name = get_pref("display_name")
 
+    # Last workout
+    lw_row = query("SELECT MAX(start_time) as t FROM workouts")
+    lw_str = f"Last workout: [bold]{_time_ago(lw_row[0]['t'])}[/bold]" if lw_row and lw_row[0]["t"] else "[dim]No workouts yet[/dim]"
+
+    # Streak
+    streak = freq.get("longest_streak_days", 0)
+    streak_parts = []
+    if streak >= 2:
+        fires = "🔥" * min(streak, 5)
+        streak_parts.append(f"{fires} [bold]{streak}d streak[/bold]")
+
+    # Routines count
+    routine_count = (query("SELECT COUNT(*) as n FROM routines") or [{"n": 0}])[0]["n"]
+    routines_str = f"[bold]{routine_count}[/bold] routine{'s' if routine_count != 1 else ''}"
+
+    # Sync status
+    if last_sync:
+        try:
+            secs = int((datetime.now(timezone.utc) - datetime.fromisoformat(last_sync.replace("Z", "+00:00"))).total_seconds())
+            sync_str = f"Sync [green]✓[/green] {_time_ago(last_sync)}" if secs < 86400 else f"Sync [yellow]⚠[/yellow] {_time_ago(last_sync)}"
+        except Exception:
+            sync_str = "Sync [dim]?[/dim]"
+    else:
+        sync_str = "Sync [dim]never[/dim]"
+
+    # AI provider
     from ai.provider import provider_label
-    sync_str = f"Last sync: {_time_ago(last_sync)}" if last_sync else "Never synced — run Sync first"
-    title = f"LIFTER  [dim]·[/dim]  {_esc(name)}" if name else "LIFTER"
     ai_str = f"AI: {provider_label()}"
 
-    # Recovery line from Google Fit (if connected + data available)
+    # Recovery from Google Fit
     recovery_str = ""
     try:
         from fit.auth import is_connected
@@ -522,17 +692,28 @@ def _show_header() -> None:
             from fit.analytics import recovery_score
             rec = recovery_score(3)
             if rec:
-                recovery_str = f"  ·  Recovery [{rec['color']}]{rec['score']}/100 {rec['label']}[/{rec['color']}]"
+                recovery_str = f"  ·  Recovery [{rec['color']}]{rec['score']}/100[/{rec['color']}]"
     except Exception:
         pass
 
-    console.print(Panel(
-        f"[dim]{sync_str}  ·  {ai_str}[/dim]\n"
-        f"[bold]{total}[/bold] workouts total  ·  [bold]{week_count}[/bold] this week  ·  "
+    # Build lines
+    line1_parts = [lw_str] + streak_parts + [routines_str]
+    line1 = "  ·  ".join(line1_parts)
+
+    line2 = (
+        f"[bold]{total}[/bold] workouts  ·  "
+        f"[bold]{week_count}[/bold] this week  ·  "
         f"[bold]{freq['avg_per_week']}[/bold]/wk avg"
-        + (f"  ·  [yellow]{len(goals)} active goal(s)[/yellow]" if goals else "")
-        + recovery_str,
-        title=f"[bold cyan]{title}[/bold cyan]",
+    )
+    if goals:
+        line2 += f"  ·  [yellow]{len(goals)} goal{'s' if len(goals) != 1 else ''}[/yellow]"
+
+    line3 = f"[dim]{ai_str}  ·  {sync_str}{recovery_str}[/dim]"
+
+    title = f"[bold cyan]LIFTER  [dim]·[/dim]  {_esc(name)}[/bold cyan]" if name else "[bold cyan]LIFTER[/bold cyan]"
+    console.print(Panel(
+        f"{line1}\n{line2}\n{line3}",
+        title=title,
         border_style="cyan",
         padding=(0, 2),
     ))
@@ -564,10 +745,11 @@ def _do_sync():
 
 
 def _do_stats():
+    default_period = get_pref("default_stats_weeks") or "8 weeks"
     weeks_str = questionary.select(
         "Time period:",
         choices=["4 weeks", "8 weeks", "12 weeks", "24 weeks"],
-        default="8 weeks",
+        default=default_period,
         style=STYLE,
     ).ask()
     if not weeks_str:
@@ -606,7 +788,7 @@ def _do_stats():
     for muscle, vol in muscle_vol.items():
         bar_w = max(1, int(vol / max_vol * 16))
         bar = "█" * bar_w + "░" * (16 - bar_w)
-        t2.add_row(muscle, f"[cyan]{bar}[/cyan]", f"{vol:.0f} kg",
+        t2.add_row(muscle, f"[cyan]{bar}[/cyan]", _fmt_weight(vol),
                    str(sets_wk.get(muscle, 0)), str(muscle_freq_data.get(muscle, 0)))
     console.print(t2)
 
@@ -617,7 +799,8 @@ def _do_stats():
         bt.add_column("Metric", style="bold")
         bt.add_column("Latest", justify="right")
         bt.add_column(f"Change ({weeks}w)", justify="right")
-        bt.add_row("Weight", f"{body.get('weight_kg')} kg", f"{body.get('weight_change_kg', '—')} kg")
+        wt_change = body.get('weight_change_kg')
+        bt.add_row("Weight", _fmt_weight(body.get('weight_kg')), _fmt_weight(wt_change) if wt_change not in (None, '—') else '—')
         bt.add_row("Body fat", f"{body.get('fat_percent')}%", f"{body.get('fat_change_pct', '—')}%")
         console.print(bt)
 
@@ -631,7 +814,7 @@ def _do_stats():
         pt.add_column("e1RM", justify="right")
         pt.add_column("Date")
         for pr in prs:
-            pt.add_row(pr["exercise"], f"{pr['weight_kg']} kg", str(pr["reps"]), f"{pr['e1rm']} kg", pr["date"])
+            pt.add_row(pr["exercise"], _fmt_weight(pr['weight_kg']), str(pr["reps"]), _fmt_weight(pr['e1rm']), pr["date"])
         console.print(pt)
 
     plateaus = detect_plateaus(weeks)
@@ -678,7 +861,7 @@ def _do_progress():
         t.add_column("Start e1RM", justify="right")
         t.add_column("Current e1RM", justify="right")
         for g in top:
-            t.add_row(g["exercise"], f"+{g['improvement_pct']}%", f"{g['start_e1rm']} kg", f"{g['current_e1rm']} kg")
+            t.add_row(g["exercise"], f"+{g['improvement_pct']}%", _fmt_weight(g['start_e1rm']), _fmt_weight(g['current_e1rm']))
         console.print(t)
     else:
         exercises = query("SELECT DISTINCT title FROM exercise_templates ORDER BY title")
@@ -711,10 +894,10 @@ def _do_progress():
             if prev_e1rm is not None:
                 delta = row["e1rm"] - prev_e1rm
                 if delta > 0:
-                    change = f" [green]+{delta:.1f}[/green]"
+                    change = f" [green]+{_fmt_weight(delta)}[/green]"
                 elif delta < 0:
-                    change = f" [red]{delta:.1f}[/red]"
-            t.add_row(str(row["date"]), f"{row['best_weight_kg']} kg", str(row["best_reps"]), f"{row['e1rm']:.1f} kg{change}")
+                    change = f" [red]{_fmt_weight(delta)}[/red]"
+            t.add_row(str(row["date"]), _fmt_weight(row['best_weight_kg']), str(row["best_reps"]), f"{_fmt_weight(row['e1rm'])}{change}")
             prev_e1rm = row["e1rm"]
         console.print(t)
 
@@ -732,7 +915,7 @@ def _do_records():
     t.add_column("e1RM", justify="right")
     t.add_column("Date")
     for pr in prs:
-        t.add_row(pr["exercise"], f"{pr['weight_kg']} kg", str(pr["reps"]), f"{pr['e1rm']} kg", pr["date"])
+        t.add_row(pr["exercise"], _fmt_weight(pr['weight_kg']), str(pr["reps"]), _fmt_weight(pr['e1rm']), pr["date"])
     console.print(t)
 
 
@@ -787,6 +970,66 @@ def _do_coach():
         console.print(f"[red]{_friendly_error(e)}[/red]")
         return
 
+    # ── scores ────────────────────────────────────────────────────────────────
+    ws = result.get("workout_score")
+    hs = result.get("health_score")
+    cs = result.get("combined_score")
+    score_items = [("Training", ws), ("Health", hs), ("Overall", cs)]
+    score_items = [(lbl, v) for lbl, v in score_items if v is not None]
+    if score_items:
+        score_lines = [_fmt_score_bar(lbl, int(val), bar_width=16) for lbl, val in score_items]
+        console.print(Panel(
+            "\n".join(score_lines),
+            title="[bold]Performance Scores[/bold]",
+            border_style="cyan",
+            padding=(0, 2),
+        ))
+        # Cache for snapshot panel
+        if ws is not None:
+            set_pref("last_workout_score", str(int(ws)))
+        if hs is not None:
+            set_pref("last_health_score", str(int(hs)))
+        if cs is not None:
+            set_pref("last_combined_score", str(int(cs)))
+
+    # ── muscle / group distribution ───────────────────────────────────────────
+    spw = sets_per_muscle_per_week(weeks)
+    groups = _sets_by_group(weeks)
+    if spw or groups:
+        dist_lines = []
+
+        BAR_G, BAR_M = 20, 18
+        if groups:
+            total_g = sum(groups.values()) or 1
+            max_g = max(groups.values())
+            dist_lines.append("[bold]By muscle group[/bold]")
+            for grp, s in sorted(groups.items(), key=lambda x: -x[1]):
+                pct = s / total_g * 100
+                bw = max(1, int(s / max_g * 0.7 * BAR_G))
+                color = _score_color(int(min(pct * 2, 100)))
+                bar = f"[{color}]{'█' * bw}[/{color}][dim]{'░' * (BAR_G - bw)}[/dim]"
+                dist_lines.append(f"  {grp:<12} {bar}  {pct:.0f}%  [dim]({s:.0f} sets/wk avg)[/dim]")
+            dist_lines.append("")
+
+        if spw:
+            total_m = sum(spw.values()) or 1
+            max_m = max(spw.values())
+            dist_lines.append("[bold]By muscle[/bold]")
+            for muscle, s in sorted(spw.items(), key=lambda x: -x[1]):
+                pct = s / total_m * 100
+                bw = max(1, int(s / max_m * 0.7 * BAR_M))
+                bar = f"[cyan]{'█' * bw}[/cyan][dim]{'░' * (BAR_M - bw)}[/dim]"
+                dist_lines.append(f"  {muscle:<16} {bar}  {pct:.0f}%")
+
+        if dist_lines:
+            console.print(Panel(
+                "\n".join(dist_lines),
+                title="[bold]Volume Distribution[/bold]",
+                border_style="cyan",
+                padding=(0, 2),
+            ))
+
+    # ── analysis ──────────────────────────────────────────────────────────────
     console.rule("[bold green]Strengths[/bold green]")
     for s in result.get("strengths", []):
         console.print(f"  [green]✓[/green] {s}")
@@ -802,6 +1045,7 @@ def _do_coach():
     console.rule("[bold]Next focus[/bold]")
     console.print(f"  {result.get('next_focus', '')}")
 
+    # ── suggested routine ─────────────────────────────────────────────────────
     routine = result.get("routine", {})
     if routine:
         console.rule(f"[bold]Suggested routine: {routine.get('title')}[/bold]")
@@ -809,11 +1053,11 @@ def _do_coach():
         for ex in routine.get("exercises", []):
             if not isinstance(ex, dict):
                 continue
-            sets_str = "  ".join(
-                f"[dim]{s.get('type', 'normal')}[/dim] {s.get('weight_kg') or 'BW'}kg×{s.get('reps', '?')}"
-                for s in ex.get("sets", [])
-                if isinstance(s, dict)
-            )
+            def _fmt_set(s: dict) -> str:
+                w = s.get('weight_kg')
+                w_str = _fmt_weight(w) if w else "BW"
+                return f"[dim]{s.get('type', 'normal')}[/dim] {w_str}×{s.get('reps', '?')}"
+            sets_str = "  ".join(_fmt_set(s) for s in ex.get("sets", []) if isinstance(s, dict))
             ex_title = ex.get("title") or ex.get("exercise_template_id", "Exercise")
             console.print(f"  [bold]{ex_title}[/bold]")
             console.print(f"    {sets_str}")
@@ -856,149 +1100,273 @@ def _do_chat():
 
 # ── settings & reset ─────────────────────────────────────────────────────────
 
+_AI_LANGUAGES = [
+    "English", "Portuguese", "Spanish", "French", "German",
+    "Italian", "Dutch", "Polish", "Russian", "Japanese", "Chinese",
+]
+
+
 def _do_ai_settings():
     from db.goals import get_pref, set_pref, get_token_usage, reset_token_usage
 
-    usage = get_token_usage()
-    total = usage["input"] + usage["output"]
-    cache_pct = int(usage["cache_read"] / usage["input"] * 100) if usage["input"] else 0
-    slim_on = get_pref("ai_chat_slim") != "0"
+    while True:
+        console.clear()
+        usage = get_token_usage()
+        total = usage["input"] + usage["output"]
+        cache_pct = int(usage["cache_read"] / usage["input"] * 100) if usage["input"] else 0
+        slim_on = get_pref("ai_chat_slim") != "0"
+        lang = get_pref("ai_language") or "English"
 
-    from config import AI_MODEL
-    lines = [
-        f"Provider:  [bold]{AI_PROVIDER}[/bold]  ·  Model: [bold]{AI_MODEL}[/bold]",
-        "",
-        f"Context mode:  [bold]{'Slim  (fewer tokens)' if slim_on else 'Full  (all analytics)'}[/bold]",
-        "",
-        "Token usage (cumulative):",
-        f"  Input:   [cyan]{usage['input']:,}[/cyan] tokens",
-        f"  Output:  [cyan]{usage['output']:,}[/cyan] tokens",
-        f"  Total:   [bold cyan]{total:,}[/bold cyan] tokens",
-    ]
-    if usage["cache_read"]:
-        lines.append(f"  Cached:  [green]{usage['cache_read']:,}[/green] tokens read from cache  ({cache_pct}% of input)")
+        from config import AI_MODEL
+        lines = [
+            f"Provider:      [bold]{AI_PROVIDER}[/bold]  ·  Model: [bold]{AI_MODEL}[/bold]",
+            f"Context mode:  [bold]{'Slim  (fewer tokens)' if slim_on else 'Full  (all analytics)'}[/bold]",
+            f"Language:      [bold]{lang}[/bold]",
+            "",
+            "Token usage (cumulative):",
+            f"  Input:   [cyan]{usage['input']:,}[/cyan] tokens",
+            f"  Output:  [cyan]{usage['output']:,}[/cyan] tokens",
+            f"  Total:   [bold cyan]{total:,}[/bold cyan] tokens",
+        ]
+        if usage["cache_read"]:
+            lines.append(f"  Cached:  [green]{usage['cache_read']:,}[/green] tokens  ({cache_pct}% of input)")
 
-    console.print(Panel("\n".join(lines), title="[bold]AI Coach Settings[/bold]", border_style="cyan"))
+        console.print(Panel("\n".join(lines), title="[bold]AI Coach Settings[/bold]", border_style="cyan"))
 
-    action = questionary.select(
-        "AI settings:",
-        choices=[
-            questionary.Choice(
-                f"  Toggle context mode  (currently: {'Slim' if slim_on else 'Full'})",
-                value="toggle_slim",
-            ),
-            questionary.Choice("  Reset token counter",  value="reset_tokens"),
-            questionary.Separator("  ───"),
-            questionary.Choice("  Back",                 value="back"),
-        ],
-        style=STYLE,
-    ).ask()
+        action = questionary.select(
+            "AI settings:",
+            choices=[
+                questionary.Choice(
+                    f"  Toggle context mode  (currently: {'Slim' if slim_on else 'Full'})",
+                    value="toggle_slim",
+                ),
+                questionary.Choice(f"  Response language  (currently: {lang})", value="language"),
+                questionary.Choice("  Reset token counter",  value="reset_tokens"),
+                questionary.Separator("  ───"),
+                questionary.Choice("  Back",                 value="back"),
+            ],
+            style=STYLE,
+        ).ask()
 
-    if not action or action == "back":
-        return
+        if not action or action == "back":
+            return
 
-    if action == "toggle_slim":
-        new_val = "0" if slim_on else "1"
-        set_pref("ai_chat_slim", new_val)
-        label = "Slim (fewer tokens)" if new_val == "1" else "Full (all analytics)"
-        console.print(f"[green]✓ Context mode set to: {label}[/green]")
+        if action == "toggle_slim":
+            new_val = "0" if slim_on else "1"
+            set_pref("ai_chat_slim", new_val)
+            label = "Slim (fewer tokens)" if new_val == "1" else "Full (all analytics)"
+            console.print(f"[green]✓ Context mode set to: {label}[/green]")
 
-    elif action == "reset_tokens":
-        if questionary.confirm("  Reset all token counters to zero?", default=False, style=STYLE).ask():
-            reset_token_usage()
-            console.print("[green]✓ Token counters reset.[/green]")
+        elif action == "language":
+            choices = _AI_LANGUAGES + ([] if lang in _AI_LANGUAGES else [lang])
+            new_lang = questionary.select(
+                "  AI response language:",
+                choices=choices,
+                default=lang if lang in choices else choices[0],
+                style=STYLE,
+            ).ask()
+            if new_lang:
+                set_pref("ai_language", new_lang)
+                console.print(f"[green]✓ Language set to {new_lang}[/green]")
+
+        elif action == "reset_tokens":
+            if questionary.confirm("  Reset all token counters to zero?", default=False, style=STYLE).ask():
+                reset_token_usage()
+                console.print("[green]✓ Token counters reset.[/green]")
 
 
 def _do_data_reset():
-    action = questionary.select(
-        "What do you want to reset?",
-        choices=[
-            questionary.Choice("Clear coach memories  (forget past conversations)", value="memories"),
-            questionary.Choice("Clear all goals",                                   value="goals"),
-            questionary.Choice("Clear sync state  (next sync will re-download all)", value="sync_state"),
-            questionary.Choice("Wipe everything  (delete all local data)",           value="all"),
-            questionary.Separator("  ───"),
-            questionary.Choice("Cancel",                                             value="cancel"),
-        ],
-        style=STYLE,
-    ).ask()
-
-    if not action or action == "cancel":
-        return
-
-    if action == "memories":
-        if questionary.confirm(
-            "  Delete all memories from past conversations?", default=False, style=STYLE
-        ).ask():
-            from db.memories import clear_memories
-            clear_memories()
-            console.print("[green]✓ Memories cleared.[/green]")
-
-    elif action == "goals":
-        if questionary.confirm("  Delete all goals?", default=False, style=STYLE).ask():
-            from db.goals import clear_goals
-            clear_goals()
-            console.print("[green]✓ Goals cleared.[/green]")
-
-    elif action == "sync_state":
-        if questionary.confirm(
-            "  Reset sync state? The next sync will re-download all workouts.", default=False, style=STYLE
-        ).ask():
-            from db.store import set_sync_state
-            set_sync_state("last_sync", "1970-01-01T00:00:00Z")
-            console.print("[green]✓ Sync state reset. Run Sync → Incremental to re-download.[/green]")
-
-    elif action == "all":
-        console.print(
-            "\n  [bold red]This will delete hevy.db and disconnect Google Fit.[/bold red]\n"
-            "  All workouts, goals, memories, and health data will be removed from this device.\n"
-            "  Your data on Hevy and Google Fit is NOT affected.\n"
-        )
-        confirm1 = questionary.confirm("  Are you sure?", default=False, style=STYLE).ask()
-        if not confirm1:
-            return
-        confirm2 = questionary.confirm(
-            "  Really? This cannot be undone.", default=False, style=STYLE
+    while True:
+        console.clear()
+        action = questionary.select(
+            "What do you want to reset?",
+            choices=[
+                questionary.Choice("Clear coach memories  (forget past conversations)", value="memories"),
+                questionary.Choice("Clear all goals",                                   value="goals"),
+                questionary.Choice("Clear sync state  (next sync will re-download all)", value="sync_state"),
+                questionary.Choice("Wipe everything  (delete all local data)",           value="all"),
+                questionary.Separator("  ───"),
+                questionary.Choice("Back",                                               value="back"),
+            ],
+            style=STYLE,
         ).ask()
-        if not confirm2:
+
+        if not action or action == "back":
             return
 
-        import os
-        from config import DB_PATH
-        try:
-            from fit.auth import TOKEN_FILE, disconnect as fit_disconnect
-            fit_disconnect()
-        except Exception:
-            pass
-        try:
-            os.remove(DB_PATH)
-        except FileNotFoundError:
-            pass
+        if action == "memories":
+            if questionary.confirm(
+                "  Delete all memories from past conversations?", default=False, style=STYLE
+            ).ask():
+                from db.memories import clear_memories
+                clear_memories()
+                console.print("[green]✓ Memories cleared.[/green]")
 
-        console.print(
-            "\n[bold green]✓ Everything wiped.[/bold green]\n"
-            "  Run [bold]Sync → Full[/bold] to re-download your workouts."
-        )
+        elif action == "goals":
+            if questionary.confirm("  Delete all goals?", default=False, style=STYLE).ask():
+                from db.goals import clear_goals
+                clear_goals()
+                console.print("[green]✓ Goals cleared.[/green]")
+
+        elif action == "sync_state":
+            if questionary.confirm(
+                "  Reset sync state? The next sync will re-download all workouts.", default=False, style=STYLE
+            ).ask():
+                from db.store import set_sync_state
+                set_sync_state("last_sync", "1970-01-01T00:00:00Z")
+                console.print("[green]✓ Sync state reset. Run Sync → Incremental to re-download.[/green]")
+
+        elif action == "all":
+            console.print(
+                "\n  [bold red]This will delete hevy.db and disconnect Google Fit.[/bold red]\n"
+                "  All workouts, goals, memories, and health data will be removed from this device.\n"
+                "  Your data on Hevy and Google Fit is NOT affected.\n"
+            )
+            if not questionary.confirm("  Are you sure?", default=False, style=STYLE).ask():
+                continue
+            if not questionary.confirm("  Really? This cannot be undone.", default=False, style=STYLE).ask():
+                continue
+
+            import os
+            from config import DB_PATH
+            try:
+                from fit.auth import TOKEN_FILE, disconnect as fit_disconnect
+                fit_disconnect()
+            except Exception:
+                pass
+            try:
+                os.remove(DB_PATH)
+            except FileNotFoundError:
+                pass
+
+            console.print(
+                "\n[bold green]✓ Everything wiped.[/bold green]\n"
+                "  Run [bold]Sync → Full[/bold] to re-download your workouts."
+            )
+            return  # DB is gone — exit all the way back to main
 
 
-def _do_reset():
-    action = questionary.select(
-        "Settings:",
-        choices=[
-            questionary.Choice("  AI Coach settings  (tokens, context mode)", value="ai"),
-            questionary.Choice("  Reset data",                                 value="reset"),
-            questionary.Separator("  ───"),
-            questionary.Choice("  Back",                                       value="back"),
-        ],
+def _do_profile_settings() -> None:
+    name = get_pref("display_name") or ""
+    console.print(Panel(
+        f"Display name:  [bold]{_esc(name) if name else '[dim]not set[/dim]'}[/bold]",
+        title="[bold]Profile[/bold]",
+        border_style="cyan",
+        padding=(0, 2),
+    ))
+    new_name = questionary.text(
+        "  New display name (leave blank to cancel):",
         style=STYLE,
     ).ask()
+    if new_name and new_name.strip():
+        set_pref("display_name", new_name.strip())
+        console.print(f"[green]✓ Name updated to '{_esc(new_name.strip())}'[/green]")
 
-    if not action or action == "back":
-        return
-    if action == "ai":
-        _do_ai_settings()
-    elif action == "reset":
-        _do_data_reset()
+
+def _do_preferences_settings() -> None:
+    while True:
+        console.clear()
+        units = _get_units()
+        checkin_days = int(get_pref("goals_checkin_days") or 7)
+        auto_sync = get_pref("auto_sync") == "1"
+        default_weeks = get_pref("default_stats_weeks") or "8 weeks"
+
+        lines = [
+            f"Weight units:          [bold]{units}[/bold]",
+            f"Goal check-in:         [bold]every {checkin_days} days[/bold]",
+            f"Auto-sync on startup:  [bold]{'on' if auto_sync else 'off'}[/bold]",
+            f"Default stats window:  [bold]{default_weeks}[/bold]",
+        ]
+        console.print(Panel("\n".join(lines), title="[bold]Preferences[/bold]", border_style="cyan", padding=(0, 2)))
+
+        action = questionary.select(
+            "Change:",
+            choices=[
+                questionary.Choice(f"  Weight units              (currently: {units})", value="units"),
+                questionary.Choice(f"  Goal check-in frequency   (every {checkin_days}d)", value="checkin"),
+                questionary.Choice(f"  Auto-sync on startup      ({'on' if auto_sync else 'off'})", value="autosync"),
+                questionary.Choice(f"  Default stats window      ({default_weeks})", value="stats_window"),
+                questionary.Separator("  ───"),
+                questionary.Choice("  Back", value="back"),
+            ],
+            style=STYLE,
+        ).ask()
+
+        if not action or action == "back":
+            return
+
+        if action == "units":
+            new_units = questionary.select(
+                "  Weight units:",
+                choices=[
+                    questionary.Choice("kg  (kilograms)", value="kg"),
+                    questionary.Choice("lbs  (pounds)",   value="lbs"),
+                ],
+                default=units,
+                style=STYLE,
+            ).ask()
+            if new_units:
+                set_pref("units", new_units)
+                console.print(f"[green]✓ Units set to {new_units}[/green]")
+
+        elif action == "checkin":
+            new_days = questionary.select(
+                "  Goal check-in frequency:",
+                choices=[
+                    questionary.Choice("Every 7 days   (weekly)",    value="7"),
+                    questionary.Choice("Every 14 days  (bi-weekly)", value="14"),
+                    questionary.Choice("Every 30 days  (monthly)",   value="30"),
+                ],
+                default=str(checkin_days),
+                style=STYLE,
+            ).ask()
+            if new_days:
+                set_pref("goals_checkin_days", new_days)
+                console.print(f"[green]✓ Goal check-in set to every {new_days} days[/green]")
+
+        elif action == "autosync":
+            set_pref("auto_sync", "0" if auto_sync else "1")
+            console.print(f"[green]✓ Auto-sync {'disabled' if auto_sync else 'enabled'}[/green]")
+
+        elif action == "stats_window":
+            new_window = questionary.select(
+                "  Default stats window:",
+                choices=["4 weeks", "8 weeks", "12 weeks", "24 weeks"],
+                default=default_weeks,
+                style=STYLE,
+            ).ask()
+            if new_window:
+                set_pref("default_stats_weeks", new_window)
+                console.print(f"[green]✓ Default stats window set to {new_window}[/green]")
+
+
+def _do_settings() -> None:
+    while True:
+        console.clear()
+        action = questionary.select(
+            "Settings:",
+            choices=[
+                questionary.Choice("  Profile      (display name)",               value="profile"),
+                questionary.Choice("  Preferences  (units, sync, check-in)",      value="prefs"),
+                questionary.Choice("  AI Coach     (context mode, language)",      value="ai"),
+                questionary.Separator("  ───────────────────────────────────────"),
+                questionary.Choice("  Reset data",                                value="reset"),
+                questionary.Separator("  ───────────────────────────────────────"),
+                questionary.Choice("  Back",                                      value="back"),
+            ],
+            style=STYLE,
+        ).ask()
+
+        if not action or action == "back":
+            return
+        if action == "profile":
+            _do_profile_settings()
+        elif action == "prefs":
+            _do_preferences_settings()
+        elif action == "ai":
+            _do_ai_settings()
+        elif action == "reset":
+            _do_data_reset()
 
 
 # ── google fit ────────────────────────────────────────────────────────────────
@@ -1162,8 +1530,9 @@ def _render_fit_dashboard() -> None:
 # ── first-run & weekly check-in ───────────────────────────────────────────────
 
 def _check_stale_sync() -> None:
-    """Prompt to sync if Hevy or Google Fit data is older than 24 hours."""
+    """Auto-sync or prompt if Hevy/Google Fit data is older than 24 hours."""
     from db.store import get_sync_state
+    auto_sync = get_pref("auto_sync") == "1"
 
     def _is_stale(key: str) -> bool:
         val = get_sync_state(key)
@@ -1187,7 +1556,12 @@ def _check_stale_sync() -> None:
     console.print()
 
     if stale_hevy:
-        if questionary.confirm(
+        if auto_sync:
+            client = _require_hevy()
+            if client:
+                counts = incremental_sync(client)
+                console.print(f"[dim]Auto-synced Hevy: {counts['updated']} updated · {counts['deleted']} deleted.[/dim]")
+        elif questionary.confirm(
             "  Hevy hasn't been synced in over 24h. Sync now?", default=True, style=STYLE
         ).ask():
             client = _require_hevy()
@@ -1199,7 +1573,14 @@ def _check_stale_sync() -> None:
                 )
 
     if stale_fit:
-        if questionary.confirm(
+        if auto_sync:
+            try:
+                from fit.sync import sync_fit
+                counts = sync_fit(days=90)
+                console.print(f"[dim]Auto-synced Fit: {counts['daily_days']} days · {counts['sleep_sessions']} sleep sessions.[/dim]")
+            except Exception:
+                pass
+        elif questionary.confirm(
             "  Google Fit hasn't been synced in over 24h. Sync now?", default=True, style=STYLE
         ).ask():
             try:
@@ -1229,22 +1610,6 @@ def _check_goals_and_checkin() -> None:
 
 # ── main loop ─────────────────────────────────────────────────────────────────
 
-MENU_ITEMS = [
-    questionary.Choice("  Sync new workouts",        value="sync"),
-    questionary.Choice("  Dashboard & stats",         value="stats"),
-    questionary.Choice("  Exercise progression",      value="progress"),
-    questionary.Choice("  Personal records",          value="records"),
-    questionary.Choice("  My goals",                  value="goals"),
-    questionary.Separator("  ─────────────────────────────────"),
-    questionary.Choice("  Google Fit  (sleep, steps, HR)", value="fit"),
-    questionary.Separator("  ─────────────────────────────────"),
-    questionary.Choice("  AI coaching report",        value="coach"),
-    questionary.Choice("  Chat with coach",           value="chat"),
-    questionary.Separator("  ─────────────────────────────────"),
-    questionary.Choice("  Settings & reset",          value="reset"),
-    questionary.Choice("  Exit",                      value="exit"),
-]
-
 ACTIONS = {
     "sync":     _do_sync,
     "stats":    _do_stats,
@@ -1254,10 +1619,37 @@ ACTIONS = {
     "fit":      _do_fit,
     "coach":    _do_coach,
     "chat":     _do_chat,
-    "reset":    _do_reset,
+    "settings": _do_settings,
 }
 
 _NO_PAUSE = {"chat"}
+
+
+def _build_menu() -> tuple:
+    try:
+        from fit.auth import is_connected as _fit_connected
+        fit_label = "  Google Fit  ✓  (sleep, steps, HR)" if _fit_connected() else "  Google Fit  (not connected)"
+    except Exception:
+        fit_label = "  Google Fit  (sleep, steps, HR)"
+
+    last_action = get_pref("last_menu_action")
+    items = [
+        questionary.Choice("  Sync new workouts",    value="sync"),
+        questionary.Choice("  Chat with coach",      value="chat"),
+        questionary.Separator("  ──────────────────────────────────"),
+        questionary.Choice("  My goals",              value="goals"),
+        questionary.Choice("  Dashboard & stats",     value="stats"),
+        questionary.Choice("  Exercise progression",  value="progress"),
+        questionary.Choice("  Personal records",      value="records"),
+        questionary.Separator("  ──────────────────────────────────"),
+        questionary.Choice("  AI coaching report",    value="coach"),
+        questionary.Choice(fit_label,                 value="fit"),
+        questionary.Separator("  ──────────────────────────────────"),
+        questionary.Choice("  Settings",              value="settings"),
+        questionary.Choice("  Exit",                  value="exit"),
+    ]
+    default = next((c for c in items if isinstance(c, questionary.Choice) and c.value == last_action), None)
+    return items, default
 
 
 def main():
@@ -1268,10 +1660,13 @@ def main():
     while True:
         console.clear()
         _show_header()
+        _render_snapshot_panel()
+        menu_items, menu_default = _build_menu()
 
         choice = questionary.select(
             "What do you want to do?",
-            choices=MENU_ITEMS,
+            choices=menu_items,
+            default=menu_default,
             style=STYLE,
         ).ask()
 
@@ -1279,6 +1674,7 @@ def main():
             console.print("\n[dim]See you at the gym![/dim]\n")
             break
 
+        set_pref("last_menu_action", choice)
         console.clear()
         action = ACTIONS.get(choice)
         if action:

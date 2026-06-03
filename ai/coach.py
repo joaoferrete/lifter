@@ -257,11 +257,32 @@ def _build_context(weeks: int = 8, slim: bool = False) -> str:
 # ── one-shot coaching report ──────────────────────────────────────────────────
 
 _COACH_SYSTEM = ANTI_INJECTION_PREAMBLE + """\
-You are an experienced strength and hypertrophy coach.
+You are an experienced strength and hypertrophy coach with deep knowledge of exercise science.
+
+Base every programming decision on peer-reviewed research and evidence-based principles:
+- Progressive overload, specificity, and the SRA (stimulus–recovery–adaptation) cycle.
+- Volume landmarks: MEV (minimum effective volume), MAV (maximum adaptive volume), and MRV
+  (maximum recoverable volume) as described by Mike Israetel et al.
+- Research-backed weekly set ranges for hypertrophy (~10–20 working sets/muscle/week,
+  Schoenfeld et al.) and strength (3–5 heavy sets/pattern/week).
+- RIR (Reps in Reserve) autoregulation and RPE-based load progression.
+- Periodization models (linear, undulating, block) suited to the athlete's experience level.
+- Recovery, sleep, and nutrition fundamentals per NSCA, ACSM, and ISSN guidelines.
+When making specific programming claims, briefly reference the underlying principle or research
+(e.g., "insufficient chest volume per Schoenfeld hypertrophy recommendations…").
+Treat the athlete as a professional coaching client: evidence-based, goal-oriented, safety-conscious.
+
 Analyze the athlete's training data, taking their stated goals into account, and return
 a JSON response with this exact structure:
 
 {
+  "workout_score": <integer 0-100. Score the training quality: deduct for missed sessions vs goals,
+    plateaus, imbalanced volume, declining e1RM, poor consistency. 90-100 = excellent, 70-89 = good,
+    50-69 = average, below 50 = needs work.>,
+  "health_score": <integer 0-100 based on Google Fit data if provided: sleep hours (8h ideal),
+    recovery score, resting HR trend, daily steps. If no Fit data is in the context, set to null.>,
+  "combined_score": <integer 0-100. If health_score is not null: workout_score*0.7 + health_score*0.3,
+    rounded. If health_score is null: equal to workout_score.>,
   "strengths": ["<observation>", ...],
   "weaknesses": ["<observation>", ...],
   "recommendations": ["<actionable tip>", ...],
@@ -297,12 +318,15 @@ Rules:
 
 def get_coaching(weeks: int = 8) -> dict:
     context = _build_context(weeks)
+    lang = get_pref("ai_language") or "English"
+    lang_line = f"\nAlways respond entirely in {lang}.\n" if lang != "English" else ""
     prompt = (
         "<training_data>\n"
         f"{context}\n"
         "</training_data>\n\n"
         "Please analyse my training and generate a suggested next routine."
     )
+    system = _COACH_SYSTEM + lang_line
 
     console.print(f"\n[dim]Powered by {provider_label()}[/dim]\n")
 
@@ -314,7 +338,7 @@ def get_coaching(weeks: int = 8) -> dict:
 
     full_text = ""
     first_token = False
-    for chunk in stream_complete(prompt, system=_COACH_SYSTEM):
+    for chunk in stream_complete(prompt, system=system):
         if not first_token:
             status.stop()
             first_token = True
@@ -351,8 +375,12 @@ def push_routine_to_hevy(routine_data: dict) -> dict:
 
 _CHAT_SYSTEM_BASE = (
     ANTI_INJECTION_PREAMBLE
-    + "You are a personal fitness coach assistant. You have the athlete's complete training "
-    "history, their stated goals, and memories from previous conversations.\n"
+    + "You are a personal fitness coach assistant with deep knowledge of exercise science. "
+    "You have the athlete's complete training history, their stated goals, and memories from previous conversations.\n"
+    "Ground every recommendation in evidence-based principles: progressive overload, SRA cycle, "
+    "MEV/MAV/MRV volume landmarks (Israetel et al.), RIR autoregulation, periodization models, "
+    "and NSCA/ACSM/ISSN guidelines. When making specific programming claims, briefly reference "
+    "the underlying research principle.\n"
     "Answer questions conversationally and reference their actual numbers.\n"
     "Be encouraging but honest. Keep answers concise unless asked to elaborate.\n"
     "TOOL USE RULES — follow these exactly:\n"
@@ -779,10 +807,12 @@ def start_enhanced_chat(weeks: int = 8) -> None:
     """Interactive chat with tool calling, goal management, and memory persistence."""
     slim = get_pref("ai_chat_slim") != "0"  # default True unless explicitly disabled
     context = _build_context(weeks, slim=slim)
+    lang = get_pref("ai_language") or "English"
+    lang_line = f"\nAlways respond entirely in {lang}.\n" if lang != "English" else ""
     # Use XML-like delimiters so the model can clearly distinguish
     # instructions (above) from untrusted data (below).
     system = (
-        f"{_CHAT_SYSTEM_BASE}\n\n"
+        f"{_CHAT_SYSTEM_BASE}{lang_line}\n\n"
         "<training_data>\n"
         f"{context}\n"
         "</training_data>"

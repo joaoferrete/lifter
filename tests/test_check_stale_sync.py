@@ -21,7 +21,11 @@ def _make_confirm(answers):
 
 def _run(hevy_ts=None, fit_ts=None, fit_connected=False, confirm_answers=None, hevy_client=True,
          fit_sync_raises=None):
-    """Execute _check_stale_sync with fully mocked dependencies."""
+    """Execute _check_stale_sync with fully mocked dependencies.
+
+    Always disables auto_sync (patches cli.get_pref → None) so tests that
+    exercise the prompt path are not affected by the value stored in the real DB.
+    """
     import cli
 
     incremental_calls = []
@@ -48,6 +52,7 @@ def _run(hevy_ts=None, fit_ts=None, fit_connected=False, confirm_answers=None, h
          patch("cli._require_hevy", return_value=mock_client), \
          patch("cli.incremental_sync", side_effect=_fake_incremental), \
          patch("fit.sync.sync_fit", side_effect=_fake_sync_fit), \
+         patch("cli.get_pref", return_value=None), \
          patch("cli.console"):
         cli._check_stale_sync()
 
@@ -60,6 +65,7 @@ def test_fresh_hevy_no_prompt():
     import cli
     with patch("db.store.get_sync_state", return_value=_ts(1)), \
          patch("fit.auth.is_connected", return_value=False), \
+         patch("cli.get_pref", return_value=None), \
          patch("questionary.confirm") as mock_confirm, \
          patch("cli.console"):
         cli._check_stale_sync()
@@ -97,6 +103,7 @@ def test_hevy_stale_prompts_user():
          patch("fit.auth.is_connected", return_value=False), \
          patch("questionary.confirm", side_effect=_capture_confirm), \
          patch("cli._require_hevy", return_value=None), \
+         patch("cli.get_pref", return_value=None), \
          patch("cli.console"):
         cli._check_stale_sync()
 
@@ -144,6 +151,7 @@ def test_fit_stale_prompts_user():
          patch("fit.auth.is_connected", return_value=True), \
          patch("questionary.confirm", side_effect=_capture_confirm), \
          patch("fit.sync.sync_fit"), \
+         patch("cli.get_pref", return_value=None), \
          patch("cli.console"):
         cli._check_stale_sync()
 
@@ -192,3 +200,104 @@ def test_both_stale_only_fit_confirmed():
     result = _run(hevy_ts=_ts(25), fit_ts=_ts(25), fit_connected=True, confirm_answers=[False, True])
     assert result["incremental_calls"] == []
     assert result["fit_sync_calls"] == [90]
+
+
+# ── auto_sync mode ────────────────────────────────────────────────────────────
+
+def test_auto_sync_hevy_syncs_without_prompt():
+    """When auto_sync is on, a stale Hevy DB syncs silently — no confirm shown."""
+    import cli
+    incremental_calls = []
+
+    def _fake_incremental(client):
+        incremental_calls.append(client)
+        return {"updated": 2, "deleted": 0}
+
+    def _get_pref_auto(key):
+        return "1" if key == "auto_sync" else None
+
+    with patch("db.store.get_sync_state", side_effect=lambda k: _ts(25) if k == "last_sync" else None), \
+         patch("fit.auth.is_connected", return_value=False), \
+         patch("cli.get_pref", side_effect=_get_pref_auto), \
+         patch("cli._require_hevy", return_value=MagicMock()), \
+         patch("cli.incremental_sync", side_effect=_fake_incremental), \
+         patch("questionary.confirm") as mock_confirm, \
+         patch("cli.console"):
+        cli._check_stale_sync()
+
+    assert len(incremental_calls) == 1
+    mock_confirm.assert_not_called()
+
+
+def test_auto_sync_fit_syncs_without_prompt():
+    """When auto_sync is on, a stale Fit DB syncs silently — no confirm shown."""
+    import cli
+    fit_sync_calls = []
+
+    def _fake_sync_fit(days):
+        fit_sync_calls.append(days)
+        return {"daily_days": 90, "sleep_sessions": 5}
+
+    def _get_pref_auto(key):
+        return "1" if key == "auto_sync" else None
+
+    with patch("db.store.get_sync_state", side_effect=lambda k: _ts(1) if k == "last_sync" else _ts(25)), \
+         patch("fit.auth.is_connected", return_value=True), \
+         patch("cli.get_pref", side_effect=_get_pref_auto), \
+         patch("fit.sync.sync_fit", side_effect=_fake_sync_fit), \
+         patch("questionary.confirm") as mock_confirm, \
+         patch("cli.console"):
+        cli._check_stale_sync()
+
+    assert fit_sync_calls == [90]
+    mock_confirm.assert_not_called()
+
+
+def test_auto_sync_both_stale_syncs_both_silently():
+    """When auto_sync is on, both stale sources sync without any prompts."""
+    import cli
+    incremental_calls = []
+    fit_sync_calls = []
+
+    def _fake_incremental(client):
+        incremental_calls.append(client)
+        return {"updated": 1, "deleted": 0}
+
+    def _fake_sync_fit(days):
+        fit_sync_calls.append(days)
+        return {"daily_days": 30, "sleep_sessions": 2}
+
+    def _get_pref_auto(key):
+        return "1" if key == "auto_sync" else None
+
+    with patch("db.store.get_sync_state", return_value=_ts(25)), \
+         patch("fit.auth.is_connected", return_value=True), \
+         patch("cli.get_pref", side_effect=_get_pref_auto), \
+         patch("cli._require_hevy", return_value=MagicMock()), \
+         patch("cli.incremental_sync", side_effect=_fake_incremental), \
+         patch("fit.sync.sync_fit", side_effect=_fake_sync_fit), \
+         patch("questionary.confirm") as mock_confirm, \
+         patch("cli.console"):
+        cli._check_stale_sync()
+
+    assert len(incremental_calls) == 1
+    assert fit_sync_calls == [90]
+    mock_confirm.assert_not_called()
+
+
+def test_auto_sync_fit_exception_does_not_crash():
+    """auto_sync Fit failure is swallowed silently (same as prompt path)."""
+    import cli
+
+    def _get_pref_auto(key):
+        return "1" if key == "auto_sync" else None
+
+    with patch("db.store.get_sync_state", side_effect=lambda k: _ts(1) if k == "last_sync" else _ts(25)), \
+         patch("fit.auth.is_connected", return_value=True), \
+         patch("cli.get_pref", side_effect=_get_pref_auto), \
+         patch("fit.sync.sync_fit", side_effect=RuntimeError("token expired")), \
+         patch("questionary.confirm") as mock_confirm, \
+         patch("cli.console"):
+        cli._check_stale_sync()   # must not raise
+
+    mock_confirm.assert_not_called()

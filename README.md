@@ -13,11 +13,13 @@ Personal Hevy workout client with analytics, goal tracking, Google Fit integrati
 |---|---|
 | **Sync** | Fetches your full Hevy workout history locally. Every sync shows a report with new workouts, PRs set, training streak, and volume vs last week. |
 | **Analytics** | Volume per muscle group, exercise progression (e1RM), personal records, plateau detection. |
-| **Goals** | Set lift targets, frequency goals, body weight / fat / volume targets. Tracks progress automatically after every sync. |
-| **AI Coach** | One-shot report: strengths, weaknesses, recommendations, and a complete routine tailored to your goals. |
-| **AI Chat** | Interactive coach that knows your full history, can push routines to Hevy, and can update your goals — all with your approval. |
+| **Goals** | Set lift targets, frequency goals, body weight / fat / volume targets. Multiple goals of any type coexist. Tracks progress automatically after every sync. |
+| **AI Report** | One-shot coaching report: Training / Health / Combined scores (0–100), volume distribution by muscle group and by individual muscle, strengths, weaknesses, recommendations, and a complete routine tailored to your goals. |
+| **AI Chat** | Interactive coach that knows your full history, can push routines to Hevy, and can update your goals — all with your approval. Chat is the first option in the main menu. |
+| **Snapshot** | At-a-glance panel shown before every menu: last report scores, volume split by muscle group, and all goal progress bars. |
 | **Memory** | After every chat the AI extracts key insights (injuries, preferences, feedback) and saves them. Future sessions start with that context already loaded. |
-| **Google Fit** | Syncs sleep, steps, calories, and resting HR. Recovery score shown in the header. Coach uses recovery data when making suggestions. |
+| **Google Fit** | Syncs sleep, steps, calories, and resting HR. Recovery score shown in the header and used in AI suggestions. |
+| **Settings** | Weight units (kg / lbs), goal check-in frequency, auto-sync on startup, default stats window, display name — all configurable through the menu. |
 | **Multi-model** | Works with Gemini (default), Claude, OpenRouter, Groq, GitHub Models, or Amazon Bedrock — swap with one env variable. |
 
 ---
@@ -232,18 +234,21 @@ Run `python3 cli.py` to open the interactive menu.
 
 ```
   Sync new workouts
+  Chat with coach
+  ─────────────────────
+  My goals
   Dashboard & stats
   Exercise progression
   Personal records
-  My goals
-  ─────────────────────
-  Google Fit  (sleep, steps, HR)
   ─────────────────────
   AI coaching report
-  Chat with coach
+  Google Fit  (sleep, steps, HR)
   ─────────────────────
+  Settings
   Exit
 ```
+
+> **Quick view panel** — shown above the menu on every launch: last AI report scores (Training / Health / Overall), volume split by muscle group, and compact goal progress bars.
 
 ### Sync new workouts
 
@@ -255,9 +260,54 @@ Downloads workout data from Hevy. After every sync:
 
 Choose **Incremental** (default, only fetches changes) or **Full** (re-downloads everything).
 
+### Chat with coach
+
+Interactive conversation with the AI. The coach has full access to:
+- Your training history and analytics
+- Your active goals (with IDs for modifications)
+- Google Fit recovery data
+- Memories from all previous conversations
+
+**What the coach can do during chat:**
+
+| Action | How to trigger |
+|---|---|
+| Answer questions about your training | Just ask |
+| Create and push a routine to Hevy | "Create a push day for me" |
+| Update an existing Hevy routine | "Update my push day routine" |
+| Add a new goal | "Add a goal to deadlift 180kg" |
+| Update a goal | "Change my bench goal to 130kg" |
+| Remove a goal | "Remove my weight loss goal" |
+
+All goal changes and routine pushes require your explicit confirmation before anything is saved. Pushed routines include a `✦ Powered by Lifter` note in the routine description.
+
+**After the conversation ends**, the AI analyses the full transcript and extracts memorable facts (injuries mentioned, exercise preferences, feedback on suggestions, lifestyle context). These are saved and automatically included in all future sessions.
+
+### My goals
+
+Set and track training goals:
+
+| Goal type | Example |
+|---|---|
+| Lift PR | Bench Press — 120 kg |
+| Frequency | Train 4× per week |
+| Weight loss / gain | Reach 75 kg body weight |
+| Body fat | Reach 12% body fat |
+| Volume | Chest — 15 sets/week |
+| Custom | Free-text goal (AI tracks qualitatively) |
+
+Multiple goals coexist — you can have a lift PR goal, a frequency goal, a custom goal, and body composition goals all active at the same time.
+
+**First run**: the wizard runs automatically to set your goals.  
+**Check-in**: configurable frequency (7 / 14 / 30 days) — the app asks if your goals are still the same.  
+**Progress bars**: shown in the Quick view panel and after every sync (green ≥80%, yellow ≥50%, red <50%, ★ when achieved).
+
+Weight input in the goals wizard follows your units preference (kg or lbs) and is stored as kg internally.
+
 ### Dashboard & stats
 
-Full analytics for a selectable time period (4 / 8 / 12 / 24 weeks):
+Full analytics for a selectable time period (4 / 8 / 12 / 24 weeks). The default period is saved as a preference so the prompt is skipped on repeated use.
+
 - Workout frequency, average duration, rest days, longest streak
 - Volume by muscle group with inline bar chart, sets/week, sessions/week
 - Body measurement trends (weight, body fat %)
@@ -275,22 +325,29 @@ Uses the Epley formula (`weight × (1 + reps/30)`) for estimated 1RM so sets wit
 
 All-time best set per exercise ranked by estimated 1RM.
 
-### My goals
+### AI coaching report
 
-Set and track training goals:
+Analyses your training data against your goals and generates:
 
-| Goal type | Example |
-|---|---|
-| Lift PR | Bench Press — 120 kg |
-| Frequency | Train 4× per week |
-| Weight loss / gain | Reach 75 kg body weight |
-| Body fat | Reach 12% body fat |
-| Volume | Chest — 15 sets/week |
-| Custom | Free-text goal (AI tracks qualitatively) |
+**Performance Scores panel:**
+- **Training score** (0–100): consistency, progressive overload, balance, plateau avoidance
+- **Health score** (0–100): sleep, recovery, resting HR trend — only shown when Google Fit data is present
+- **Combined score** (0–100): weighted 70% training + 30% health
+- Color-coded: green ≥80 · cyan ≥60 · yellow ≥40 · red <40
+- Scores are cached and shown in the Quick view panel on every launch
 
-**First run**: the wizard runs automatically to set your goals.  
-**Weekly check-in**: every 7 days the app asks if your goals are still the same.  
-**Progress bars**: shown after every sync (green ≥80%, yellow ≥50%, red <50%, ★ when achieved).
+**Volume Distribution panel:**
+- **By muscle group** (Chest, Back, Legs, Shoulders, Arms, Core, Cardio): % of total weekly sets with bar chart
+- **By individual muscle**: granular breakdown of every trained muscle
+
+**Analysis:**
+- **Strengths**: what's working
+- **Weaknesses**: imbalances, underworked muscles, plateaus
+- **Recommendations**: 3–5 actionable tips for the next weeks
+- **Next focus**: the single most important thing to address
+- **Suggested routine**: a complete workout with exercises, sets, reps, and weights matched to your current strength level — ready to push to Hevy
+
+Select the number of weeks to analyse (4 / 8 / 12 / 16). After the report, the app asks if you want to push the routine directly to your Hevy app.
 
 ### Google Fit
 
@@ -301,46 +358,42 @@ Set and track training goals:
 - **Connect / re-authenticate**: runs the OAuth browser flow
 - **Disconnect**: removes the token (local data stays in the DB)
 
-### AI coaching report
+When connected, the Google Fit menu item shows a ✓ status chip.
 
-Analyses your training data against your goals and generates:
-- **Strengths**: what's working
-- **Weaknesses**: imbalances, underworked muscles, plateaus
-- **Recommendations**: 3–5 actionable tips for the next weeks
-- **Next focus**: the single most important thing to address
-- **Suggested routine**: a complete workout with exercises, sets, reps, and weights matched to your current strength level — ready to push to Hevy
+### Settings
 
-Select the number of weeks to analyse (4 / 8 / 12 / 16). After the report, the app asks if you want to push the routine directly to your Hevy app.
+**Menu → Settings** gives you full control over app behaviour and your local data.
 
-Pushed routines include a `✦ Powered by Lifter` note in the routine description.
+#### Profile
 
-### Chat with coach
-
-Interactive conversation with the AI. The coach has full access to:
-- Your training history and analytics
-- Your active goals (with IDs for modifications)
-- Google Fit recovery data
-- Memories from all previous conversations
-
-**What the coach can do during chat:**
-
-| Action | How to trigger |
+| Setting | Description |
 |---|---|
-| Answer questions about your training | Just ask |
-| Create and push a routine to Hevy | "Create a push day for me" |
-| Add a new goal | "Add a goal to deadlift 180kg" |
-| Update a goal | "Change my bench goal to 130kg" |
-| Remove a goal | "Remove my weight loss goal" |
+| **Display name** | Your name shown in the header and used by the AI coach |
 
-All goal changes and routine pushes require your explicit confirmation before anything is saved. Pushed routines include a `✦ Powered by Lifter` note in the routine description.
+#### Preferences
 
-**After the conversation ends**, the AI analyses the full transcript and extracts memorable facts (injuries mentioned, exercise preferences, feedback on suggestions, lifestyle context). These are saved and automatically included in all future sessions.
+| Setting | Options | Default |
+|---|---|---|
+| **Weight units** | kg / lbs | kg |
+| **Goal check-in frequency** | Every 7 / 14 / 30 days | 7 days |
+| **Auto-sync on startup** | on / off | off |
+| **Default stats window** | 4 / 8 / 12 / 24 weeks | 8 weeks |
 
----
+When **auto-sync** is on, stale Hevy and Google Fit data syncs silently on launch without prompting. When off, you get a confirmation prompt.
 
-### Settings & reset
+Weight units apply everywhere: goal wizard input, dashboard stats, exercise progression, personal records, and the AI routine preview.
 
-**Menu → Settings & reset** gives you granular control over local data. Nothing on Hevy or Google Fit is ever touched — only the local cache on your machine.
+#### AI Coach
+
+| Setting | Description |
+|---|---|
+| **Context mode** | Full (all analytics) or Slim (fewer tokens, faster) |
+| **Token counter** | Cumulative input / output / cache-read tokens with cache hit % |
+| **Reset token counter** | Zero out the cumulative counters |
+
+#### Reset data
+
+Nothing on Hevy or Google Fit is ever touched — only the local cache on your machine.
 
 | Option | What it clears |
 |---|---|
@@ -367,6 +420,24 @@ sqlite3 hevy.db "DELETE FROM chat_memories;"
 
 ---
 
+## Header reference
+
+The panel at the top of every screen shows:
+
+```
+┌─ LIFTER · Your Name ─────────────────────────────────────────────────┐
+│ Last workout: 2d ago  ·  🔥🔥 5d streak  ·  3 routines               │
+│ 145 workouts  ·  3 this week  ·  4.2/wk avg  ·  2 goals              │
+│ AI: claude · claude-opus-4-8  ·  Sync ✓ 5m ago  ·  Recovery 82/100  │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+- **Sync status**: green ✓ if synced within 24h, yellow ⚠ if stale
+- **Routine count**: number of routines saved in Hevy
+- **Recovery**: shown when Google Fit is connected and has recent data
+
+---
+
 ## Architecture
 
 ```
@@ -376,7 +447,7 @@ lifter/
 │   └── sync.py          Full + incremental sync via /v1/workouts/events
 ├── db/
 │   ├── store.py         SQLite schema + upsert helpers
-│   ├── goals.py         Goal CRUD + progress computation
+│   ├── goals.py         Goal CRUD, progress computation, user preferences
 │   └── memories.py      Chat memory: save/load/context
 ├── fit/
 │   ├── auth.py          Google OAuth (InstalledAppFlow, token persistence)
@@ -390,7 +461,8 @@ lifter/
 │   └── records.py       Personal records and body measurement trends
 ├── ai/
 │   ├── provider.py      Unified ChatSession abstraction (Gemini, Claude, OpenRouter, Groq, GitHub Models, Bedrock)
-│   └── coach.py         Coaching report, chat loop, goal tools, memory extraction
+│   ├── coach.py         Coaching report (with scores + distribution), chat loop, goal tools, memory extraction
+│   └── sanitize.py      Input sanitization and prompt-injection defence
 ├── cli.py               Interactive menu (questionary + Rich)
 ├── config.py            .env loader
 ├── hevy.db              Local SQLite database (created on first sync)
@@ -411,10 +483,13 @@ lifter/
 | `body_measurements` | Weight, fat %, body measurements by date |
 | `fit_sleep` | Sleep session duration by date |
 | `fit_daily` | Steps, calories, avg/min HR, active minutes by date |
+| `routines` | Workout routines (created by AI or synced from Hevy) |
+| `routine_exercises` | Exercises within routines |
+| `routine_sets` | Sets within routine exercises |
 | `user_goals` | Active and achieved training goals |
-| `user_preferences` | Name, last goals check-in, other settings |
+| `user_preferences` | Display name, units, auto-sync, default windows, cached scores, and other settings |
 | `chat_memories` | Insights extracted from past conversations |
-| `sync_state` | Last sync timestamp and other state keys |
+| `sync_state` | Last sync timestamps and other state keys |
 
 ---
 
@@ -447,6 +522,18 @@ GOOGLE_CREDENTIALS_FILE=fit_credentials.json   # path to downloaded OAuth JSON
 # Database
 DB_PATH=hevy.db           # path to local SQLite file
 ```
+
+All in-app preferences (units, auto-sync, check-in frequency, etc.) are stored in the `user_preferences` table in the database, not in `.env`.
+
+---
+
+## Running tests
+
+```bash
+python -m pytest tests/
+```
+
+The test suite uses an in-memory SQLite database per test — no real `hevy.db` is touched. All AI provider calls and external HTTP requests are mocked.
 
 ---
 
