@@ -15,6 +15,17 @@ from config import (
 )
 
 
+def _track_usage(input_tokens: int = 0, output_tokens: int = 0, cache_read: int = 0) -> None:
+    """Persist token usage totals silently — never raises."""
+    if not (input_tokens or output_tokens or cache_read):
+        return
+    try:
+        from db.goals import add_token_usage
+        add_token_usage(input_tokens, output_tokens, cache_read)
+    except Exception:
+        pass
+
+
 @dataclass
 class ToolCall:
     id: str
@@ -74,6 +85,12 @@ class GeminiChatSession:
                     name=part.function_call.name,
                     args=dict(part.function_call.args),
                 ))
+        um = getattr(response, "usage_metadata", None)
+        if um:
+            _track_usage(
+                getattr(um, "prompt_token_count", 0) or 0,
+                getattr(um, "candidates_token_count", 0) or 0,
+            )
         return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls)
 
 
@@ -83,7 +100,7 @@ class ClaudeChatSession:
     def __init__(self, system: str, tools: list[dict] | None = None):
         import anthropic
         self._client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        self._system = system
+        self._system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
         self._tools = [
             {"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
             for t in (tools or [])
@@ -117,6 +134,11 @@ class ClaudeChatSession:
             kwargs["tools"] = self._tools
         response = self._client.messages.create(**kwargs)
         self._messages.append({"role": "assistant", "content": response.content})
+        _track_usage(
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+        )
         return self._parse(response)
 
     def _parse(self, response) -> ChatResponse:
@@ -183,7 +205,8 @@ class OpenAICompatibleChatSession:
                 for tc in msg.tool_calls
             ]
         self._messages.append(msg_dict)
-
+        if response.usage:
+            _track_usage(response.usage.prompt_tokens, response.usage.completion_tokens)
         return self._parse(msg)
 
     def _parse(self, msg) -> ChatResponse:
@@ -220,7 +243,7 @@ class BedrockChatSession:
                     'Run: pip install "anthropic[bedrock]"'
                 ) from exc
             raise
-        self._system = system
+        self._system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
         self._tools = [
             {"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
             for t in (tools or [])
@@ -254,6 +277,11 @@ class BedrockChatSession:
             kwargs["tools"] = self._tools
         response = self._client.messages.create(**kwargs)
         self._messages.append({"role": "assistant", "content": response.content})
+        _track_usage(
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+        )
         texts, tool_calls = [], []
         for block in response.content:
             if block.type == "text":
@@ -332,6 +360,8 @@ class BedrockConverseChatSession:
         response = self._client.converse(**kwargs)
         msg = response["output"]["message"]
         self._messages.append(msg)
+        usage = response.get("usage", {})
+        _track_usage(usage.get("inputTokens", 0), usage.get("outputTokens", 0))
         texts, tool_calls = [], []
         for item in msg.get("content", []):
             if "text" in item:
@@ -364,12 +394,19 @@ def stream_complete(prompt: str, system: str) -> Iterator[str]:
     if AI_PROVIDER == "claude":
         import anthropic
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        cached_system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
         with client.messages.stream(
-            model=AI_MODEL, system=system,
+            model=AI_MODEL, system=cached_system,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=4096,
         ) as stream:
             yield from stream.text_stream
+            final = stream.get_final_message()
+            _track_usage(
+                final.usage.input_tokens,
+                final.usage.output_tokens,
+                getattr(final.usage, "cache_read_input_tokens", 0) or 0,
+            )
 
     elif AI_PROVIDER in _OPENAI_COMPAT:
         from openai import OpenAI
@@ -404,12 +441,19 @@ def stream_complete(prompt: str, system: str) -> Iterator[str]:
                         'Run: pip install "anthropic[bedrock]"'
                     ) from exc
                 raise
+            cached_system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
             with client.messages.stream(
-                model=AI_MODEL, system=system,
+                model=AI_MODEL, system=cached_system,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=4096,
             ) as stream:
                 yield from stream.text_stream
+                final = stream.get_final_message()
+                _track_usage(
+                    final.usage.input_tokens,
+                    final.usage.output_tokens,
+                    getattr(final.usage, "cache_read_input_tokens", 0) or 0,
+                )
         else:
             client = _boto3_bedrock_client()
             response = client.converse_stream(

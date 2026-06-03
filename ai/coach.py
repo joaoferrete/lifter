@@ -66,14 +66,14 @@ def _friendly_error(e: Exception) -> str:
 
 # ── context builder ───────────────────────────────────────────────────────────
 
-def _build_context(weeks: int = 8) -> str:
+def _build_context(weeks: int = 8, slim: bool = False) -> str:
     name = get_pref("display_name") or "the athlete"
     freq = workout_frequency(weeks)
     muscle_vol = muscle_group_summary(weeks)
     muscle_freq = muscle_group_frequency(weeks)
     sets_per_week = sets_per_muscle_per_week(weeks)
-    plateaus = detect_plateaus(weeks)
-    top_gains = top_progressions(weeks)
+    plateaus = detect_plateaus(weeks) if not slim else []
+    top_gains = top_progressions(weeks) if not slim else []
     prs = recent_prs(30)
     body = body_measurement_trend(weeks)
 
@@ -170,10 +170,10 @@ def _build_context(weeks: int = 8) -> str:
     # This is the most important near-term context: what did the athlete do
     # last, how heavy, and how long ago.
     recent_wkts = query(
-        """SELECT id, title, start_time, end_time
+        f"""SELECT id, title, start_time, end_time
            FROM workouts
            ORDER BY start_time DESC
-           LIMIT 7"""
+           LIMIT {'5' if slim else '7'}"""
     )
     if recent_wkts:
         lines += ["", "## Recent workouts (last sessions, newest first)"]
@@ -231,20 +231,24 @@ def _build_context(weeks: int = 8) -> str:
         lines += ["", f"## Saved routines ({len(saved_routines)} total)"]
         for r in saved_routines:
             lines.append(f"\n  ### {r['title']} (id: {r['id']})")
-            if r.get("notes"):
+            if r.get("notes") and not slim:
                 lines.append(f"  [notes: {sanitize_for_prompt(r['notes'], max_len=120)}]")
             for ex in r.get("exercises", []):
-                normal_sets = [s for s in ex["sets"] if s.get("type") == "normal"]
-                set_desc = ""
-                if normal_sets:
-                    reps_list = [str(s["reps"]) for s in normal_sets if s.get("reps")]
-                    weight = next((s["weight_kg"] for s in normal_sets if s.get("weight_kg")), None)
-                    count = len(normal_sets)
-                    if weight:
-                        set_desc = f" — {count}×{reps_list[0] if reps_list else '?'} @ {weight}kg"
-                    elif reps_list:
-                        set_desc = f" — {count}×{reps_list[0]}"
-                lines.append(f"    - {ex['title']}{set_desc}")
+                if slim:
+                    n = len([s for s in ex["sets"] if s.get("type") == "normal"])
+                    lines.append(f"    - {ex['title']}" + (f" ({n} sets)" if n else ""))
+                else:
+                    normal_sets = [s for s in ex["sets"] if s.get("type") == "normal"]
+                    set_desc = ""
+                    if normal_sets:
+                        reps_list = [str(s["reps"]) for s in normal_sets if s.get("reps")]
+                        weight = next((s["weight_kg"] for s in normal_sets if s.get("weight_kg")), None)
+                        count = len(normal_sets)
+                        if weight:
+                            set_desc = f" — {count}×{reps_list[0] if reps_list else '?'} @ {weight}kg"
+                        elif reps_list:
+                            set_desc = f" — {count}×{reps_list[0]}"
+                    lines.append(f"    - {ex['title']}{set_desc}")
 
     if known:
         lines += ["", "## Exercise library (use these IDs in routines)"]
@@ -330,10 +334,12 @@ def get_coaching(weeks: int = 8) -> dict:
 
 
 def _stamp_routine(routine: dict) -> dict:
-    """Return a copy of the routine with the Lifter watermark appended to notes."""
+    """Return a copy of the routine with the Lifter watermark appended to notes (idempotent)."""
     stamped = dict(routine)
     existing = (stamped.get("notes") or "").strip()
     tag = "✦ Powered by Lifter"
+    if tag in existing:
+        return stamped
     stamped["notes"] = f"{existing}\n\n{tag}".strip() if existing else tag
     return stamped
 
@@ -742,7 +748,8 @@ def _extract_and_save_memories(conversation_log: list[dict]) -> int:
 
 def start_enhanced_chat(weeks: int = 8) -> None:
     """Interactive chat with tool calling, goal management, and memory persistence."""
-    context = _build_context(weeks)
+    slim = get_pref("ai_chat_slim") != "0"  # default True unless explicitly disabled
+    context = _build_context(weeks, slim=slim)
     # Use XML-like delimiters so the model can clearly distinguish
     # instructions (above) from untrusted data (below).
     system = (
@@ -771,7 +778,8 @@ def start_enhanced_chat(weeks: int = 8) -> None:
 
     while True:
         try:
-            user_input = console.input("[bold green]You:[/bold green] ").strip()
+            console.print("[bold green]You:[/bold green] ", end="")
+            user_input = input("").strip()
         except (EOFError, KeyboardInterrupt):
             console.print("\n[dim]Returning to menu...[/dim]")
             break

@@ -854,7 +854,60 @@ def _do_chat():
 
 # ── settings & reset ─────────────────────────────────────────────────────────
 
-def _do_reset():
+def _do_ai_settings():
+    from db.goals import get_pref, set_pref, get_token_usage, reset_token_usage
+
+    usage = get_token_usage()
+    total = usage["input"] + usage["output"]
+    cache_pct = int(usage["cache_read"] / usage["input"] * 100) if usage["input"] else 0
+    slim_on = get_pref("ai_chat_slim") != "0"
+
+    from config import AI_MODEL
+    lines = [
+        f"Provider:  [bold]{AI_PROVIDER}[/bold]  ·  Model: [bold]{AI_MODEL}[/bold]",
+        "",
+        f"Context mode:  [bold]{'Slim  (fewer tokens)' if slim_on else 'Full  (all analytics)'}[/bold]",
+        "",
+        "Token usage (cumulative):",
+        f"  Input:   [cyan]{usage['input']:,}[/cyan] tokens",
+        f"  Output:  [cyan]{usage['output']:,}[/cyan] tokens",
+        f"  Total:   [bold cyan]{total:,}[/bold cyan] tokens",
+    ]
+    if usage["cache_read"]:
+        lines.append(f"  Cached:  [green]{usage['cache_read']:,}[/green] tokens read from cache  ({cache_pct}% of input)")
+
+    console.print(Panel("\n".join(lines), title="[bold]AI Coach Settings[/bold]", border_style="cyan"))
+
+    action = questionary.select(
+        "AI settings:",
+        choices=[
+            questionary.Choice(
+                f"  Toggle context mode  (currently: {'Slim' if slim_on else 'Full'})",
+                value="toggle_slim",
+            ),
+            questionary.Choice("  Reset token counter",  value="reset_tokens"),
+            questionary.Separator("  ───"),
+            questionary.Choice("  Back",                 value="back"),
+        ],
+        style=STYLE,
+    ).ask()
+
+    if not action or action == "back":
+        return
+
+    if action == "toggle_slim":
+        new_val = "0" if slim_on else "1"
+        set_pref("ai_chat_slim", new_val)
+        label = "Slim (fewer tokens)" if new_val == "1" else "Full (all analytics)"
+        console.print(f"[green]✓ Context mode set to: {label}[/green]")
+
+    elif action == "reset_tokens":
+        if questionary.confirm("  Reset all token counters to zero?", default=False, style=STYLE).ask():
+            reset_token_usage()
+            console.print("[green]✓ Token counters reset.[/green]")
+
+
+def _do_data_reset():
     action = questionary.select(
         "What do you want to reset?",
         choices=[
@@ -924,6 +977,26 @@ def _do_reset():
             "\n[bold green]✓ Everything wiped.[/bold green]\n"
             "  Run [bold]Sync → Full[/bold] to re-download your workouts."
         )
+
+
+def _do_reset():
+    action = questionary.select(
+        "Settings:",
+        choices=[
+            questionary.Choice("  AI Coach settings  (tokens, context mode)", value="ai"),
+            questionary.Choice("  Reset data",                                 value="reset"),
+            questionary.Separator("  ───"),
+            questionary.Choice("  Back",                                       value="back"),
+        ],
+        style=STYLE,
+    ).ask()
+
+    if not action or action == "back":
+        return
+    if action == "ai":
+        _do_ai_settings()
+    elif action == "reset":
+        _do_data_reset()
 
 
 # ── google fit ────────────────────────────────────────────────────────────────

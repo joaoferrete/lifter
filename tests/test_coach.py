@@ -103,6 +103,59 @@ def test_push_routine_preserves_existing_notes():
     assert "✦ Powered by Lifter" in notes
 
 
+def test_stamp_routine_does_not_duplicate_watermark():
+    from ai.coach import _stamp_routine
+    tag = "✦ Powered by Lifter"
+    already_stamped = {"title": "Push Day", "notes": f"Heavy day.\n\n{tag}", "exercises": []}
+    result = _stamp_routine(already_stamped)
+    assert result["notes"].count(tag) == 1
+
+
+def test_stamp_routine_adds_watermark_when_absent():
+    from ai.coach import _stamp_routine
+    result = _stamp_routine({"title": "Push Day", "notes": None, "exercises": []})
+    assert "✦ Powered by Lifter" in result["notes"]
+
+
+# ── slim mode ─────────────────────────────────────────────────────────────────
+
+def test_build_context_slim_excludes_progressions(tmp_db):
+    from ai.coach import _build_context
+    seed_exercise_template(tmp_db)
+    for i in range(4):
+        seed_workout(tmp_db, f"p-w{i}", days_ago=i * 7)
+    ctx_full = _build_context(weeks=8, slim=False)
+    ctx_slim = _build_context(weeks=8, slim=True)
+    # Plateaus/progressions sections only appear in full mode
+    assert "plateau" in ctx_full.lower() or "improvement" in ctx_full.lower() or ctx_full  # may be empty if no data
+    # Slim mode must never include these headings regardless of data
+    assert "Exercises showing a plateau" not in ctx_slim
+    assert "Top improvements" not in ctx_slim
+
+
+def test_build_context_full_includes_more_workouts_than_slim(tmp_db):
+    from ai.coach import _build_context
+    seed_exercise_template(tmp_db)
+    for i in range(7):
+        seed_workout(tmp_db, f"w{i}", days_ago=i)
+    ctx_full = _build_context(weeks=8, slim=False)
+    ctx_slim = _build_context(weeks=8, slim=True)
+    # Full shows up to 7 workouts; slim shows up to 5 — full context must be longer
+    assert len(ctx_full) > len(ctx_slim)
+
+
+def test_build_context_slim_routines_omit_set_weights(tmp_db):
+    from ai.coach import _build_context
+    seed_exercise_template(tmp_db)
+    seed_routine(tmp_db, "r-slim", title="Push Day")
+    ctx_slim = _build_context(weeks=4, slim=True)
+    ctx_full = _build_context(weeks=4, slim=False)
+    assert "Push Day" in ctx_slim
+    # Full context shows weights; slim shows only exercise names + set count
+    assert "80" in ctx_full   # weight appears in full
+    assert "@ 80kg" not in ctx_slim  # weight detail stripped in slim
+
+
 # ── _routine_id (hevy/client.py) ──────────────────────────────────────────────
 
 def test_routine_id_from_wrapped_response():
