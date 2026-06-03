@@ -29,6 +29,56 @@ def set_pref(key: str, value: str) -> None:
         )
 
 
+# ── token usage tracking ──────────────────────────────────────────────────────
+
+_TOKEN_KEYS = ("ai_tokens_input", "ai_tokens_output", "ai_tokens_cache_read")
+
+
+def add_token_usage(input_tokens: int = 0, output_tokens: int = 0, cache_read_tokens: int = 0) -> None:
+    """Atomically increment cumulative token counters."""
+    pairs = [
+        ("ai_tokens_input",      input_tokens),
+        ("ai_tokens_output",     output_tokens),
+        ("ai_tokens_cache_read", cache_read_tokens),
+    ]
+    with _conn() as conn:
+        for key, val in pairs:
+            if val:
+                conn.execute(
+                    """INSERT INTO user_preferences (key, value, updated_at)
+                       VALUES (?, ?, datetime('now'))
+                       ON CONFLICT(key) DO UPDATE SET
+                         value      = CAST(CAST(value AS INTEGER) + ? AS TEXT),
+                         updated_at = datetime('now')""",
+                    (key, str(val), val),
+                )
+
+
+def get_token_usage() -> dict:
+    """Return cumulative token usage counters as {input, output, cache_read}."""
+    with _conn() as conn:
+        rows = {
+            r["key"]: int(r["value"] or 0)
+            for r in conn.execute(
+                "SELECT key, value FROM user_preferences WHERE key IN (?,?,?)",
+                _TOKEN_KEYS,
+            ).fetchall()
+        }
+    return {
+        "input":      rows.get("ai_tokens_input", 0),
+        "output":     rows.get("ai_tokens_output", 0),
+        "cache_read": rows.get("ai_tokens_cache_read", 0),
+    }
+
+
+def reset_token_usage() -> None:
+    with _conn() as conn:
+        conn.execute(
+            "DELETE FROM user_preferences WHERE key IN (?,?,?)",
+            _TOKEN_KEYS,
+        )
+
+
 # ── goals CRUD ────────────────────────────────────────────────────────────────
 
 def save_goal(

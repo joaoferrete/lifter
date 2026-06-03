@@ -111,3 +111,46 @@ def test_compute_progress_lift_pr_goal(tmp_db):
     assert p["current"] is not None
     # e1RM of 90kg×5 = 90*(1+5/30) ≈ 105 → should be ≥ target → achieved
     assert p["pct"] == 100.0 or p["current"] > 0
+
+
+# ── token usage tracking ──────────────────────────────────────────────────────
+
+def test_get_token_usage_returns_zeros_when_empty(tmp_db):
+    from db.goals import get_token_usage
+    usage = get_token_usage()
+    assert usage == {"input": 0, "output": 0, "cache_read": 0}
+
+
+def test_add_token_usage_increments_input_and_output(tmp_db):
+    from db.goals import add_token_usage, get_token_usage
+    add_token_usage(input_tokens=1000, output_tokens=250)
+    usage = get_token_usage()
+    assert usage["input"] == 1000
+    assert usage["output"] == 250
+    assert usage["cache_read"] == 0
+
+
+def test_add_token_usage_is_cumulative(tmp_db):
+    from db.goals import add_token_usage, get_token_usage
+    add_token_usage(input_tokens=500, output_tokens=100)
+    add_token_usage(input_tokens=300, output_tokens=50, cache_read_tokens=200)
+    usage = get_token_usage()
+    assert usage["input"] == 800
+    assert usage["output"] == 150
+    assert usage["cache_read"] == 200
+
+
+def test_add_token_usage_ignores_zero_values(tmp_db):
+    from db.goals import add_token_usage, get_token_usage
+    add_token_usage(input_tokens=100)
+    add_token_usage()  # all zeros — should not create rows or crash
+    usage = get_token_usage()
+    assert usage["input"] == 100
+
+
+def test_reset_token_usage_clears_counters(tmp_db):
+    from db.goals import add_token_usage, get_token_usage, reset_token_usage
+    add_token_usage(input_tokens=5000, output_tokens=1000, cache_read_tokens=3000)
+    reset_token_usage()
+    usage = get_token_usage()
+    assert usage == {"input": 0, "output": 0, "cache_read": 0}

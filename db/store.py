@@ -375,34 +375,40 @@ def delete_stale_routines(keep_ids: set, db_path: Path = DB_PATH) -> int:
 
 
 def get_routines_with_exercises(db_path: Path = DB_PATH) -> list[dict]:
-    """Return all routines with their exercises and sets, joined with exercise template names."""
+    """Return all routines with their exercises and sets via a single JOIN query."""
     with _conn(db_path) as conn:
-        routines = [
-            dict(r) for r in conn.execute(
-                "SELECT id, title, notes FROM routines ORDER BY title"
-            ).fetchall()
-        ]
-        for r in routines:
-            exercises = [
-                dict(e) for e in conn.execute(
-                    """SELECT re.id, re.idx,
-                              COALESCE(re.title, et.title, re.exercise_template_id) AS title,
-                              re.notes, re.rest_seconds
-                       FROM routine_exercises re
-                       LEFT JOIN exercise_templates et ON et.id = re.exercise_template_id
-                       WHERE re.routine_id = ?
-                       ORDER BY re.idx""",
-                    (r["id"],),
-                ).fetchall()
-            ]
-            for ex in exercises:
-                ex["sets"] = [
-                    dict(s) for s in conn.execute(
-                        """SELECT type, weight_kg, reps
-                           FROM routine_sets WHERE routine_exercise_id = ?
-                           ORDER BY idx""",
-                        (ex["id"],),
-                    ).fetchall()
-                ]
-            r["exercises"] = exercises
-        return routines
+        rows = conn.execute(
+            """SELECT r.id, r.title, r.notes,
+                      re.id AS re_id, re.idx AS re_idx,
+                      COALESCE(re.title, et.title, re.exercise_template_id) AS ex_title,
+                      re.notes AS ex_notes, re.rest_seconds,
+                      rs.type AS set_type, rs.weight_kg, rs.reps, rs.idx AS rs_idx
+               FROM routines r
+               LEFT JOIN routine_exercises re ON re.routine_id = r.id
+               LEFT JOIN exercise_templates et ON et.id = re.exercise_template_id
+               LEFT JOIN routine_sets rs ON rs.routine_exercise_id = re.id
+               ORDER BY r.title, re.idx, rs.idx"""
+        ).fetchall()
+
+    routines_map: dict = {}
+    exercises_map: dict = {}
+    for row in rows:
+        row = dict(row)
+        rid = row["id"]
+        if rid not in routines_map:
+            routines_map[rid] = {"id": rid, "title": row["title"], "notes": row["notes"], "exercises": []}
+        re_id = row["re_id"]
+        if re_id is None:
+            continue
+        if re_id not in exercises_map:
+            ex: dict = {
+                "id": re_id, "idx": row["re_idx"], "title": row["ex_title"],
+                "notes": row["ex_notes"], "rest_seconds": row["rest_seconds"], "sets": [],
+            }
+            exercises_map[re_id] = ex
+            routines_map[rid]["exercises"].append(ex)
+        if row["set_type"] is not None:
+            exercises_map[re_id]["sets"].append(
+                {"type": row["set_type"], "weight_kg": row["weight_kg"], "reps": row["reps"]}
+            )
+    return list(routines_map.values())

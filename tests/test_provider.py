@@ -140,3 +140,43 @@ def test_dispatch_gemini_is_default(monkeypatch):
         MockClass.return_value = MagicMock()
         provider_mod.create_chat_session("sys")
     MockClass.assert_called_once()
+
+
+# ── _track_usage ──────────────────────────────────────────────────────────────
+
+def test_track_usage_calls_add_token_usage(tmp_db):
+    from db.goals import get_token_usage
+    provider_mod._track_usage(input_tokens=100, output_tokens=50)
+    usage = get_token_usage()
+    assert usage["input"] == 100
+    assert usage["output"] == 50
+
+
+def test_track_usage_records_cache_read(tmp_db):
+    from db.goals import get_token_usage
+    provider_mod._track_usage(input_tokens=200, output_tokens=40, cache_read=150)
+    usage = get_token_usage()
+    assert usage["cache_read"] == 150
+
+
+def test_track_usage_is_cumulative_across_calls(tmp_db):
+    from db.goals import get_token_usage
+    provider_mod._track_usage(input_tokens=300, output_tokens=60)
+    provider_mod._track_usage(input_tokens=200, output_tokens=40)
+    usage = get_token_usage()
+    assert usage["input"] == 500
+    assert usage["output"] == 100
+
+
+def test_track_usage_skips_all_zeros(tmp_db):
+    from db.goals import get_token_usage
+    provider_mod._track_usage()  # nothing — should not write any row
+    usage = get_token_usage()
+    assert usage == {"input": 0, "output": 0, "cache_read": 0}
+
+
+def test_track_usage_never_raises_on_db_error(monkeypatch):
+    def boom(*a, **kw):
+        raise RuntimeError("db exploded")
+    monkeypatch.setattr("db.goals.add_token_usage", boom)
+    provider_mod._track_usage(input_tokens=999)  # must not raise
