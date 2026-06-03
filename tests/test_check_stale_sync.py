@@ -65,6 +65,7 @@ def test_fresh_hevy_no_prompt():
     import cli
     with patch("db.store.get_sync_state", return_value=_ts(1)), \
          patch("fit.auth.is_connected", return_value=False), \
+         patch("cli.get_pref", return_value=None), \
          patch("questionary.confirm") as mock_confirm, \
          patch("cli.console"):
         cli._check_stale_sync()
