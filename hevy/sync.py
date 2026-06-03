@@ -9,6 +9,8 @@ from db.store import (
     delete_workout,
     upsert_exercise_template,
     upsert_body_measurement,
+    upsert_routine,
+    delete_stale_routines,
     get_sync_state,
     set_sync_state,
 )
@@ -18,10 +20,23 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _sync_routines(client: HevyClient, progress, counts: dict) -> None:
+    """Fetch all routines from Hevy and upsert locally, removing deleted ones."""
+    task_r = progress.add_task("Syncing routines...", total=None)
+    fetched_ids: set[str] = set()
+    for routine in client.get_routines():
+        upsert_routine(routine)
+        fetched_ids.add(str(routine["id"]))
+        counts["routines"] = counts.get("routines", 0) + 1
+        progress.advance(task_r)
+
+    delete_stale_routines(fetched_ids)
+
+
 def full_sync(client: HevyClient) -> dict:
     init_db()
 
-    counts = {"workouts": 0, "templates": 0, "body_measurements": 0, "updated_ids": [], "since": None}
+    counts = {"workouts": 0, "templates": 0, "body_measurements": 0, "routines": 0, "updated_ids": [], "since": None}
 
     with Progress(
         SpinnerColumn(),
@@ -50,6 +65,8 @@ def full_sync(client: HevyClient) -> dict:
             counts["body_measurements"] += 1
             progress.advance(task_b)
 
+        _sync_routines(client, progress, counts)
+
     set_sync_state("last_sync", _now_iso())
     return counts
 
@@ -60,7 +77,7 @@ def incremental_sync(client: HevyClient) -> dict:
         return full_sync(client)
 
     since = last_sync
-    counts = {"updated": 0, "deleted": 0, "templates": 0, "body_measurements": 0, "updated_ids": [], "since": since}
+    counts = {"updated": 0, "deleted": 0, "templates": 0, "body_measurements": 0, "routines": 0, "updated_ids": [], "since": since}
 
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
         task = progress.add_task(f"Fetching events since {last_sync}...", total=None)
@@ -85,6 +102,8 @@ def incremental_sync(client: HevyClient) -> dict:
             upsert_body_measurement(measurement)
             counts["body_measurements"] += 1
             progress.advance(task_b)
+
+        _sync_routines(client, progress, counts)
 
     set_sync_state("last_sync", _now_iso())
     return counts

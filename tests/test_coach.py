@@ -1,6 +1,6 @@
 """Tests for ai.coach — context building and routine push."""
 from unittest.mock import MagicMock, patch
-from tests.conftest import seed_exercise_template, seed_workout
+from tests.conftest import seed_exercise_template, seed_workout, seed_routine, TEMPLATE_ID
 
 
 # ── _build_context ────────────────────────────────────────────────────────────
@@ -128,3 +128,112 @@ def test_routine_id_empty_list():
 def test_routine_id_non_dict():
     from hevy.client import _routine_id
     assert _routine_id("unexpected") == ""
+
+
+# ── saved-routines context ────────────────────────────────────────────────────
+
+def test_build_context_includes_saved_routines(tmp_db):
+    from ai.coach import _build_context
+    seed_exercise_template(tmp_db)
+    seed_routine(tmp_db, "r-ctx1", title="My Push Day")
+
+    ctx = _build_context(weeks=4)
+    assert "Saved routines" in ctx
+    assert "My Push Day" in ctx
+
+
+def test_build_context_no_routines_omits_section(tmp_db):
+    from ai.coach import _build_context
+    ctx = _build_context(weeks=4)
+    assert "Saved routines" not in ctx
+
+
+def test_build_context_routine_shows_exercise_name(tmp_db):
+    from ai.coach import _build_context
+    seed_exercise_template(tmp_db, template_id=TEMPLATE_ID)
+    seed_routine(tmp_db, "r-ctx2", title="Pull Day", template_id=TEMPLATE_ID)
+
+    ctx = _build_context(weeks=4)
+    assert f"Exercise {TEMPLATE_ID}" in ctx
+
+
+def test_build_context_multiple_routines(tmp_db):
+    from ai.coach import _build_context
+    seed_exercise_template(tmp_db)
+    seed_routine(tmp_db, "r-a", title="Routine A")
+    seed_routine(tmp_db, "r-b", title="Routine B")
+
+    ctx = _build_context(weeks=4)
+    assert "Routine A" in ctx
+    assert "Routine B" in ctx
+
+
+# ── update_routine tool ───────────────────────────────────────────────────────
+
+def test_show_and_confirm_routine_update_calls_hevy_update(tmp_db):
+    from ai.coach import _show_and_confirm_routine_update
+
+    seed_exercise_template(tmp_db)
+    seed_routine(tmp_db, "r-upd", title="Old Title")
+
+    mock_client = MagicMock()
+    mock_client.update_routine.return_value = {}
+
+    with patch("hevy.client.HevyClient", return_value=mock_client), \
+         patch("questionary.confirm") as mock_confirm:
+        mock_confirm.return_value.ask.return_value = True
+        result = _show_and_confirm_routine_update({
+            "routine_id": "r-upd",
+            "title": "New Title",
+            "notes": "Updated notes",
+            "exercises": [],
+        })
+
+    assert result["success"] is True
+    assert result["routine_id"] == "r-upd"
+    mock_client.update_routine.assert_called_once()
+    call_id = mock_client.update_routine.call_args[0][0]
+    assert call_id == "r-upd"
+
+
+def test_show_and_confirm_routine_update_upserts_to_local_db(tmp_db):
+    from ai.coach import _show_and_confirm_routine_update
+    from db.store import get_routines_with_exercises
+
+    seed_exercise_template(tmp_db)
+    seed_routine(tmp_db, "r-local", title="Before")
+
+    mock_client = MagicMock()
+    mock_client.update_routine.return_value = {}
+
+    with patch("hevy.client.HevyClient", return_value=mock_client), \
+         patch("questionary.confirm") as mock_confirm:
+        mock_confirm.return_value.ask.return_value = True
+        _show_and_confirm_routine_update({
+            "routine_id": "r-local",
+            "title": "After",
+            "notes": None,
+            "exercises": [],
+        })
+
+    routines = get_routines_with_exercises(db_path=tmp_db)
+    updated = next(r for r in routines if r["id"] == "r-local")
+    assert updated["title"] == "After"
+
+
+def test_show_and_confirm_routine_update_declined_returns_failure(tmp_db):
+    from ai.coach import _show_and_confirm_routine_update
+
+    seed_exercise_template(tmp_db)
+    seed_routine(tmp_db, "r-decline", title="Existing")
+
+    with patch("hevy.client.HevyClient"), \
+         patch("questionary.confirm") as mock_confirm:
+        mock_confirm.return_value.ask.return_value = False
+        result = _show_and_confirm_routine_update({
+            "routine_id": "r-decline",
+            "title": "New",
+            "exercises": [],
+        })
+
+    assert result["success"] is False

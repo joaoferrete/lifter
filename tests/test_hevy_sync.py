@@ -1,6 +1,6 @@
 """Tests for hevy.sync — full and incremental sync logic with mocked client and store."""
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 
 def _fake_workout(wid):
@@ -29,14 +29,28 @@ def _fake_template(tid):
     }
 
 
+def _fake_routine(rid):
+    return {
+        "id": rid,
+        "title": f"Routine {rid}",
+        "notes": None,
+        "folder_id": None,
+        "updated_at": "2024-01-01T00:00:00Z",
+        "created_at": "2024-01-01T00:00:00Z",
+        "exercises": [],
+    }
+
+
 def _patch_sync(monkeypatch, sync_mod, calls=None):
     if calls is None:
-        calls = {"workouts": [], "templates": [], "body_measurements": [], "deleted": [], "sync_states": {}}
+        calls = {"workouts": [], "templates": [], "body_measurements": [], "deleted": [], "routines": [], "sync_states": {}}
     monkeypatch.setattr(sync_mod, "init_db", lambda: None)
     monkeypatch.setattr(sync_mod, "upsert_workout", lambda w: calls["workouts"].append(w["id"]))
     monkeypatch.setattr(sync_mod, "delete_workout", lambda wid: calls["deleted"].append(wid))
     monkeypatch.setattr(sync_mod, "upsert_exercise_template", lambda t: calls["templates"].append(t["id"]))
     monkeypatch.setattr(sync_mod, "upsert_body_measurement", lambda m: calls["body_measurements"].append(m))
+    monkeypatch.setattr(sync_mod, "upsert_routine", lambda r: calls["routines"].append(r["id"]))
+    monkeypatch.setattr(sync_mod, "delete_stale_routines", lambda ids: None)
     monkeypatch.setattr(sync_mod, "set_sync_state", lambda k, v: calls["sync_states"].update({k: v}))
     return calls
 
@@ -52,6 +66,7 @@ def test_full_sync_returns_correct_workout_count(monkeypatch):
     mock_client.get_workouts.return_value = iter([_fake_workout("w1"), _fake_workout("w2")])
     mock_client.get_exercise_templates.return_value = iter([])
     mock_client.get_body_measurements.return_value = iter([])
+    mock_client.get_routines.return_value = iter([])
 
     counts = sync_mod.full_sync(mock_client)
 
@@ -68,6 +83,7 @@ def test_full_sync_returns_template_and_measurement_counts(monkeypatch):
     mock_client.get_workouts.return_value = iter([])
     mock_client.get_exercise_templates.return_value = iter([_fake_template("T1"), _fake_template("T2")])
     mock_client.get_body_measurements.return_value = iter([{"date": "2024-01-01", "weight_kg": 80.0}])
+    mock_client.get_routines.return_value = iter([])
 
     counts = sync_mod.full_sync(mock_client)
 
@@ -84,6 +100,7 @@ def test_full_sync_sets_last_sync_state(monkeypatch):
     mock_client.get_workouts.return_value = iter([])
     mock_client.get_exercise_templates.return_value = iter([])
     mock_client.get_body_measurements.return_value = iter([])
+    mock_client.get_routines.return_value = iter([])
 
     sync_mod.full_sync(mock_client)
 
@@ -121,6 +138,7 @@ def test_incremental_sync_handles_updated_events(monkeypatch):
     ])
     mock_client.get_exercise_templates.return_value = iter([])
     mock_client.get_body_measurements.return_value = iter([])
+    mock_client.get_routines.return_value = iter([])
 
     counts = sync_mod.incremental_sync(mock_client)
 
@@ -141,8 +159,83 @@ def test_incremental_sync_handles_deleted_events(monkeypatch):
     ])
     mock_client.get_exercise_templates.return_value = iter([])
     mock_client.get_body_measurements.return_value = iter([])
+    mock_client.get_routines.return_value = iter([])
 
     counts = sync_mod.incremental_sync(mock_client)
 
     assert counts["deleted"] == 2
     assert calls["deleted"] == ["gone1", "gone2"]
+
+
+# ── routine syncing ───────────────────────────────────────────────────────────
+
+def test_full_sync_syncs_routines(monkeypatch):
+    import hevy.sync as sync_mod
+    calls = _patch_sync(monkeypatch, sync_mod)
+
+    mock_client = MagicMock()
+    mock_client.get_workout_count.return_value = 0
+    mock_client.get_workouts.return_value = iter([])
+    mock_client.get_exercise_templates.return_value = iter([])
+    mock_client.get_body_measurements.return_value = iter([])
+    mock_client.get_routines.return_value = iter([_fake_routine("r1"), _fake_routine("r2")])
+
+    counts = sync_mod.full_sync(mock_client)
+
+    assert counts["routines"] == 2
+    assert calls["routines"] == ["r1", "r2"]
+
+
+def test_incremental_sync_syncs_routines(monkeypatch):
+    import hevy.sync as sync_mod
+    calls = _patch_sync(monkeypatch, sync_mod)
+    monkeypatch.setattr(sync_mod, "get_sync_state", lambda k: "2024-01-01T00:00:00Z")
+
+    mock_client = MagicMock()
+    mock_client.get_workout_events.return_value = iter([])
+    mock_client.get_exercise_templates.return_value = iter([])
+    mock_client.get_body_measurements.return_value = iter([])
+    mock_client.get_routines.return_value = iter([_fake_routine("r3")])
+
+    counts = sync_mod.incremental_sync(mock_client)
+
+    assert counts["routines"] == 1
+    assert calls["routines"] == ["r3"]
+
+
+def test_full_sync_calls_delete_stale_routines(monkeypatch):
+    import hevy.sync as sync_mod
+    _patch_sync(monkeypatch, sync_mod)
+
+    stale_calls = []
+    monkeypatch.setattr(sync_mod, "delete_stale_routines", lambda ids: stale_calls.append(ids))
+
+    mock_client = MagicMock()
+    mock_client.get_workout_count.return_value = 0
+    mock_client.get_workouts.return_value = iter([])
+    mock_client.get_exercise_templates.return_value = iter([])
+    mock_client.get_body_measurements.return_value = iter([])
+    mock_client.get_routines.return_value = iter([_fake_routine("r1")])
+
+    sync_mod.full_sync(mock_client)
+
+    assert stale_calls == [{"r1"}]
+
+
+def test_full_sync_passes_empty_set_to_delete_stale_when_no_routines(monkeypatch):
+    import hevy.sync as sync_mod
+    _patch_sync(monkeypatch, sync_mod)
+
+    stale_calls = []
+    monkeypatch.setattr(sync_mod, "delete_stale_routines", lambda ids: stale_calls.append(ids))
+
+    mock_client = MagicMock()
+    mock_client.get_workout_count.return_value = 0
+    mock_client.get_workouts.return_value = iter([])
+    mock_client.get_exercise_templates.return_value = iter([])
+    mock_client.get_body_measurements.return_value = iter([])
+    mock_client.get_routines.return_value = iter([])
+
+    sync_mod.full_sync(mock_client)
+
+    assert stale_calls == [set()]

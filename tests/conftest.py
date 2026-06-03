@@ -43,7 +43,8 @@ def tmp_db(db_path, monkeypatch) -> Path:
     # Patch every write helper to default to the test DB
     for fn_name in (
         "upsert_workout", "delete_workout", "upsert_exercise_template",
-        "upsert_body_measurement", "get_sync_state", "set_sync_state",
+        "upsert_body_measurement", "upsert_routine", "delete_stale_routines",
+        "get_routines_with_exercises", "get_sync_state", "set_sync_state",
     ):
         _orig = getattr(store_mod, fn_name)
 
@@ -88,6 +89,9 @@ def tmp_db(db_path, monkeypatch) -> Path:
     try:
         import ai.coach as coach_mod
         monkeypatch.setattr(coach_mod, "query", _query)
+        _orig_grwe = coach_mod.get_routines_with_exercises
+        monkeypatch.setattr(coach_mod, "get_routines_with_exercises",
+                            lambda: _orig_grwe(db_path=db_path))
     except Exception:
         pass
 
@@ -112,6 +116,35 @@ def seed_exercise_template(db_path, template_id=TEMPLATE_ID, muscle="chest"):
             "primary_muscle_group": muscle,
             "secondary_muscle_groups": [],
             "is_custom": False,
+        },
+        db_path=db_path,
+    )
+
+
+def seed_routine(db_path, routine_id, title="Test Routine", template_id=TEMPLATE_ID):
+    from db.store import upsert_routine
+    upsert_routine(
+        {
+            "id": routine_id,
+            "title": title,
+            "notes": None,
+            "folder_id": None,
+            "updated_at": "2024-01-01T00:00:00Z",
+            "created_at": "2024-01-01T00:00:00Z",
+            "exercises": [
+                {
+                    "exercise_template_id": template_id,
+                    "title": f"Exercise {template_id}",
+                    "notes": None,
+                    "rest_seconds": 90,
+                    "index": 0,
+                    "superset_id": None,
+                    "sets": [
+                        {"index": 0, "type": "normal", "weight_kg": 80.0, "reps": 8},
+                        {"index": 1, "type": "normal", "weight_kg": 80.0, "reps": 8},
+                    ],
+                }
+            ],
         },
         db_path=db_path,
     )
