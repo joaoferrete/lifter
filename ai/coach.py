@@ -72,8 +72,8 @@ def _build_context(weeks: int = 8, slim: bool = False) -> str:
     muscle_vol = muscle_group_summary(weeks)
     muscle_freq = muscle_group_frequency(weeks)
     sets_per_week = sets_per_muscle_per_week(weeks)
-    plateaus = detect_plateaus(weeks) if not slim else []
-    top_gains = top_progressions(weeks) if not slim else []
+    plateaus = detect_plateaus(weeks)
+    top_gains = top_progressions(weeks)
     prs = recent_prs(30)
     body = body_measurement_trend(weeks)
 
@@ -231,24 +231,20 @@ def _build_context(weeks: int = 8, slim: bool = False) -> str:
         lines += ["", f"## Saved routines ({len(saved_routines)} total)"]
         for r in saved_routines:
             lines.append(f"\n  ### {r['title']} (id: {r['id']})")
-            if r.get("notes") and not slim:
+            if r.get("notes"):
                 lines.append(f"  [notes: {sanitize_for_prompt(r['notes'], max_len=120)}]")
             for ex in r.get("exercises", []):
-                if slim:
-                    n = len([s for s in ex["sets"] if s.get("type") == "normal"])
-                    lines.append(f"    - {ex['title']}" + (f" ({n} sets)" if n else ""))
-                else:
-                    normal_sets = [s for s in ex["sets"] if s.get("type") == "normal"]
-                    set_desc = ""
-                    if normal_sets:
-                        reps_list = [str(s["reps"]) for s in normal_sets if s.get("reps")]
-                        weight = next((s["weight_kg"] for s in normal_sets if s.get("weight_kg")), None)
-                        count = len(normal_sets)
-                        if weight:
-                            set_desc = f" — {count}×{reps_list[0] if reps_list else '?'} @ {weight}kg"
-                        elif reps_list:
-                            set_desc = f" — {count}×{reps_list[0]}"
-                    lines.append(f"    - {ex['title']}{set_desc}")
+                normal_sets = [s for s in ex["sets"] if s.get("type") == "normal"]
+                set_desc = ""
+                if normal_sets:
+                    reps_list = [str(s["reps"]) for s in normal_sets if s.get("reps")]
+                    weight = next((s["weight_kg"] for s in normal_sets if s.get("weight_kg")), None)
+                    count = len(normal_sets)
+                    if weight:
+                        set_desc = f" — {count}×{reps_list[0] if reps_list else '?'} @ {weight}kg"
+                    elif reps_list:
+                        set_desc = f" — {count}×{reps_list[0]}"
+                lines.append(f"    - {ex['title']}{set_desc}")
 
     if known:
         lines += ["", "## Exercise library (use these IDs in routines)"]
