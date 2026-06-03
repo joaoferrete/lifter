@@ -151,13 +151,14 @@ def update_goal_fields(
 # ── goals check-in timing ─────────────────────────────────────────────────────
 
 def should_ask_goals() -> bool:
-    """True on first run or when more than 7 days have passed since last goals check-in."""
+    """True on first run or when more than N days have passed since last goals check-in."""
     last = get_pref("goals_last_asked")
     if not last:
         return True
     try:
+        days = int(get_pref("goals_checkin_days") or 7)
         dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
-        return (datetime.now(timezone.utc) - dt).days >= 7
+        return (datetime.now(timezone.utc) - dt).days >= days
     except Exception:
         return True
 

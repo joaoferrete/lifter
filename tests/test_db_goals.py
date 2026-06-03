@@ -75,6 +75,30 @@ def test_should_ask_goals_false_after_marking(tmp_db):
     assert should_ask_goals() is False
 
 
+def test_should_ask_goals_respects_goals_checkin_days_pref(tmp_db):
+    """goals_checkin_days pref overrides the default 7-day threshold."""
+    from datetime import datetime, timezone, timedelta
+    from db.goals import should_ask_goals, set_pref
+
+    ten_days_ago = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    set_pref("goals_last_asked", ten_days_ago)
+
+    # Default (7-day threshold): 10 days elapsed → should ask
+    assert should_ask_goals() is True
+
+    # 14-day threshold: 10 days < 14 → should NOT ask
+    set_pref("goals_checkin_days", "14")
+    assert should_ask_goals() is False
+
+    # 30-day threshold: 10 days < 30 → should NOT ask
+    set_pref("goals_checkin_days", "30")
+    assert should_ask_goals() is False
+
+    # Back to 7-day threshold: 10 days > 7 → should ask again
+    set_pref("goals_checkin_days", "7")
+    assert should_ask_goals() is True
+
+
 def test_compute_progress_frequency_goal(tmp_db):
     from db.goals import save_goal, compute_goal_progress
     seed_exercise_template(tmp_db)

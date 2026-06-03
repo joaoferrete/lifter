@@ -31,7 +31,7 @@ def weekly_volume(weeks: int = 8) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
     df["start_time"] = pd.to_datetime(df["start_time"], utc=True)
-    df["week"] = df["start_time"].dt.to_period("W").dt.start_time
+    df["week"] = df["start_time"].dt.tz_convert(None).dt.to_period("W").dt.start_time
     df["tonnage"] = df["weight_kg"] * df["reps"]
 
     return (
@@ -73,7 +73,7 @@ def sets_per_muscle_per_week(weeks: int = 8) -> dict[str, float]:
 
     df = pd.DataFrame(rows)
     df["start_time"] = pd.to_datetime(df["start_time"], utc=True)
-    df["week"] = df["start_time"].dt.to_period("W")
+    df["week"] = df["start_time"].dt.tz_convert(None).dt.to_period("W")
 
     total_weeks = df["week"].nunique() or 1
     counts = df.groupby("muscle").size() / total_weeks
