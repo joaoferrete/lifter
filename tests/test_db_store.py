@@ -1,6 +1,6 @@
 """Tests for the SQLite persistence layer."""
 import pytest
-from tests.conftest import seed_exercise_template, seed_workout, TEMPLATE_ID
+from tests.conftest import seed_exercise_template, seed_workout, seed_routine, TEMPLATE_ID
 
 
 def test_init_db_creates_all_tables(tmp_db):
@@ -13,6 +13,7 @@ def test_init_db_creates_all_tables(tmp_db):
         "fit_sleep", "fit_daily",
         "user_goals", "user_preferences", "chat_memories",
         "sync_state",
+        "routines", "routine_exercises", "routine_sets",
     }
     assert expected.issubset(tables), f"Missing tables: {expected - tables}"
 
@@ -99,3 +100,152 @@ def test_upsert_body_measurement(tmp_db):
     rows = query("SELECT * FROM body_measurements WHERE date = ?", ("2024-01-15",))
     assert len(rows) == 1
     assert rows[0]["weight_kg"] == 79.0
+
+
+# ── routines ──────────────────────────────────────────────────────────────────
+
+def test_upsert_routine_stores_title(tmp_db):
+    from db.store import query
+    seed_exercise_template(tmp_db)
+    seed_routine(tmp_db, "r1", title="Push Day")
+
+    rows = query("SELECT * FROM routines WHERE id = ?", ("r1",))
+    assert len(rows) == 1
+    assert rows[0]["title"] == "Push Day"
+
+
+def test_upsert_routine_stores_exercises_and_sets(tmp_db):
+    from db.store import query
+    seed_exercise_template(tmp_db)
+    seed_routine(tmp_db, "r2")
+
+    exercises = query("SELECT * FROM routine_exercises WHERE routine_id = ?", ("r2",))
+    assert len(exercises) == 1
+
+    sets = query(
+        "SELECT rs.* FROM routine_sets rs "
+        "JOIN routine_exercises re ON re.id = rs.routine_exercise_id "
+        "WHERE re.routine_id = ?",
+        ("r2",),
+    )
+    assert len(sets) == 2
+    assert {s["weight_kg"] for s in sets} == {80.0}
+
+
+def test_upsert_routine_replaces_exercises_on_update(tmp_db):
+    from db.store import upsert_routine, query
+    seed_exercise_template(tmp_db)
+    seed_routine(tmp_db, "r3")
+
+    # Update with a different exercise list (no sets)
+    upsert_routine(
+        {"id": "r3", "title": "Push Day v2", "notes": None, "exercises": []},
+        db_path=tmp_db,
+    )
+
+    rows = query("SELECT * FROM routines WHERE id = ?", ("r3",))
+    assert rows[0]["title"] == "Push Day v2"
+    exercises = query("SELECT * FROM routine_exercises WHERE routine_id = ?", ("r3",))
+    assert exercises == []
+
+
+def test_delete_routine_removes_row(tmp_db):
+    from db.store import delete_routine, query
+    seed_exercise_template(tmp_db)
+    seed_routine(tmp_db, "r4")
+
+    delete_routine("r4", db_path=tmp_db)
+
+    assert query("SELECT * FROM routines WHERE id = ?", ("r4",)) == []
+
+
+def test_delete_routine_cascades_to_exercises_and_sets(tmp_db):
+    from db.store import delete_routine, query
+    seed_exercise_template(tmp_db)
+    seed_routine(tmp_db, "r5")
+
+    # Confirm exercises + sets exist before delete
+    assert query("SELECT * FROM routine_exercises WHERE routine_id = ?", ("r5",)) != []
+
+    delete_routine("r5", db_path=tmp_db)
+
+    assert query("SELECT * FROM routine_exercises WHERE routine_id = ?", ("r5",)) == []
+
+
+def test_delete_stale_routines_removes_unlisted(tmp_db):
+    from db.store import delete_stale_routines, query
+    seed_exercise_template(tmp_db)
+    seed_routine(tmp_db, "keep1")
+    seed_routine(tmp_db, "keep2")
+    seed_routine(tmp_db, "stale1")
+
+    deleted = delete_stale_routines({"keep1", "keep2"}, db_path=tmp_db)
+
+    assert deleted == 1
+    assert query("SELECT id FROM routines WHERE id = ?", ("stale1",)) == []
+    assert query("SELECT id FROM routines WHERE id = ?", ("keep1",)) != []
+
+
+def test_delete_stale_routines_keeps_all_when_all_present(tmp_db):
+    from db.store import delete_stale_routines
+    seed_exercise_template(tmp_db)
+    seed_routine(tmp_db, "r1")
+    seed_routine(tmp_db, "r2")
+
+    deleted = delete_stale_routines({"r1", "r2"}, db_path=tmp_db)
+    assert deleted == 0
+
+
+def test_delete_stale_routines_empty_db_returns_zero(tmp_db):
+    from db.store import delete_stale_routines
+    deleted = delete_stale_routines({"nonexistent"}, db_path=tmp_db)
+    assert deleted == 0
+
+
+def test_get_routines_with_exercises_empty_db(tmp_db):
+    from db.store import get_routines_with_exercises
+    assert get_routines_with_exercises(db_path=tmp_db) == []
+
+
+def test_get_routines_with_exercises_returns_nested_structure(tmp_db):
+    from db.store import get_routines_with_exercises
+    seed_exercise_template(tmp_db)
+    seed_routine(tmp_db, "r-nested", title="Leg Day")
+
+    routines = get_routines_with_exercises(db_path=tmp_db)
+    assert len(routines) == 1
+    r = routines[0]
+    assert r["title"] == "Leg Day"
+    assert len(r["exercises"]) == 1
+    ex = r["exercises"][0]
+    assert ex["title"] is not None
+    assert len(ex["sets"]) == 2
+    assert ex["sets"][0]["weight_kg"] == 80.0
+
+
+def test_get_routines_with_exercises_uses_template_title_as_fallback(tmp_db):
+    from db.store import upsert_routine, get_routines_with_exercises
+    seed_exercise_template(tmp_db, template_id="T-FALLBACK", muscle="back")
+
+    # Exercise stored with no title — should fall back to exercise_templates.title
+    upsert_routine(
+        {
+            "id": "r-fb",
+            "title": "Pull Day",
+            "notes": None,
+            "exercises": [
+                {
+                    "exercise_template_id": "T-FALLBACK",
+                    "title": None,
+                    "notes": None,
+                    "rest_seconds": 60,
+                    "sets": [],
+                }
+            ],
+        },
+        db_path=tmp_db,
+    )
+
+    routines = get_routines_with_exercises(db_path=tmp_db)
+    ex = routines[0]["exercises"][0]
+    assert ex["title"] == "Exercise T-FALLBACK"

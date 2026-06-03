@@ -16,7 +16,7 @@ from analytics.volume import muscle_group_summary, sets_per_muscle_per_week
 from analytics.progression import detect_plateaus, top_progressions
 from analytics.frequency import workout_frequency, muscle_group_frequency
 from analytics.records import all_time_records, recent_prs, body_measurement_trend
-from db.store import query
+from db.store import query, get_routines_with_exercises
 from db.goals import goals_context_for_ai, get_pref, get_goals
 
 console = Console()
@@ -226,6 +226,26 @@ def _build_context(weeks: int = 8) -> str:
                 for b in bw:
                     lines.append(f"    - {b['title']}")
 
+    saved_routines = get_routines_with_exercises()
+    if saved_routines:
+        lines += ["", f"## Saved routines ({len(saved_routines)} total)"]
+        for r in saved_routines:
+            lines.append(f"\n  ### {r['title']} (id: {r['id']})")
+            if r.get("notes"):
+                lines.append(f"  [notes: {sanitize_for_prompt(r['notes'], max_len=120)}]")
+            for ex in r.get("exercises", []):
+                normal_sets = [s for s in ex["sets"] if s.get("type") == "normal"]
+                set_desc = ""
+                if normal_sets:
+                    reps_list = [str(s["reps"]) for s in normal_sets if s.get("reps")]
+                    weight = next((s["weight_kg"] for s in normal_sets if s.get("weight_kg")), None)
+                    count = len(normal_sets)
+                    if weight:
+                        set_desc = f" — {count}×{reps_list[0] if reps_list else '?'} @ {weight}kg"
+                    elif reps_list:
+                        set_desc = f" — {count}×{reps_list[0]}"
+                lines.append(f"    - {ex['title']}{set_desc}")
+
     if known:
         lines += ["", "## Exercise library (use these IDs in routines)"]
         for ex in known:
@@ -332,8 +352,11 @@ _CHAT_SYSTEM_BASE = (
     "Answer questions conversationally and reference their actual numbers.\n"
     "Be encouraging but honest. Keep answers concise unless asked to elaborate.\n"
     "TOOL USE RULES — follow these exactly:\n"
-    "- When the athlete asks you to create, send, push, or build a routine, you MUST call the "
+    "- When the athlete asks you to create, send, push, or build a new routine, you MUST call the "
     "push_routine tool immediately. Do NOT describe or list the routine in plain text. Just call the tool.\n"
+    "- When the athlete asks you to update, edit, modify, or change an existing routine, you MUST call "
+    "the update_routine tool using the routine_id from the Saved routines section. "
+    "Do NOT describe changes in plain text. Just call the tool.\n"
     "- When the athlete explicitly asks to change, add, or remove a goal, you MUST call the "
     "manage_goals tool — always describe the exact change in changes_summary so the user can confirm.\n"
     "- Never simulate tool actions in text. If an action requires a tool, call the tool.\n"
@@ -354,6 +377,33 @@ _PUSH_ROUTINE_TOOL: dict = {
                 "type": "array",
                 "description": (
                     "List of exercises. Each exercise object: "
+                    "{exercise_template_id: string (from library), title: string, "
+                    "rest_seconds: integer, notes: string, "
+                    "sets: [{type: 'warmup'|'normal'|'failure'|'dropset', weight_kg: number, reps: integer}]}"
+                ),
+                "items": {"type": "object"},
+            },
+        },
+    },
+}
+
+_UPDATE_ROUTINE_TOOL: dict = {
+    "name": "update_routine",
+    "description": "Update an existing workout routine in the user's Hevy app.",
+    "parameters": {
+        "type": "object",
+        "required": ["routine_id", "title", "exercises"],
+        "properties": {
+            "routine_id": {
+                "type": "string",
+                "description": "ID of the routine to update (from the Saved routines section)",
+            },
+            "title": {"type": "string"},
+            "notes": {"type": "string"},
+            "exercises": {
+                "type": "array",
+                "description": (
+                    "Complete updated exercise list. Each exercise object: "
                     "{exercise_template_id: string (from library), title: string, "
                     "rest_seconds: integer, notes: string, "
                     "sets: [{type: 'warmup'|'normal'|'failure'|'dropset', weight_kg: number, reps: integer}]}"
@@ -450,6 +500,68 @@ def _show_and_confirm_routine(routine: dict) -> dict:
             resp = HevyClient().create_routine(_stamp_routine(routine))
             routine_id = _routine_id(resp)
         console.print(f"[green]✓ Routine saved to Hevy[/green] (id: {routine_id})\n")
+        return {"success": True, "routine_id": routine_id}
+    except Exception as e:
+        console.print(f"[red]Failed: {e}[/red]\n")
+        return {"success": False, "error": str(e)}
+
+
+def _show_and_confirm_routine_update(fc_args: dict) -> dict:
+    """Show the proposed routine update, ask for confirmation, push if approved."""
+    from hevy.client import HevyClient
+    from db.store import upsert_routine
+
+    routine_id = str(fc_args.get("routine_id", ""))
+    new_routine = {
+        "title": fc_args.get("title"),
+        "notes": fc_args.get("notes"),
+        "exercises": fc_args.get("exercises", []),
+    }
+
+    # Look up current routine name from DB for reference
+    current_routines = get_routines_with_exercises()
+    current = next((r for r in current_routines if str(r["id"]) == routine_id), None)
+    current_title = current["title"] if current else routine_id
+
+    lines = [f"[bold]{new_routine.get('title')}[/bold]  [dim](updating: {current_title})[/dim]"]
+    if new_routine.get("notes"):
+        lines.append(f"[dim]{new_routine['notes']}[/dim]")
+    lines.append("")
+    for ex in new_routine.get("exercises", []):
+        if not isinstance(ex, dict):
+            continue
+        sets_desc = "  ".join(
+            f"[dim]{s.get('type', 'normal')}[/dim] {s.get('weight_kg') or 'BW'}kg×{s.get('reps', '?')}"
+            for s in ex.get("sets", [])
+            if isinstance(s, dict)
+        )
+        note = f"\n    [dim italic]{ex['notes']}[/dim italic]" if ex.get("notes") else ""
+        ex_title = ex.get("title") or ex.get("exercise_template_id", "Exercise")
+        lines.append(f"  • [bold]{ex_title}[/bold]  {sets_desc}{note}")
+
+    console.print(Panel("\n".join(lines), title="[bold yellow]Update routine[/bold yellow]", border_style="yellow"))
+
+    invalid_ids = [
+        ex.get("exercise_template_id", "")
+        for ex in new_routine.get("exercises", [])
+        if isinstance(ex, dict) and ex.get("exercise_template_id")
+        and not query("SELECT 1 FROM exercise_templates WHERE id = ?", (ex["exercise_template_id"],))
+    ]
+    if invalid_ids:
+        console.print(
+            f"[yellow]⚠ {len(invalid_ids)} exercise ID(s) not found in your library "
+            f"and will be skipped: {', '.join(invalid_ids[:3])}[/yellow]"
+        )
+
+    if not questionary.confirm("  Save these changes to your Hevy app?", default=True).ask():
+        console.print("[dim]Update cancelled.[/dim]\n")
+        return {"success": False, "message": "User declined"}
+
+    try:
+        with console.status("[dim]Updating routine in Hevy...[/dim]", spinner="dots"):
+            HevyClient().update_routine(routine_id, _stamp_routine(new_routine))
+            upsert_routine({"id": routine_id, **new_routine})
+        console.print(f"[green]✓ Routine updated[/green] (id: {routine_id})\n")
         return {"success": True, "routine_id": routine_id}
     except Exception as e:
         console.print(f"[red]Failed: {e}[/red]\n")
@@ -640,7 +752,7 @@ def start_enhanced_chat(weeks: int = 8) -> None:
         "</training_data>"
     )
 
-    session = create_chat_session(system=system, tools=[_PUSH_ROUTINE_TOOL, _MANAGE_GOALS_TOOL])
+    session = create_chat_session(system=system, tools=[_PUSH_ROUTINE_TOOL, _UPDATE_ROUTINE_TOOL, _MANAGE_GOALS_TOOL])
 
     console.rule("[bold cyan]Chat with AI Coach[/bold cyan]")
     console.print(
@@ -716,6 +828,8 @@ def start_enhanced_chat(weeks: int = 8) -> None:
             for tc in response.tool_calls:
                 if tc.name == "push_routine":
                     result = _show_and_confirm_routine(dict(tc.args))
+                elif tc.name == "update_routine":
+                    result = _show_and_confirm_routine_update(dict(tc.args))
                 elif tc.name == "manage_goals":
                     result = _handle_manage_goals(dict(tc.args))
                 else:

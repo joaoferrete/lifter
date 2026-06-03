@@ -129,10 +129,43 @@ def init_db(db_path: Path = DB_PATH) -> None:
                 category   TEXT DEFAULT 'general'
             );
 
+            CREATE TABLE IF NOT EXISTS routines (
+                id          TEXT PRIMARY KEY,
+                title       TEXT,
+                notes       TEXT,
+                folder_id   INTEGER,
+                updated_at  TEXT,
+                created_at  TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS routine_exercises (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                routine_id           TEXT NOT NULL REFERENCES routines(id) ON DELETE CASCADE,
+                exercise_template_id TEXT NOT NULL,
+                title                TEXT,
+                notes                TEXT,
+                rest_seconds         INTEGER,
+                idx                  INTEGER,
+                superset_id          INTEGER
+            );
+
+            CREATE TABLE IF NOT EXISTS routine_sets (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                routine_exercise_id INTEGER NOT NULL REFERENCES routine_exercises(id) ON DELETE CASCADE,
+                idx                 INTEGER,
+                type                TEXT,
+                weight_kg           REAL,
+                reps                INTEGER,
+                distance_meters     INTEGER,
+                duration_seconds    INTEGER,
+                custom_metric       REAL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_sets_workout ON workout_sets(workout_id);
             CREATE INDEX IF NOT EXISTS idx_sets_template ON workout_sets(exercise_template_id);
             CREATE INDEX IF NOT EXISTS idx_exercises_workout ON workout_exercises(workout_id);
             CREATE INDEX IF NOT EXISTS idx_workouts_start ON workouts(start_time);
+            CREATE INDEX IF NOT EXISTS idx_routine_ex_routine ON routine_exercises(routine_id);
         """)
 
 
@@ -271,3 +304,105 @@ def query(sql: str, params: tuple = (), db_path: Path = DB_PATH) -> list[dict]:
     with _conn(db_path) as conn:
         rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
+
+
+def upsert_routine(routine: dict, db_path: Path = DB_PATH) -> None:
+    with _conn(db_path) as conn:
+        conn.execute(
+            """INSERT INTO routines (id, title, notes, folder_id, updated_at, created_at)
+               VALUES (:id, :title, :notes, :folder_id, :updated_at, :created_at)
+               ON CONFLICT(id) DO UPDATE SET
+                 title=excluded.title, notes=excluded.notes,
+                 folder_id=excluded.folder_id, updated_at=excluded.updated_at""",
+            {
+                "id": routine["id"],
+                "title": routine.get("title"),
+                "notes": routine.get("notes"),
+                "folder_id": routine.get("folder_id"),
+                "updated_at": routine.get("updated_at"),
+                "created_at": routine.get("created_at"),
+            },
+        )
+        conn.execute("DELETE FROM routine_exercises WHERE routine_id=?", (routine["id"],))
+        for idx, exercise in enumerate(routine.get("exercises", [])):
+            cur = conn.execute(
+                """INSERT INTO routine_exercises
+                   (routine_id, exercise_template_id, title, notes, rest_seconds, idx, superset_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    routine["id"],
+                    exercise.get("exercise_template_id"),
+                    exercise.get("title"),
+                    exercise.get("notes"),
+                    exercise.get("rest_seconds"),
+                    exercise.get("index", idx),
+                    exercise.get("superset_id"),
+                ),
+            )
+            re_id = cur.lastrowid
+            for s_idx, s in enumerate(exercise.get("sets", [])):
+                conn.execute(
+                    """INSERT INTO routine_sets
+                       (routine_exercise_id, idx, type, weight_kg, reps,
+                        distance_meters, duration_seconds, custom_metric)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        re_id,
+                        s.get("index", s_idx),
+                        s.get("type"),
+                        s.get("weight_kg"),
+                        s.get("reps"),
+                        s.get("distance_meters"),
+                        s.get("duration_seconds"),
+                        s.get("custom_metric"),
+                    ),
+                )
+
+
+def delete_routine(routine_id: str, db_path: Path = DB_PATH) -> None:
+    with _conn(db_path) as conn:
+        conn.execute("DELETE FROM routines WHERE id=?", (routine_id,))
+
+
+def delete_stale_routines(keep_ids: set, db_path: Path = DB_PATH) -> int:
+    """Delete routines whose IDs are not in keep_ids. Returns count deleted."""
+    with _conn(db_path) as conn:
+        local_ids = {r[0] for r in conn.execute("SELECT id FROM routines").fetchall()}
+        stale = local_ids - {str(i) for i in keep_ids}
+        for sid in stale:
+            conn.execute("DELETE FROM routines WHERE id=?", (sid,))
+        return len(stale)
+
+
+def get_routines_with_exercises(db_path: Path = DB_PATH) -> list[dict]:
+    """Return all routines with their exercises and sets, joined with exercise template names."""
+    with _conn(db_path) as conn:
+        routines = [
+            dict(r) for r in conn.execute(
+                "SELECT id, title, notes FROM routines ORDER BY title"
+            ).fetchall()
+        ]
+        for r in routines:
+            exercises = [
+                dict(e) for e in conn.execute(
+                    """SELECT re.id, re.idx,
+                              COALESCE(re.title, et.title, re.exercise_template_id) AS title,
+                              re.notes, re.rest_seconds
+                       FROM routine_exercises re
+                       LEFT JOIN exercise_templates et ON et.id = re.exercise_template_id
+                       WHERE re.routine_id = ?
+                       ORDER BY re.idx""",
+                    (r["id"],),
+                ).fetchall()
+            ]
+            for ex in exercises:
+                ex["sets"] = [
+                    dict(s) for s in conn.execute(
+                        """SELECT type, weight_kg, reps
+                           FROM routine_sets WHERE routine_exercise_id = ?
+                           ORDER BY idx""",
+                        (ex["id"],),
+                    ).fetchall()
+                ]
+            r["exercises"] = exercises
+        return routines
