@@ -975,9 +975,9 @@ def _do_coach():
     hs = result.get("health_score")
     cs = result.get("combined_score")
     score_items = [("Training", ws), ("Health", hs), ("Overall", cs)]
-    score_items = [(l, v) for l, v in score_items if v is not None]
+    score_items = [(lbl, v) for lbl, v in score_items if v is not None]
     if score_items:
-        score_lines = [_fmt_score_bar(label, int(val), bar_width=16) for label, val in score_items]
+        score_lines = [_fmt_score_bar(lbl, int(val), bar_width=16) for lbl, val in score_items]
         console.print(Panel(
             "\n".join(score_lines),
             title="[bold]Performance Scores[/bold]",
