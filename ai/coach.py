@@ -274,7 +274,8 @@ a JSON response with this exact structure:
         "exercise_template_id": "<id from the exercise library>",
         "title": "<exercise name>",
         "rest_seconds": 90,
-        "notes": "<cue or note>",
+        "notes": "<HOW TO PERFORM: step-by-step execution cues. ATTENTION: key form points, safety tips, and common mistakes to avoid>",
+        "benefits": "<2-3 sentences on the main benefits of this exercise for the athlete's goals>",
         "sets": [
           {"type": "warmup", "weight_kg": null, "reps": 10},
           {"type": "normal", "weight_kg": <number>, "reps": <number>}
@@ -289,6 +290,7 @@ Rules:
 - Only use exercise_template_ids from the "Exercise library" section.
 - The routine should target 4-6 exercises and address identified weaknesses.
 - Set weights should reflect the athlete's current strength level.
+- Every exercise MUST have a notes field with execution instructions and attention points, and a benefits field.
 - Return ONLY the JSON object, no markdown fences or extra text.\
 """
 
@@ -363,7 +365,11 @@ _CHAT_SYSTEM_BASE = (
     "manage_goals tool — always describe the exact change in changes_summary so the user can confirm.\n"
     "- Never simulate tool actions in text. If an action requires a tool, call the tool.\n"
     "Only use exercise_template_ids from the exercise library provided.\n"
-    "Address the athlete by their name when appropriate."
+    "Address the athlete by their name when appropriate.\n"
+    "EXERCISE NOTES RULES — for every exercise in any routine you create or update:\n"
+    "- notes field MUST contain: step-by-step execution instructions followed by key attention points "
+    "(form cues, safety tips, common mistakes to avoid).\n"
+    "- benefits field MUST contain 2-3 sentences explaining the main benefits of that exercise for the athlete's goals."
 )
 
 _PUSH_ROUTINE_TOOL: dict = {
@@ -380,7 +386,9 @@ _PUSH_ROUTINE_TOOL: dict = {
                 "description": (
                     "List of exercises. Each exercise object: "
                     "{exercise_template_id: string (from library), title: string, "
-                    "rest_seconds: integer, notes: string, "
+                    "rest_seconds: integer, "
+                    "notes: string (REQUIRED: step-by-step execution instructions + key attention points for form/safety), "
+                    "benefits: string (REQUIRED: 2-3 sentences on the main benefits for the athlete's goals), "
                     "sets: [{type: 'warmup'|'normal'|'failure'|'dropset', weight_kg: number, reps: integer}]}"
                 ),
                 "items": {"type": "object"},
@@ -407,7 +415,9 @@ _UPDATE_ROUTINE_TOOL: dict = {
                 "description": (
                     "Complete updated exercise list. Each exercise object: "
                     "{exercise_template_id: string (from library), title: string, "
-                    "rest_seconds: integer, notes: string, "
+                    "rest_seconds: integer, "
+                    "notes: string (REQUIRED: step-by-step execution instructions + key attention points for form/safety), "
+                    "benefits: string (REQUIRED: 2-3 sentences on the main benefits for the athlete's goals), "
                     "sets: [{type: 'warmup'|'normal'|'failure'|'dropset', weight_kg: number, reps: integer}]}"
                 ),
                 "items": {"type": "object"},
@@ -454,6 +464,27 @@ _MANAGE_GOALS_TOOL: dict = {
 
 
 # ── tool handlers ─────────────────────────────────────────────────────────────
+
+def _show_exercise_benefits(exercises: list) -> None:
+    """Display a benefits panel for each exercise that has a benefits field."""
+    benefit_lines = []
+    for ex in exercises:
+        if not isinstance(ex, dict):
+            continue
+        benefits = ex.get("benefits", "").strip()
+        if not benefits:
+            continue
+        title = ex.get("title") or ex.get("exercise_template_id", "Exercise")
+        benefit_lines.append(f"[bold]{title}[/bold]")
+        benefit_lines.append(f"  {benefits}")
+        benefit_lines.append("")
+    if benefit_lines:
+        console.print(Panel(
+            "\n".join(benefit_lines).strip(),
+            title="[bold green]Exercise Benefits[/bold green]",
+            border_style="green",
+        ))
+
 
 def _show_and_confirm_routine(routine: dict) -> dict:
     """Show the proposed routine, ask for confirmation, push if approved. Returns tool result."""
@@ -502,6 +533,7 @@ def _show_and_confirm_routine(routine: dict) -> dict:
             resp = HevyClient().create_routine(_stamp_routine(routine))
             routine_id = _routine_id(resp)
         console.print(f"[green]✓ Routine saved to Hevy[/green] (id: {routine_id})\n")
+        _show_exercise_benefits(routine.get("exercises", []))
         return {"success": True, "routine_id": routine_id}
     except Exception as e:
         console.print(f"[red]Failed: {e}[/red]\n")
@@ -564,6 +596,7 @@ def _show_and_confirm_routine_update(fc_args: dict) -> dict:
             HevyClient().update_routine(routine_id, _stamp_routine(new_routine))
             upsert_routine({"id": routine_id, **new_routine})
         console.print(f"[green]✓ Routine updated[/green] (id: {routine_id})\n")
+        _show_exercise_benefits(new_routine.get("exercises", []))
         return {"success": True, "routine_id": routine_id}
     except Exception as e:
         console.print(f"[red]Failed: {e}[/red]\n")

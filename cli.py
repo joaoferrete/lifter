@@ -825,8 +825,10 @@ def _do_coach():
             if client:
                 try:
                     from hevy.client import _routine_id
+                    from ai.coach import _show_exercise_benefits
                     resp = push_routine_to_hevy(routine)
                     console.print(f"\n[green]✓ Routine pushed to Hevy![/green] (id: {_routine_id(resp)})")
+                    _show_exercise_benefits(routine.get("exercises", []))
                 except Exception as e:
                     console.print(f"[red]{e}[/red]")
 
