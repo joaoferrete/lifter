@@ -3,18 +3,18 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from config import DB_PATH
+import config
 
 
-def _conn(db_path: Path = DB_PATH) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
+def _conn(db_path: Path | None = None) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path if db_path is not None else config.DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
-def init_db(db_path: Path = DB_PATH) -> None:
+def init_db(db_path: Path | None = None) -> None:
     with _conn(db_path) as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS workouts (
@@ -169,7 +169,7 @@ def init_db(db_path: Path = DB_PATH) -> None:
         """)
 
 
-def upsert_workout(workout: dict, db_path: Path = DB_PATH) -> None:
+def upsert_workout(workout: dict, db_path: Path | None = None) -> None:
     with _conn(db_path) as conn:
         conn.execute(
             """INSERT INTO workouts (id, title, description, routine_id, start_time, end_time, updated_at, created_at)
@@ -228,12 +228,12 @@ def upsert_workout(workout: dict, db_path: Path = DB_PATH) -> None:
                 )
 
 
-def delete_workout(workout_id: str, db_path: Path = DB_PATH) -> None:
+def delete_workout(workout_id: str, db_path: Path | None = None) -> None:
     with _conn(db_path) as conn:
         conn.execute("DELETE FROM workouts WHERE id=?", (workout_id,))
 
 
-def upsert_exercise_template(template: dict, db_path: Path = DB_PATH) -> None:
+def upsert_exercise_template(template: dict, db_path: Path | None = None) -> None:
     with _conn(db_path) as conn:
         conn.execute(
             """INSERT INTO exercise_templates
@@ -255,7 +255,7 @@ def upsert_exercise_template(template: dict, db_path: Path = DB_PATH) -> None:
         )
 
 
-def upsert_body_measurement(m: dict, db_path: Path = DB_PATH) -> None:
+def upsert_body_measurement(m: dict, db_path: Path | None = None) -> None:
     with _conn(db_path) as conn:
         conn.execute(
             """INSERT INTO body_measurements
@@ -286,13 +286,13 @@ def upsert_body_measurement(m: dict, db_path: Path = DB_PATH) -> None:
         )
 
 
-def get_sync_state(key: str, db_path: Path = DB_PATH) -> str | None:
+def get_sync_state(key: str, db_path: Path | None = None) -> str | None:
     with _conn(db_path) as conn:
         row = conn.execute("SELECT value FROM sync_state WHERE key=?", (key,)).fetchone()
         return row["value"] if row else None
 
 
-def set_sync_state(key: str, value: str, db_path: Path = DB_PATH) -> None:
+def set_sync_state(key: str, value: str, db_path: Path | None = None) -> None:
     with _conn(db_path) as conn:
         conn.execute(
             "INSERT INTO sync_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -300,13 +300,13 @@ def set_sync_state(key: str, value: str, db_path: Path = DB_PATH) -> None:
         )
 
 
-def query(sql: str, params: tuple = (), db_path: Path = DB_PATH) -> list[dict]:
+def query(sql: str, params: tuple = (), db_path: Path | None = None) -> list[dict]:
     with _conn(db_path) as conn:
         rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
 
-def upsert_routine(routine: dict, db_path: Path = DB_PATH) -> None:
+def upsert_routine(routine: dict, db_path: Path | None = None) -> None:
     with _conn(db_path) as conn:
         conn.execute(
             """INSERT INTO routines (id, title, notes, folder_id, updated_at, created_at)
@@ -359,12 +359,12 @@ def upsert_routine(routine: dict, db_path: Path = DB_PATH) -> None:
                 )
 
 
-def delete_routine(routine_id: str, db_path: Path = DB_PATH) -> None:
+def delete_routine(routine_id: str, db_path: Path | None = None) -> None:
     with _conn(db_path) as conn:
         conn.execute("DELETE FROM routines WHERE id=?", (routine_id,))
 
 
-def delete_stale_routines(keep_ids: set, db_path: Path = DB_PATH) -> int:
+def delete_stale_routines(keep_ids: set, db_path: Path | None = None) -> int:
     """Delete routines whose IDs are not in keep_ids. Returns count deleted."""
     with _conn(db_path) as conn:
         local_ids = {r[0] for r in conn.execute("SELECT id FROM routines").fetchall()}
@@ -374,7 +374,7 @@ def delete_stale_routines(keep_ids: set, db_path: Path = DB_PATH) -> int:
         return len(stale)
 
 
-def get_routines_with_exercises(db_path: Path = DB_PATH) -> list[dict]:
+def get_routines_with_exercises(db_path: Path | None = None) -> list[dict]:
     """Return all routines with their exercises and sets via a single JOIN query."""
     with _conn(db_path) as conn:
         rows = conn.execute(

@@ -11,7 +11,8 @@ from rich.table import Table
 from rich import box
 
 from rich.markup import escape as _esc
-from config import HEVY_API_KEY, AI_PROVIDER, get_provider_api_key
+import config
+from config import AI_PROVIDER, get_provider_api_key
 from db.store import init_db, query
 from db.goals import (
     get_pref, set_pref, get_goals, clear_goals, save_goal,
@@ -65,8 +66,8 @@ def _fmt_duration(start_iso: str, end_iso: str) -> str:
 
 
 def _require_hevy() -> Optional[HevyClient]:
-    if not HEVY_API_KEY:
-        console.print("[red]HEVY_API_KEY not set in .env[/red]")
+    if not config.HEVY_API_KEY:
+        console.print("[red]Hevy API key not set. Go to Settings → Profiles to add it.[/red]")
         return None
     return HevyClient()
 
@@ -1246,6 +1247,127 @@ def _do_data_reset():
             return  # DB is gone — exit all the way back to main
 
 
+def _do_create_profile_flow() -> str:
+    """Interactive profile creation. Returns the new slug."""
+    from profiles import create_profile
+    name = (questionary.text("  Profile name:", style=STYLE).ask() or "").strip()
+    if not name:
+        name = "New Profile"
+    api_key = (questionary.text(
+        "  Hevy API key (leave blank to set later):",
+        style=STYLE,
+    ).ask() or "").strip()
+    profile = create_profile(name, hevy_api_key=api_key)
+    console.print(f"[green]✓ Profile '{_esc(name)}' created.[/green]")
+    return profile["slug"]
+
+
+def _do_profiles_menu() -> None:
+    from profiles import (
+        list_profiles, get_active_slug, activate_profile, set_active_slug,
+        rename_profile, delete_profile, get_profile_name, update_profile_key,
+    )
+
+    while True:
+        console.clear()
+        active_slug = get_active_slug()
+        active_name = get_profile_name(active_slug) if active_slug else "None"
+        profiles = list_profiles()
+
+        console.print(Panel(
+            f"Active profile: [bold]{_esc(active_name)}[/bold]  ({len(profiles)} total)",
+            title="[bold]Profiles[/bold]",
+            border_style="cyan",
+            padding=(0, 2),
+        ))
+
+        action = questionary.select(
+            "Profiles:",
+            choices=[
+                questionary.Choice("  Switch profile",         value="switch"),
+                questionary.Choice("  Create new profile",     value="create"),
+                questionary.Choice("  Rename current profile", value="rename"),
+                questionary.Choice("  Update Hevy API key",    value="apikey"),
+                questionary.Choice("  Delete a profile",       value="delete"),
+                questionary.Separator("  ───────────────────────────────────────"),
+                questionary.Choice("  Back",                   value="back"),
+            ],
+            style=STYLE,
+        ).ask()
+
+        if not action or action == "back":
+            return
+
+        if action == "switch":
+            if len(profiles) <= 1:
+                console.print("[dim]Only one profile exists. Create another to switch.[/dim]")
+                questionary.press_any_key_to_continue(style=STYLE).ask()
+                continue
+            choices = [
+                questionary.Choice(
+                    f"  {p['name']}{' (active)' if p['slug'] == active_slug else ''}",
+                    value=p["slug"],
+                )
+                for p in profiles
+            ]
+            choices.append(questionary.Separator("  ──────────────────────────────────"))
+            choices.append(questionary.Choice("  Cancel", value=None))
+            slug = questionary.select("Switch to:", choices=choices, style=STYLE).ask()
+            if slug and slug != active_slug:
+                set_active_slug(slug)
+                console.print(f"[green]Switching to '{_esc(get_profile_name(slug))}'...[/green]")
+                import os as _os, sys as _sys
+                _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
+
+        elif action == "create":
+            slug = _do_create_profile_flow()
+            if questionary.confirm("  Switch to new profile now?", default=True, style=STYLE).ask():
+                set_active_slug(slug)
+                import os as _os, sys as _sys
+                _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
+
+        elif action == "rename":
+            if active_slug:
+                new_name = (questionary.text(
+                    f"  New name for '{_esc(active_name)}':",
+                    style=STYLE,
+                ).ask() or "").strip()
+                if new_name:
+                    rename_profile(active_slug, new_name)
+                    console.print(f"[green]✓ Profile renamed to '{_esc(new_name)}'[/green]")
+
+        elif action == "apikey":
+            if active_slug:
+                new_key = (questionary.text(
+                    "  New Hevy API key:",
+                    style=STYLE,
+                ).ask() or "").strip()
+                if new_key:
+                    update_profile_key(active_slug, new_key)
+                    config.HEVY_API_KEY = new_key
+                    console.print("[green]✓ Hevy API key updated.[/green]")
+
+        elif action == "delete":
+            others = [p for p in profiles if p["slug"] != active_slug]
+            if not others:
+                console.print("[dim]Cannot delete the only profile.[/dim]")
+                questionary.press_any_key_to_continue(style=STYLE).ask()
+                continue
+            choices = [questionary.Choice(f"  {p['name']}", value=p["slug"]) for p in others]
+            choices.append(questionary.Separator("  ──────────────────────────────────"))
+            choices.append(questionary.Choice("  Cancel", value=None))
+            slug = questionary.select("Delete which profile?", choices=choices, style=STYLE).ask()
+            if slug:
+                pname = get_profile_name(slug)
+                if questionary.confirm(
+                    f"  Delete '{_esc(pname)}'? This cannot be undone.",
+                    default=False,
+                    style=STYLE,
+                ).ask():
+                    delete_profile(slug)
+                    console.print(f"[green]✓ Profile '{_esc(pname)}' deleted.[/green]")
+
+
 def _do_profile_settings() -> None:
     name = get_pref("display_name") or ""
     console.print(Panel(
@@ -1346,20 +1468,23 @@ def _do_settings() -> None:
         action = questionary.select(
             "Settings:",
             choices=[
-                questionary.Choice("  Profile      (display name)",               value="profile"),
-                questionary.Choice("  Preferences  (units, sync, check-in)",      value="prefs"),
-                questionary.Choice("  AI Coach     (context mode, language)",      value="ai"),
+                questionary.Choice("  Profiles     (switch, create, rename, delete)", value="profiles"),
+                questionary.Choice("  Profile      (display name)",                   value="profile"),
+                questionary.Choice("  Preferences  (units, sync, check-in)",          value="prefs"),
+                questionary.Choice("  AI Coach     (context mode, language)",          value="ai"),
                 questionary.Separator("  ───────────────────────────────────────"),
-                questionary.Choice("  Reset data",                                value="reset"),
+                questionary.Choice("  Reset data",                                    value="reset"),
                 questionary.Separator("  ───────────────────────────────────────"),
-                questionary.Choice("  Back",                                      value="back"),
+                questionary.Choice("  Back",                                          value="back"),
             ],
             style=STYLE,
         ).ask()
 
         if not action or action == "back":
             return
-        if action == "profile":
+        if action == "profiles":
+            _do_profiles_menu()
+        elif action == "profile":
             _do_profile_settings()
         elif action == "prefs":
             _do_preferences_settings()
@@ -1652,7 +1777,94 @@ def _build_menu() -> tuple:
     return items, default
 
 
+def _bootstrap_profiles() -> None:
+    """Select or create a profile before any DB operations."""
+    import shutil as _shutil
+    from pathlib import Path as _Path
+    from profiles import (
+        PROFILES_FILE, PROFILES_DIR, list_profiles, get_active_slug,
+        set_active_slug, activate_profile, create_profile,
+    )
+
+    project_dir = _Path(__file__).resolve().parent
+    old_db    = project_dir / "hevy.db"
+    old_token = project_dir / "fit_token.json"
+
+    # Migration: existing single-user hevy.db with no profiles.json yet
+    if not PROFILES_FILE.exists() and old_db.exists():
+        console.print()
+        console.print(Panel(
+            "Lifter now supports multiple profiles.\n"
+            "Your existing data will be migrated to a named profile.",
+            title="[bold cyan]Profile Migration[/bold cyan]",
+            border_style="cyan",
+            padding=(0, 2),
+        ))
+        name = (questionary.text(
+            "  Profile name (e.g. your name):",
+            default="Default",
+            style=STYLE,
+        ).ask() or "Default").strip()
+
+        profile = create_profile(name, hevy_api_key=config.HEVY_API_KEY)
+        slug = profile["slug"]
+        profile_dir = PROFILES_DIR / slug
+        _shutil.move(str(old_db), profile_dir / "hevy.db")
+        if old_token.exists():
+            _shutil.move(str(old_token), profile_dir / "fit_token.json")
+        set_active_slug(slug)
+        activate_profile(slug)
+        console.print(f"[green]✓ Profile '{_esc(name)}' created and data migrated.[/green]")
+        console.print()
+        return
+
+    profiles = list_profiles()
+
+    if not profiles:
+        # First run — prompt for name and Hevy API key
+        console.print()
+        console.rule("[bold cyan]Welcome to Lifter[/bold cyan]")
+        name = (questionary.text(
+            "  Your name (for the AI coach):",
+            default="Athlete",
+            style=STYLE,
+        ).ask() or "Athlete").strip()
+        api_key = (questionary.text(
+            "  Hevy API key (hevy.com → Settings → Developer):",
+            style=STYLE,
+        ).ask() or "").strip()
+        profile = create_profile(name, hevy_api_key=api_key)
+        activate_profile(profile["slug"])
+        console.print()
+        return
+
+    if len(profiles) == 1:
+        activate_profile(profiles[0]["slug"])
+        return
+
+    # Multiple profiles — show selector
+    last = get_active_slug()
+    choices = []
+    for p in profiles:
+        suffix = " (last used)" if p["slug"] == last else ""
+        choices.append(questionary.Choice(f"  {p['name']}{suffix}", value=p["slug"]))
+    choices.append(questionary.Separator("  ──────────────────────────────────"))
+    choices.append(questionary.Choice("  + Create new profile", value="_new"))
+
+    console.clear()
+    slug = questionary.select("Select profile:", choices=choices, style=STYLE).ask()
+
+    if not slug:
+        slug = last or profiles[0]["slug"]
+    elif slug == "_new":
+        slug = _do_create_profile_flow()
+
+    set_active_slug(slug)
+    activate_profile(slug)
+
+
 def main():
+    _bootstrap_profiles()
     init_db()
     _check_goals_and_checkin()
     _check_stale_sync()

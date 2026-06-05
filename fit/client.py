@@ -7,10 +7,10 @@ FIT_BASE = "https://www.googleapis.com/fitness/v1/users/me"
 
 class FitClient:
     def __init__(self):
-        from fit.auth import get_credentials, disconnect, TOKEN_FILE
+        from fit.auth import get_credentials, disconnect, _token_file
         from google.auth.transport.requests import Request
 
-        self._token_file = TOKEN_FILE
+        self._token_file = _token_file()
         self._disconnect = disconnect
         self._creds = get_credentials()
         self._refresh = Request()
