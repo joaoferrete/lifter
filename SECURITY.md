@@ -8,7 +8,7 @@ Only the latest commit on `main` is actively maintained.
 
 **Please do not open a public GitHub issue for security vulnerabilities.**
 
-Report privately by emailing **joao.ferrete@cobli.co** with:
+Report privately by emailing **joao@golister.app** with:
 
 - A description of the vulnerability
 - Steps to reproduce
