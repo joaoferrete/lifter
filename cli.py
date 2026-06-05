@@ -479,10 +479,14 @@ def _weekly_checkin() -> None:
     ).ask()
 
     if answer == "update":
+        _dlog("GOAL", "Weekly check-in: user chose to update goals")
         run_goals_wizard(is_update=True)
     elif answer == "keep":
+        _dlog("GOAL", "Weekly check-in: goals confirmed")
         mark_goals_asked()
         console.print("  [dim]Goals confirmed. See you next week![/dim]\n")
+    elif answer == "skip":
+        _dlog("GOAL", "Weekly check-in: skipped")
     # skip: don't update the timestamp so we ask again next run
 
 
@@ -754,6 +758,7 @@ def _do_sync():
     if not sync_type:
         return
 
+    _dlog("SYNC", "Manual sync started", type=sync_type)
     console.print()
     is_full = sync_type == "full"
     counts = full_sync(client) if is_full else incremental_sync(client)
@@ -960,6 +965,7 @@ def _do_goals():
     elif action == "reset":
         if questionary.confirm("  Clear all goals and start fresh?", default=False, style=STYLE).ask():
             clear_goals()
+            _dlog("GOAL", "Goals cleared and wizard restarted")
             run_goals_wizard()
 
 
@@ -978,11 +984,13 @@ def _do_coach():
 
     from ai.coach import get_coaching, push_routine_to_hevy
 
+    _dlog("AI", "Coaching report requested", weeks=weeks)
     console.rule("[bold cyan]AI Coaching Report[/bold cyan]")
     try:
         result = get_coaching(weeks=weeks)
     except Exception as e:
         from ai.coach import _friendly_error
+        _dlog("ERROR", f"Coaching report failed: {type(e).__name__}", error=str(e)[:200])
         console.print(f"[red]{_friendly_error(e)}[/red]")
         return
 
@@ -1646,6 +1654,7 @@ def _do_fit():
     elif action == "disconnect":
         if questionary.confirm("  Disconnect Google Fit? (local data stays)", default=False, style=STYLE).ask():
             disconnect()
+            _dlog("SETTING", "Google Fit disconnected")
             console.print("[dim]Disconnected. Local Fit data kept in DB.[/dim]")
 
 
@@ -1673,11 +1682,14 @@ def _fit_setup() -> None:
     try:
         from fit.auth import get_credentials, CREDENTIALS_FILE
         get_credentials()
+        _dlog("SETTING", "Google Fit connected")
         console.print("\n[bold green]✓ Connected to Google Fit![/bold green]")
         console.print("[dim]Run 'Google Fit → Sync health data' to import your data.[/dim]\n")
     except FileNotFoundError as e:
+        _dlog("ERROR", "Google Fit connect failed: credentials file not found")
         console.print(f"\n[red]{e}[/red]")  # safe: our own message, no secrets
     except Exception as e:
+        _dlog("ERROR", f"Google Fit connect failed: {type(e).__name__}", error=str(e)[:200])
         console.print("\n[red]Authentication failed. Check that fit_credentials.json is valid.[/red]")
         console.print(f"[dim]{type(e).__name__}[/dim]")
 
@@ -1809,9 +1821,13 @@ def _check_goals_and_checkin() -> None:
             if questionary.confirm(
                 "  No goals set yet. Set your training goals now?", default=True, style=STYLE
             ).ask():
+                _dlog("GOAL", "First-run goals wizard started")
                 run_goals_wizard()
+            else:
+                _dlog("GOAL", "First-run goals wizard declined")
         else:
             # Weekly check-in
+            _dlog("GOAL", "Weekly check-in triggered")
             _weekly_checkin()
 
 
