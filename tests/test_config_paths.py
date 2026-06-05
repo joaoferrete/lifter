@@ -27,9 +27,9 @@ def test_credentials_file_is_under_project_dir():
 
 
 def test_token_file_is_sibling_of_db():
-    from fit.auth import TOKEN_FILE
-    from config import DB_PATH
-    assert TOKEN_FILE.parent == DB_PATH.parent
+    from fit.auth import _token_file
+    import config
+    assert _token_file().parent == config.DB_PATH.parent
 
 
 # ── resolution logic (mirrors config.py, tested in isolation) ─────────────────

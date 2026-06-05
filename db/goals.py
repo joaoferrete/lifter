@@ -2,11 +2,11 @@
 import sqlite3
 from datetime import datetime, timezone
 
-from config import DB_PATH
+import config
 
 
 def _conn():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(config.DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     return conn

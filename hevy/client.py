@@ -1,14 +1,15 @@
 import httpx
 from typing import Iterator
-from config import BASE_URL, HEVY_API_KEY
+import config
+from config import BASE_URL
 
 _VALID_SET_TYPES = {"warmup", "normal", "failure", "dropset"}
 
 
 class HevyClient:
-    def __init__(self, api_key: str = HEVY_API_KEY):
-        self.api_key = api_key
-        self._headers = {"api-key": api_key, "Content-Type": "application/json"}
+    def __init__(self, api_key: str | None = None):
+        self.api_key = api_key or config.HEVY_API_KEY
+        self._headers = {"api-key": self.api_key, "Content-Type": "application/json"}
 
     def _get(self, path: str, params: dict | None = None) -> dict:
         url = f"{BASE_URL}{path}"
@@ -149,7 +150,7 @@ def _raise(resp: httpx.Response, path: str) -> None:
         else:
             msg = "Hevy API rate limit reached. Please wait a moment and try again. (error 429)"
     elif code == 401:
-        msg = "Hevy API key is invalid or expired. Check your HEVY_API_KEY in .env. (error 401)"
+        msg = "Hevy API key is invalid or expired. Update it via Settings → Profiles. (error 401)"
     elif code == 403:
         msg = "Access denied to Hevy. Check your API key permissions. (error 403)"
     elif code == 404:

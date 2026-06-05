@@ -48,18 +48,15 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Open `.env` and fill in your keys (see sections below).
+Open `.env` and fill in your AI provider key (see sections below). Your Hevy API key is **not** set here — it is entered when you first run Lifter and stored per-profile.
 
 ### 3. Get your Hevy API key
 
 1. Log in at [hevy.com](https://hevy.com)
 2. Go to **Profile → Settings → Developer**
 3. Copy your API key
-4. Add to `.env`:
 
-```
-HEVY_API_KEY=your-key-here
-```
+Lifter will ask for it on first run. You can also update it later via **Settings → Profiles → Update Hevy API key**.
 
 ### 4. Set up an AI provider
 
@@ -163,7 +160,7 @@ This uses [pipx](https://pipx.pypa.io), which installs Python applications into 
 make install
 ```
 
-`lifter` is now available everywhere. The first time you run it from a new directory it will still read your `.env` and use the database in this folder.
+`lifter` is now available everywhere. Profiles and databases are stored under the `profiles/` directory inside the project folder — no matter which directory you run `lifter` from, it always uses the same profiles.
 
 ### Update
 
@@ -186,6 +183,36 @@ make uninstall
 ```
 
 > **Note:** `pipx` installs commands to `~/.local/bin`. Make sure that directory is on your `PATH` (most modern shells include it by default). If `lifter` is not found after install, add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile and reload it.
+
+---
+
+## Profiles
+
+Lifter supports multiple independent profiles on the same machine — useful if two athletes share a computer, or if you want to track separate training blocks.
+
+Each profile has its own:
+- Workout history, body measurements, and personal records
+- Goals and AI coach memories
+- Hevy account (API key)
+- Google Fit connection
+
+Profile data lives in `profiles/{slug}/` inside the project folder. On first run Lifter asks for your name and Hevy API key to create your initial profile.
+
+### Managing profiles
+
+All profile actions are in **Settings → Profiles**:
+
+| Action | Description |
+|---|---|
+| Switch profile | Changes the active profile and restarts the app |
+| Create new profile | Adds a profile with a new name and Hevy API key |
+| Rename current | Updates the display name |
+| Update Hevy API key | Changes the stored API key for the active profile |
+| Delete a profile | Permanently removes the profile and all its data |
+
+### Migrating from a previous version
+
+If you have an existing `hevy.db` file at the project root, Lifter will automatically migrate it to a named profile on the first run after upgrading.
 
 ---
 
@@ -495,12 +522,9 @@ lifter/
 
 ## Configuration reference
 
-All settings live in `.env`:
+### `.env` (global, AI provider keys only)
 
 ```bash
-# Hevy
-HEVY_API_KEY=             # from hevy.com/settings?developer
-
 # AI provider — pick one value for AI_PROVIDER, set the matching key
 AI_PROVIDER=gemini        # gemini | claude | openrouter | groq | github | bedrock
 GEMINI_API_KEY=
@@ -518,12 +542,21 @@ AWS_SESSION_TOKEN=        # optional, for temporary credentials
 
 # Google Fit
 GOOGLE_CREDENTIALS_FILE=fit_credentials.json   # path to downloaded OAuth JSON
-
-# Database
-DB_PATH=hevy.db           # path to local SQLite file
 ```
 
-All in-app preferences (units, auto-sync, check-in frequency, etc.) are stored in the `user_preferences` table in the database, not in `.env`.
+### Per-profile config (`profiles/{slug}/profile.json`)
+
+Each profile stores its own settings that are set through the in-app menus:
+
+| Key | Description |
+|---|---|
+| `name` | Display name shown in menus |
+| `slug` | URL-safe identifier used as the directory name |
+| `hevy_api_key` | API key for this profile's Hevy account |
+
+Profile databases live at `profiles/{slug}/hevy.db` and Google Fit tokens at `profiles/{slug}/fit_token.json`.
+
+All in-app preferences (units, auto-sync, check-in frequency, etc.) are stored in the `user_preferences` table in each profile's database, not in `.env`.
 
 ---
 

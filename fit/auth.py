@@ -3,7 +3,7 @@ import os
 import stat
 from pathlib import Path
 
-from config import DB_PATH
+import config
 
 SCOPES = [
     "https://www.googleapis.com/auth/fitness.activity.read",
@@ -13,26 +13,34 @@ SCOPES = [
 ]
 
 CREDENTIALS_FILE = Path(os.environ.get("GOOGLE_CREDENTIALS_FILE", Path(__file__).resolve().parent.parent / "fit_credentials.json"))
-TOKEN_FILE = DB_PATH.parent / "fit_token.json"
+
+
+def _token_file() -> Path:
+    return config.DB_PATH.parent / "fit_token.json"
 
 
 def _write_token(creds) -> None:
-    TOKEN_FILE.write_text(creds.to_json())
-    TOKEN_FILE.chmod(0o600)
+    tf = _token_file()
+    tf.write_text(creds.to_json())
+    tf.chmod(0o600)
 
 
 def get_credentials():
     """Return valid Google credentials, running the OAuth flow if needed."""
+    import requests as _requests
     from google.oauth2.credentials import Credentials
     from google.auth.transport.requests import Request
 
+    tf = _token_file()
     creds = None
-    if TOKEN_FILE.exists():
-        creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
+    if tf.exists():
+        creds = Credentials.from_authorized_user_file(str(tf), SCOPES)
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            _session = _requests.Session()
+            _session.timeout = 20
+            creds.refresh(Request(session=_session))
         else:
             if not CREDENTIALS_FILE.exists():
                 raise FileNotFoundError(
@@ -50,16 +58,18 @@ def get_credentials():
 
 def is_connected() -> bool:
     """True only if the token file exists AND contains a usable credential."""
-    if not TOKEN_FILE.exists():
+    tf = _token_file()
+    if not tf.exists():
         return False
     try:
         from google.oauth2.credentials import Credentials
-        creds = Credentials.from_authorized_user_file(str(TOKEN_FILE), SCOPES)
+        creds = Credentials.from_authorized_user_file(str(tf), SCOPES)
         return creds is not None and (creds.valid or bool(creds.refresh_token))
     except Exception:
         return False
 
 
 def disconnect() -> None:
-    if TOKEN_FILE.exists():
-        TOKEN_FILE.unlink()
+    tf = _token_file()
+    if tf.exists():
+        tf.unlink()

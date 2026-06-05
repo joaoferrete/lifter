@@ -12,14 +12,15 @@ PROJECT_ROOT = Path(__file__).parent.parent
 
 def test_fit_token_written_with_mode_600(tmp_path):
     """OAuth token file must be written owner-only (0o600)."""
-    token_file = tmp_path / "fit_token.json"
+    import config
     mock_creds = MagicMock()
     mock_creds.to_json.return_value = '{"token": "fake-refresh-token"}'
 
-    with patch("fit.auth.TOKEN_FILE", token_file):
+    with patch.object(config, "DB_PATH", tmp_path / "db.sqlite"):
         from fit.auth import _write_token
         _write_token(mock_creds)
 
+    token_file = tmp_path / "fit_token.json"
     actual = oct(stat.S_IMODE(token_file.stat().st_mode))
     assert actual == "0o600", f"Expected 0o600, got {actual}"
 
@@ -162,14 +163,16 @@ def test_rich_escape_handles_markup_in_name():
 # ── is_connected validation ───────────────────────────────────────────────────
 
 def test_is_connected_false_when_no_token(tmp_path):
-    with patch("fit.auth.TOKEN_FILE", tmp_path / "nonexistent.json"):
+    import config
+    with patch.object(config, "DB_PATH", tmp_path / "missing" / "db.sqlite"):
         from fit.auth import is_connected
         assert is_connected() is False
 
 
 def test_is_connected_false_when_token_is_garbage(tmp_path):
+    import config
     bad_token = tmp_path / "fit_token.json"
     bad_token.write_text("not valid json {{{{")
-    with patch("fit.auth.TOKEN_FILE", bad_token):
+    with patch.object(config, "DB_PATH", tmp_path / "db.sqlite"):
         from fit.auth import is_connected
         assert is_connected() is False

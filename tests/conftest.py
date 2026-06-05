@@ -28,9 +28,10 @@ def tmp_db(db_path, monkeypatch) -> Path:
         return conn
 
     # ── db.store ──────────────────────────────────────────────────────────────
+    import config
     import db.store as store_mod
 
-    monkeypatch.setattr(store_mod, "DB_PATH", db_path)
+    monkeypatch.setattr(config, "DB_PATH", db_path)
     monkeypatch.setattr(store_mod, "_conn", lambda p=db_path: _make_conn())
 
     _orig_query = store_mod.query.__wrapped__ if hasattr(store_mod.query, "__wrapped__") else store_mod.query
