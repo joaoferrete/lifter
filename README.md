@@ -560,6 +560,40 @@ All in-app preferences (units, auto-sync, check-in frequency, etc.) are stored i
 
 ---
 
+## Debug logs
+
+Lifter can write structured logs to `logs/debug-YYYY-MM-DD.log` (one file per day, inside the project folder). This is useful for diagnosing sync failures, AI errors, and profile events without having to instrument the code manually.
+
+### Enabling
+
+**Settings → Preferences → Debug logging → on**
+
+The setting takes effect immediately — no restart needed. The log path is printed to the terminal when you enable it.
+
+### What is logged
+
+| Category | Events |
+|---|---|
+| `[SYNC]` | Hevy full / incremental sync start and complete (workout, template, and routine counts) |
+| `[SYNC]` | Google Fit sync start and complete (daily records and sleep session counts) |
+| `[AI]` | Token usage per request (provider, model, input / output / cache tokens) |
+| `[AI]` | Coaching report generation start |
+| `[ERROR]` | AI API errors with provider, model, HTTP status, and last traceback line |
+| `[PROFILE]` | Profile create, activate, rename, delete |
+
+### Example
+
+```
+2026-06-05 13:42:01 [SYNC   ] Hevy incremental sync started  since=2026-06-04T10:00:00Z
+2026-06-05 13:42:03 [SYNC   ] Hevy incremental sync complete  updated=3  deleted=0  routines=12
+2026-06-05 13:42:05 [AI     ] Token usage  provider=gemini  model=gemini-2.5-pro  input=1234  output=567  cache_read=890
+2026-06-05 13:43:25 [ERROR  ] ClientError: 403 PERMISSION_DENIED  provider=gemini  status=403
+```
+
+Logs are never committed — `logs/` is in `.gitignore`.
+
+---
+
 ## Running tests
 
 ```bash
