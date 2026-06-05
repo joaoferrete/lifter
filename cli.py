@@ -1682,10 +1682,14 @@ def _check_stale_sync() -> None:
 
     if stale_hevy:
         if auto_sync:
-            client = _require_hevy()
-            if client:
-                counts = incremental_sync(client)
-                console.print(f"[dim]Auto-synced Hevy: {counts['updated']} updated · {counts['deleted']} deleted.[/dim]")
+            try:
+                console.print("[dim]Auto-syncing Hevy...[/dim]")
+                client = _require_hevy()
+                if client:
+                    counts = incremental_sync(client)
+                    console.print(f"[dim]Auto-synced Hevy: {counts['updated']} updated · {counts['deleted']} deleted.[/dim]")
+            except Exception as e:
+                console.print(f"[dim]Hevy auto-sync failed: {e}[/dim]")
         elif questionary.confirm(
             "  Hevy hasn't been synced in over 24h. Sync now?", default=True, style=STYLE
         ).ask():
@@ -1700,11 +1704,12 @@ def _check_stale_sync() -> None:
     if stale_fit:
         if auto_sync:
             try:
+                console.print("[dim]Auto-syncing Google Fit...[/dim]")
                 from fit.sync import sync_fit
-                counts = sync_fit(days=90)
+                counts = sync_fit(days=30)
                 console.print(f"[dim]Auto-synced Fit: {counts['daily_days']} days · {counts['sleep_sessions']} sleep sessions.[/dim]")
-            except Exception:
-                pass
+            except Exception as e:
+                console.print(f"[dim]Fit auto-sync failed: {e}[/dim]")
         elif questionary.confirm(
             "  Google Fit hasn't been synced in over 24h. Sync now?", default=True, style=STYLE
         ).ask():

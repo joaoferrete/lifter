@@ -27,6 +27,7 @@ def _write_token(creds) -> None:
 
 def get_credentials():
     """Return valid Google credentials, running the OAuth flow if needed."""
+    import requests as _requests
     from google.oauth2.credentials import Credentials
     from google.auth.transport.requests import Request
 
@@ -37,7 +38,9 @@ def get_credentials():
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            _session = _requests.Session()
+            _session.timeout = 20
+            creds.refresh(Request(session=_session))
         else:
             if not CREDENTIALS_FILE.exists():
                 raise FileNotFoundError(

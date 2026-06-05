@@ -249,7 +249,7 @@ def test_auto_sync_fit_syncs_without_prompt():
          patch("cli.console"):
         cli._check_stale_sync()
 
-    assert fit_sync_calls == [90]
+    assert fit_sync_calls == [30]
     mock_confirm.assert_not_called()
 
 
@@ -281,7 +281,7 @@ def test_auto_sync_both_stale_syncs_both_silently():
         cli._check_stale_sync()
 
     assert len(incremental_calls) == 1
-    assert fit_sync_calls == [90]
+    assert fit_sync_calls == [30]
     mock_confirm.assert_not_called()
 
 
