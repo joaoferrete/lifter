@@ -24,16 +24,18 @@ lifter is a local-first personal tool. The threat model is:
 | Asset | Where stored | Risk |
 |---|---|---|
 | Hevy API key | `.env` (local) | Anyone with read access to your machine |
-| Gemini / Claude API key | `.env` (local) | Same |
-| Google OAuth token | `fit_token.json` (local) | Same — written with 0o600 permissions |
+| Gemini / Claude / OpenRouter / Groq / GitHub API key | `.env` (local) | Same |
+| AWS credentials (Bedrock) | `.env` (local) | Same |
+| Google OAuth token | `profiles/{slug}/fit_token.json` (local) | Same — written with 0o600 permissions |
 | Google OAuth client secret | `fit_credentials.json` (local) | Same |
-| Workout / health data | `hevy.db` (local SQLite) | Same |
+| Workout / health data | `profiles/{slug}/hevy.db` (local SQLite) | Same |
+| Profile configuration | `profiles.json`, `profiles/{slug}/profile.json` (local) | Same |
 
-None of this data is transmitted to any server except the respective APIs (Hevy, Google, Anthropic/Google AI).
+None of this data is transmitted to any server except the respective APIs (Hevy, Google Fit, and whichever AI provider is configured: Google AI, Anthropic, OpenRouter, Groq, GitHub Models, or AWS Bedrock).
 
 ## Best practices for users
 
-- Keep `.env`, `fit_token.json`, `fit_credentials.json`, and `*.db` out of version control (`.gitignore` covers this)
+- Keep `.env`, `fit_credentials.json`, `profiles/`, `profiles.json`, and `*.db` out of version control (`.gitignore` covers this)
 - Run `chmod 600 .env` after every fresh clone
 - Rotate API keys if you suspect they were exposed
 - Do not share your project directory with untrusted users
