@@ -19,8 +19,10 @@ Personal Hevy workout client with analytics, goal tracking, Google Fit integrati
 | **Snapshot** | At-a-glance panel shown before every menu: last report scores, volume split by muscle group, and all goal progress bars. |
 | **Memory** | After every chat the AI extracts key insights (injuries, preferences, feedback) and saves them. Future sessions start with that context already loaded. |
 | **Google Fit** | Syncs sleep, steps, calories, and resting HR. Recovery score shown in the header and used in AI suggestions. |
-| **Settings** | Weight units (kg / lbs), goal check-in frequency, auto-sync on startup, default stats window, display name — all configurable through the menu. |
+| **Profiles** | Multiple independent profiles on the same machine — each with its own workout history, goals, memories, Hevy account, and Google Fit connection. |
+| **Settings** | Weight units (kg / lbs), goal check-in frequency, auto-sync on startup, default stats window, display name, Hevy API key, AI provider settings, debug logging — all configurable through the menu. |
 | **Multi-model** | Works with Gemini (default), Claude, OpenRouter, Groq, GitHub Models, or Amazon Bedrock — swap with one env variable. |
+| **Debug logs** | Toggleable structured logging to `logs/debug-YYYY-MM-DD.log` covering sync, AI, goals, settings, profile, and error events. |
 
 ---
 
@@ -56,7 +58,7 @@ Open `.env` and fill in your AI provider key (see sections below). Your Hevy API
 2. Go to **Profile → Settings → Developer**
 3. Copy your API key
 
-Lifter will ask for it on first run. You can also update it later via **Settings → Profiles → Update Hevy API key**.
+Lifter will ask for it on first run. You can also update it later via **Settings → Profile → Hevy API key**.
 
 ### 4. Set up an AI provider
 
@@ -396,6 +398,7 @@ When connected, the Google Fit menu item shows a ✓ status chip.
 | Setting | Description |
 |---|---|
 | **Display name** | Your name shown in the header and used by the AI coach |
+| **Hevy API key** | The API key for this profile's Hevy account |
 
 #### Preferences
 
@@ -405,6 +408,7 @@ When connected, the Google Fit menu item shows a ✓ status chip.
 | **Goal check-in frequency** | Every 7 / 14 / 30 days | 7 days |
 | **Auto-sync on startup** | on / off | off |
 | **Default stats window** | 4 / 8 / 12 / 24 weeks | 8 weeks |
+| **Debug logging** | on / off | off |
 
 When **auto-sync** is on, stale Hevy and Google Fit data syncs silently on launch without prompting. When off, you get a confirmation prompt.
 
@@ -429,20 +433,20 @@ Nothing on Hevy or Google Fit is ever touched — only the local cache on your m
 | **Clear sync state** | Resets the sync timestamp so the next incremental sync re-downloads all workouts (existing local data is kept) |
 | **Wipe everything** | Double-confirmed — deletes `hevy.db` and disconnects Google Fit (`fit_token.json`). Run **Sync → Full** afterwards to restore |
 
-You can also reset individual pieces manually:
+You can also reset individual pieces manually (replace `{slug}` with your profile slug, e.g. `default`):
 
 ```bash
-# Delete the local database entirely
-rm hevy.db
+# Delete the local database for a profile
+rm profiles/{slug}/hevy.db
 
-# Disconnect Google Fit (keeps DB data)
-rm fit_token.json
+# Disconnect Google Fit for a profile (keeps DB data)
+rm profiles/{slug}/fit_token.json
 
 # Force the next sync to re-download everything
-sqlite3 hevy.db "UPDATE sync_state SET value='1970-01-01T00:00:00Z' WHERE key='last_sync';"
+sqlite3 profiles/{slug}/hevy.db "UPDATE sync_state SET value='1970-01-01T00:00:00Z' WHERE key='last_sync';"
 
 # Clear only coach memories
-sqlite3 hevy.db "DELETE FROM chat_memories;"
+sqlite3 profiles/{slug}/hevy.db "DELETE FROM chat_memories;"
 ```
 
 ---
@@ -492,9 +496,14 @@ lifter/
 │   └── sanitize.py      Input sanitization and prompt-injection defence
 ├── cli.py               Interactive menu (questionary + Rich)
 ├── config.py            .env loader
-├── hevy.db              Local SQLite database (created on first sync)
-├── fit_credentials.json Google OAuth credentials (you create this)
-└── fit_token.json       Google OAuth token (created automatically)
+├── profile_mgr.py       Multi-profile management (create, activate, switch, delete)
+├── debug_log.py         Structured debug logging (toggled via Settings → Preferences)
+├── profiles/            Per-profile data directories (gitignored)
+│   └── {slug}/
+│       ├── hevy.db          Local SQLite database
+│       ├── fit_token.json   Google OAuth token (created automatically)
+│       └── profile.json     Profile name and Hevy API key
+└── fit_credentials.json Google OAuth credentials (you create this)
 ```
 
 ---
