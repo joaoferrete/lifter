@@ -3,6 +3,8 @@ hevy.db*
 *.db
 fit_credentials.json
 fit_token.json
+profiles/
+profiles.json
 __pycache__/
 *.py[cod]
 *.pyo
