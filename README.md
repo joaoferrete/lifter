@@ -19,8 +19,10 @@ Personal Hevy workout client with analytics, goal tracking, Google Fit integrati
 | **Snapshot** | At-a-glance panel shown before every menu: last report scores, volume split by muscle group, and all goal progress bars. |
 | **Memory** | After every chat the AI extracts key insights (injuries, preferences, feedback) and saves them. Future sessions start with that context already loaded. |
 | **Google Fit** | Syncs sleep, steps, calories, and resting HR. Recovery score shown in the header and used in AI suggestions. |
-| **Settings** | Weight units (kg / lbs), goal check-in frequency, auto-sync on startup, default stats window, display name — all configurable through the menu. |
+| **Profiles** | Multiple independent profiles on the same machine — each with its own workout history, goals, memories, Hevy account, and Google Fit connection. |
+| **Settings** | Weight units (kg / lbs), goal check-in frequency, auto-sync on startup, default stats window, display name, Hevy API key, AI provider settings, debug logging — all configurable through the menu. |
 | **Multi-model** | Works with Gemini (default), Claude, OpenRouter, Groq, GitHub Models, or Amazon Bedrock — swap with one env variable. |
+| **Debug logs** | Toggleable structured logging to `logs/debug-YYYY-MM-DD.log` covering sync, AI, goals, settings, profile, and error events. |
 
 ---
 
@@ -56,7 +58,7 @@ Open `.env` and fill in your AI provider key (see sections below). Your Hevy API
 2. Go to **Profile → Settings → Developer**
 3. Copy your API key
 
-Lifter will ask for it on first run. You can also update it later via **Settings → Profiles → Update Hevy API key**.
+Lifter will ask for it on first run. You can also update it later via **Settings → Profile → Hevy API key**.
 
 ### 4. Set up an AI provider
 
@@ -396,6 +398,7 @@ When connected, the Google Fit menu item shows a ✓ status chip.
 | Setting | Description |
 |---|---|
 | **Display name** | Your name shown in the header and used by the AI coach |
+| **Hevy API key** | The API key for this profile's Hevy account |
 
 #### Preferences
 
@@ -405,6 +408,7 @@ When connected, the Google Fit menu item shows a ✓ status chip.
 | **Goal check-in frequency** | Every 7 / 14 / 30 days | 7 days |
 | **Auto-sync on startup** | on / off | off |
 | **Default stats window** | 4 / 8 / 12 / 24 weeks | 8 weeks |
+| **Debug logging** | on / off | off |
 
 When **auto-sync** is on, stale Hevy and Google Fit data syncs silently on launch without prompting. When off, you get a confirmation prompt.
 
@@ -429,20 +433,20 @@ Nothing on Hevy or Google Fit is ever touched — only the local cache on your m
 | **Clear sync state** | Resets the sync timestamp so the next incremental sync re-downloads all workouts (existing local data is kept) |
 | **Wipe everything** | Double-confirmed — deletes `hevy.db` and disconnects Google Fit (`fit_token.json`). Run **Sync → Full** afterwards to restore |
 
-You can also reset individual pieces manually:
+You can also reset individual pieces manually (replace `{slug}` with your profile slug, e.g. `default`):
 
 ```bash
-# Delete the local database entirely
-rm hevy.db
+# Delete the local database for a profile
+rm profiles/{slug}/hevy.db
 
-# Disconnect Google Fit (keeps DB data)
-rm fit_token.json
+# Disconnect Google Fit for a profile (keeps DB data)
+rm profiles/{slug}/fit_token.json
 
 # Force the next sync to re-download everything
-sqlite3 hevy.db "UPDATE sync_state SET value='1970-01-01T00:00:00Z' WHERE key='last_sync';"
+sqlite3 profiles/{slug}/hevy.db "UPDATE sync_state SET value='1970-01-01T00:00:00Z' WHERE key='last_sync';"
 
 # Clear only coach memories
-sqlite3 hevy.db "DELETE FROM chat_memories;"
+sqlite3 profiles/{slug}/hevy.db "DELETE FROM chat_memories;"
 ```
 
 ---
@@ -492,9 +496,14 @@ lifter/
 │   └── sanitize.py      Input sanitization and prompt-injection defence
 ├── cli.py               Interactive menu (questionary + Rich)
 ├── config.py            .env loader
-├── hevy.db              Local SQLite database (created on first sync)
-├── fit_credentials.json Google OAuth credentials (you create this)
-└── fit_token.json       Google OAuth token (created automatically)
+├── profile_mgr.py       Multi-profile management (create, activate, switch, delete)
+├── debug_log.py         Structured debug logging (toggled via Settings → Preferences)
+├── profiles/            Per-profile data directories (gitignored)
+│   └── {slug}/
+│       ├── hevy.db          Local SQLite database
+│       ├── fit_token.json   Google OAuth token (created automatically)
+│       └── profile.json     Profile name and Hevy API key
+└── fit_credentials.json Google OAuth credentials (you create this)
 ```
 
 ---
@@ -557,6 +566,52 @@ Each profile stores its own settings that are set through the in-app menus:
 Profile databases live at `profiles/{slug}/hevy.db` and Google Fit tokens at `profiles/{slug}/fit_token.json`.
 
 All in-app preferences (units, auto-sync, check-in frequency, etc.) are stored in the `user_preferences` table in each profile's database, not in `.env`.
+
+---
+
+## Debug logs
+
+Lifter can write structured logs to `logs/debug-YYYY-MM-DD.log` (one file per day, inside the project folder). This is useful for diagnosing sync failures, AI errors, and profile events without having to instrument the code manually.
+
+### Enabling
+
+**Settings → Preferences → Debug logging → on**
+
+The setting takes effect immediately — no restart needed. The log path is printed to the terminal when you enable it.
+
+### What is logged
+
+| Category | Events |
+|---|---|
+| `[APP]` | App startup (profile, provider, model) and exit |
+| `[MENU]` | Every main menu selection; stats period; progression type; goals action |
+| `[SYNC]` | Hevy full / incremental sync start and complete (counts); Google Fit sync start and complete; auto-sync trigger; user accept / decline of sync prompts; manual sync type chosen; errors |
+| `[GOAL]` | Each goal type created; wizard completed (total goals); weekly check-in triggered and result (confirmed / updated / skipped); goals cleared |
+| `[AI]` | Chat session started (provider, model, weeks, slim mode, language) and ended (turn count); coaching report start and complete (token delta); every tool call (push\_routine / update\_routine / manage\_goals); routine and goal-change confirmed or declined by user; memories extracted count; token usage per request |
+| `[SETTING]` | Every user-initiated settings change — units, check-in frequency, auto-sync, stats window, debug toggle, display name, Hevy API key, AI context mode, language, token counter reset, Google Fit connect / disconnect |
+| `[PROFILE]` | Profile created, activated, renamed, deleted, switched; startup selection; first-run setup; data migration |
+| `[RESET]` | Memories cleared; goals cleared; sync state reset; full data wipe |
+| `[ERROR]` | AI API errors (provider, model, HTTP status, traceback line); Google Fit auth and sync failures; routine push / update failures; goal-change failures; coaching report failures |
+
+> Personal data is never written to logs: goal descriptions, body targets, chat messages, and per-session token counts are all omitted.
+
+### Example
+
+```
+2026-06-05 13:41:00 [APP    ] Lifter started  profile=alice  provider=gemini  model=gemini-2.5-pro
+2026-06-05 13:41:01 [SYNC   ] Data is fresh, no sync needed
+2026-06-05 13:41:05 [MENU   ] Selected: chat
+2026-06-05 13:41:06 [AI     ] Chat session started  provider=gemini  model=gemini-2.5-pro  weeks=8  slim=True
+2026-06-05 13:41:45 [AI     ] Token usage  provider=gemini  model=gemini-2.5-pro  input=1234  output=567  cache_read=890
+2026-06-05 13:42:10 [AI     ] Tool call: push_routine
+2026-06-05 13:42:12 [AI     ] Routine pushed to Hevy  routine_id=abc123  exercises=6
+2026-06-05 13:42:30 [AI     ] Chat session ended  turns=4
+2026-06-05 13:43:25 [ERROR  ] ClientError: 403 PERMISSION_DENIED  provider=gemini  status=403
+2026-06-05 13:44:00 [SETTING] auto_sync changed  value=1
+2026-06-05 13:44:10 [APP    ] Lifter exited
+```
+
+Logs are never committed — `logs/` is in `.gitignore`.
 
 ---
 

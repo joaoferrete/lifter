@@ -26,6 +26,17 @@ _CHAT_HISTORY_FILE = Path.home() / ".hevy_chat_history"
 
 def _friendly_error(e: Exception) -> str:
     """Return a user-friendly error message for AI provider exceptions."""
+    try:
+        from debug_log import log
+        import config as _cfg
+        import traceback as _tb
+        _status = getattr(e, "status_code", None) or getattr(e, "code", None)
+        log("ERROR", f"{type(e).__name__}: {str(e)[:200]}",
+            provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL,
+            status=_status, traceback=_tb.format_exc().splitlines()[-1])
+    except Exception:
+        pass
+
     msg = str(e)
     status = getattr(e, "status_code", None) or getattr(e, "code", None)
 
@@ -317,6 +328,11 @@ Rules:
 
 
 def get_coaching(weeks: int = 8) -> dict:
+    from debug_log import log
+    import config as _cfg
+    from db.goals import get_token_usage as _get_usage
+    _tokens_before = _get_usage()
+    log("AI", "Coaching report started", provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL, weeks=weeks)
     context = _build_context(weeks)
     lang = get_pref("ai_language") or "English"
     lang_line = f"\nAlways respond entirely in {lang}.\n" if lang != "English" else ""
@@ -352,6 +368,11 @@ def get_coaching(weeks: int = 8) -> dict:
     raw = full_text.strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+    _tokens_after = _get_usage()
+    log("AI", "Coaching report complete",
+        input=_tokens_after["input"] - _tokens_before["input"],
+        output=_tokens_after["output"] - _tokens_before["output"],
+        cache_read=_tokens_after["cache_read"] - _tokens_before["cache_read"])
     return json.loads(raw)
 
 
@@ -552,18 +573,25 @@ def _show_and_confirm_routine(routine: dict) -> dict:
         )
 
     if not questionary.confirm("  Push this routine to your Hevy app?", default=True).ask():
+        from debug_log import log
+        log("AI", "Routine push declined by user")
         console.print("[dim]Routine not pushed.[/dim]\n")
         return {"success": False, "message": "User declined"}
 
     try:
         with console.status("[dim]Saving routine to Hevy...[/dim]", spinner="dots"):
             from hevy.client import _routine_id
+            from debug_log import log
             resp = HevyClient().create_routine(_stamp_routine(routine))
             routine_id = _routine_id(resp)
+        log("AI", "Routine pushed to Hevy", routine_id=routine_id,
+            exercises=len(routine.get("exercises", [])))
         console.print(f"[green]✓ Routine saved to Hevy[/green] (id: {routine_id})\n")
         _show_exercise_benefits(routine.get("exercises", []))
         return {"success": True, "routine_id": routine_id}
     except Exception as e:
+        from debug_log import log
+        log("ERROR", f"Routine push failed: {type(e).__name__}", error=str(e)[:200])
         console.print(f"[red]Failed: {e}[/red]\n")
         return {"success": False, "error": str(e)}
 
@@ -616,17 +644,23 @@ def _show_and_confirm_routine_update(fc_args: dict) -> dict:
         )
 
     if not questionary.confirm("  Save these changes to your Hevy app?", default=True).ask():
+        from debug_log import log
+        log("AI", "Routine update declined by user", routine_id=routine_id)
         console.print("[dim]Update cancelled.[/dim]\n")
         return {"success": False, "message": "User declined"}
 
     try:
         with console.status("[dim]Updating routine in Hevy...[/dim]", spinner="dots"):
+            from debug_log import log
             HevyClient().update_routine(routine_id, _stamp_routine(new_routine))
             upsert_routine({"id": routine_id, **new_routine})
+        log("AI", "Routine updated in Hevy", routine_id=routine_id)
         console.print(f"[green]✓ Routine updated[/green] (id: {routine_id})\n")
         _show_exercise_benefits(new_routine.get("exercises", []))
         return {"success": True, "routine_id": routine_id}
     except Exception as e:
+        from debug_log import log
+        log("ERROR", f"Routine update failed: {type(e).__name__}", routine_id=routine_id, error=str(e)[:200])
         console.print(f"[red]Failed: {e}[/red]\n")
         return {"success": False, "error": str(e)}
 
@@ -652,6 +686,8 @@ def _handle_manage_goals(fc_args: dict) -> dict:
     ))
 
     if not questionary.confirm("  Apply this change?", default=True).ask():
+        from debug_log import log
+        log("AI", "Goal change declined by user", action=action)
         console.print("[dim]Change not applied.[/dim]\n")
         return {"success": False, "message": "User declined"}
 
@@ -694,10 +730,14 @@ def _handle_manage_goals(fc_args: dict) -> dict:
             else:
                 raise ValueError(f"Unknown action: {action}")
 
+        from debug_log import log
+        log("AI", "Goal change applied", action=action)
         console.print(f"{label}\n")
         return result
 
     except Exception as e:
+        from debug_log import log
+        log("ERROR", f"Goal change failed: {type(e).__name__}", action=action, error=str(e)[:200])
         console.print(f"[red]Failed: {e}[/red]\n")
         return {"success": False, "error": str(e)}
 
@@ -805,8 +845,14 @@ def _extract_and_save_memories(conversation_log: list[dict]) -> int:
 
 def start_enhanced_chat(weeks: int = 8) -> None:
     """Interactive chat with tool calling, goal management, and memory persistence."""
+    from debug_log import log as _log
+    import config as _cfg
+
     slim = get_pref("ai_chat_slim") != "0"  # default True unless explicitly disabled
     context = _build_context(weeks, slim=slim)
+    _log("AI", "Chat session started",
+         provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL, weeks=weeks,
+         slim=slim, lang=get_pref("ai_language") or "English")
     lang = get_pref("ai_language") or "English"
     lang_line = f"\nAlways respond entirely in {lang}.\n" if lang != "English" else ""
     # Use XML-like delimiters so the model can clearly distinguish
@@ -893,6 +939,7 @@ def start_enhanced_chat(weeks: int = 8) -> None:
         if response.tool_calls:
             tool_results: list[tuple] = []
             for tc in response.tool_calls:
+                _log("AI", f"Tool call: {tc.name}")
                 if tc.name == "push_routine":
                     result = _show_and_confirm_routine(dict(tc.args))
                 elif tc.name == "update_routine":
@@ -927,10 +974,15 @@ def start_enhanced_chat(weeks: int = 8) -> None:
     except OSError:
         pass
 
+    # ── log session totals ────────────────────────────────────────────────────
+    _log("AI", "Chat session ended",
+         turns=len([m for m in conversation_log if m["role"] == "user"]))
+
     # ── extract and save memories after session ends ──
     if len(conversation_log) >= 2:
         with console.status("[dim]Saving insights from conversation...[/dim]", spinner="dots"):
             saved = _extract_and_save_memories(conversation_log)
+        _log("AI", "Memories extracted", saved=saved)
         if saved > 0:
             console.print(f"[dim]✓ {saved} insight(s) saved for future sessions.[/dim]\n")
         else:

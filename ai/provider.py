@@ -24,6 +24,14 @@ def _track_usage(input_tokens: int = 0, output_tokens: int = 0, cache_read: int 
         add_token_usage(input_tokens, output_tokens, cache_read)
     except Exception:
         pass
+    try:
+        from debug_log import log
+        import config as _cfg
+        log("AI", "Token usage",
+            provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL,
+            input=input_tokens, output=output_tokens, cache_read=cache_read)
+    except Exception:
+        pass
 
 
 @dataclass

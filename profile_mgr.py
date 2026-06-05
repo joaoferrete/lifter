@@ -63,6 +63,11 @@ def create_profile(name: str, hevy_api_key: str = "") -> dict:
     if not data.get("active"):
         data["active"] = slug
     _write(data)
+    try:
+        from debug_log import log
+        log("PROFILE", "Profile created", name=name, slug=slug)
+    except Exception:
+        pass
     return profile_cfg
 
 
@@ -74,10 +79,16 @@ def rename_profile(slug: str, new_name: str) -> None:
         cfg_file.write_text(json.dumps(cfg, indent=2))
 
     data = _read()
+    old_name = next((p["name"] for p in data["profiles"] if p["slug"] == slug), slug)
     for p in data["profiles"]:
         if p["slug"] == slug:
             p["name"] = new_name
     _write(data)
+    try:
+        from debug_log import log
+        log("PROFILE", "Profile renamed", slug=slug, old=old_name, new=new_name)
+    except Exception:
+        pass
 
 
 def delete_profile(slug: str) -> None:
@@ -85,11 +96,17 @@ def delete_profile(slug: str) -> None:
     if profile_dir.exists():
         shutil.rmtree(profile_dir)
 
+    name = get_profile_name(slug)
     data = _read()
     data["profiles"] = [p for p in data["profiles"] if p["slug"] != slug]
     if data.get("active") == slug:
         data["active"] = data["profiles"][0]["slug"] if data["profiles"] else None
     _write(data)
+    try:
+        from debug_log import log
+        log("PROFILE", "Profile deleted", slug=slug, name=name)
+    except Exception:
+        pass
 
 
 def activate_profile(slug: str) -> None:
@@ -106,6 +123,11 @@ def activate_profile(slug: str) -> None:
                 config.HEVY_API_KEY = key
         except Exception:
             pass
+    try:
+        from debug_log import log
+        log("PROFILE", "Profile activated", slug=slug)
+    except Exception:
+        pass
 
 
 def get_profile_name(slug: str) -> str:

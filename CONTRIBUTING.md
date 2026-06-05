@@ -2,6 +2,20 @@
 
 Thanks for wanting to contribute! Here's everything you need to know.
 
+## Reporting bugs
+
+Good bug reports make issues faster to fix. Please include:
+
+1. **Steps to reproduce** — the exact sequence of menu choices or commands that trigger the issue
+2. **Expected vs actual behaviour** — what you expected to happen and what happened instead
+3. **Screenshot or terminal recording** — paste the console output or attach a screenshot so maintainers can see the exact error message and context
+4. **Debug log** — enable debug logging (**Settings → Preferences → Debug logging → on**), reproduce the issue, then attach the relevant lines from `logs/debug-YYYY-MM-DD.log`. This captures sync counts, AI errors (with status codes and provider details), and profile events that are not visible in the normal output
+5. **Environment** — OS, Python version (`python --version`), and how lifter is installed (editable / pipx / direct)
+
+> **Tip:** You can copy just the lines around the error rather than the full log file — a few seconds of context before and after the failure is usually enough.
+
+Security issues should be reported privately — see [SECURITY.md](SECURITY.md).
+
 ## Before you start
 
 - Check existing issues and PRs to avoid duplicate work

@@ -34,6 +34,8 @@ def _sync_routines(client: HevyClient, progress, counts: dict) -> None:
 
 
 def full_sync(client: HevyClient) -> dict:
+    from debug_log import log
+    log("SYNC", "Hevy full sync started")
     init_db()
 
     counts = {"workouts": 0, "templates": 0, "body_measurements": 0, "routines": 0, "updated_ids": [], "since": None}
@@ -68,15 +70,20 @@ def full_sync(client: HevyClient) -> dict:
         _sync_routines(client, progress, counts)
 
     set_sync_state("last_sync", _now_iso())
+    log("SYNC", "Hevy full sync complete",
+        workouts=counts["workouts"], templates=counts["templates"],
+        body_measurements=counts["body_measurements"], routines=counts["routines"])
     return counts
 
 
 def incremental_sync(client: HevyClient) -> dict:
+    from debug_log import log
     last_sync = get_sync_state("last_sync")
     if not last_sync:
         return full_sync(client)
 
     since = last_sync
+    log("SYNC", "Hevy incremental sync started", since=since)
     counts = {"updated": 0, "deleted": 0, "templates": 0, "body_measurements": 0, "routines": 0, "updated_ids": [], "since": since}
 
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
@@ -106,4 +113,6 @@ def incremental_sync(client: HevyClient) -> dict:
         _sync_routines(client, progress, counts)
 
     set_sync_state("last_sync", _now_iso())
+    log("SYNC", "Hevy incremental sync complete",
+        updated=counts["updated"], deleted=counts["deleted"], routines=counts["routines"])
     return counts
