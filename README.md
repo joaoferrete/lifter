@@ -574,20 +574,32 @@ The setting takes effect immediately — no restart needed. The log path is prin
 
 | Category | Events |
 |---|---|
-| `[SYNC]` | Hevy full / incremental sync start and complete (workout, template, and routine counts) |
-| `[SYNC]` | Google Fit sync start and complete (daily records and sleep session counts) |
-| `[AI]` | Token usage per request (provider, model, input / output / cache tokens) |
-| `[AI]` | Coaching report generation start |
-| `[ERROR]` | AI API errors with provider, model, HTTP status, and last traceback line |
-| `[PROFILE]` | Profile create, activate, rename, delete |
+| `[APP]` | App startup (profile, provider, model) and exit |
+| `[MENU]` | Every main menu selection; stats period; progression type; goals action |
+| `[SYNC]` | Hevy full / incremental sync start and complete (counts); Google Fit sync start and complete; auto-sync trigger; user accept / decline of sync prompts; manual sync type chosen; errors |
+| `[GOAL]` | Each goal type created; wizard completed (total goals); weekly check-in triggered and result (confirmed / updated / skipped); goals cleared |
+| `[AI]` | Chat session started (provider, model, weeks, slim mode, language) and ended (turn count); coaching report start and complete (token delta); every tool call (push\_routine / update\_routine / manage\_goals); routine and goal-change confirmed or declined by user; memories extracted count; token usage per request |
+| `[SETTING]` | Every user-initiated settings change — units, check-in frequency, auto-sync, stats window, debug toggle, display name, Hevy API key, AI context mode, language, token counter reset, Google Fit connect / disconnect |
+| `[PROFILE]` | Profile created, activated, renamed, deleted, switched; startup selection; first-run setup; data migration |
+| `[RESET]` | Memories cleared; goals cleared; sync state reset; full data wipe |
+| `[ERROR]` | AI API errors (provider, model, HTTP status, traceback line); Google Fit auth and sync failures; routine push / update failures; goal-change failures; coaching report failures |
+
+> Personal data is never written to logs: goal descriptions, body targets, chat messages, and per-session token counts are all omitted.
 
 ### Example
 
 ```
-2026-06-05 13:42:01 [SYNC   ] Hevy incremental sync started  since=2026-06-04T10:00:00Z
-2026-06-05 13:42:03 [SYNC   ] Hevy incremental sync complete  updated=3  deleted=0  routines=12
-2026-06-05 13:42:05 [AI     ] Token usage  provider=gemini  model=gemini-2.5-pro  input=1234  output=567  cache_read=890
+2026-06-05 13:41:00 [APP    ] Lifter started  profile=alice  provider=gemini  model=gemini-2.5-pro
+2026-06-05 13:41:01 [SYNC   ] Data is fresh, no sync needed
+2026-06-05 13:41:05 [MENU   ] Selected: chat
+2026-06-05 13:41:06 [AI     ] Chat session started  provider=gemini  model=gemini-2.5-pro  weeks=8  slim=True
+2026-06-05 13:41:45 [AI     ] Token usage  provider=gemini  model=gemini-2.5-pro  input=1234  output=567  cache_read=890
+2026-06-05 13:42:10 [AI     ] Tool call: push_routine
+2026-06-05 13:42:12 [AI     ] Routine pushed to Hevy  routine_id=abc123  exercises=6
+2026-06-05 13:42:30 [AI     ] Chat session ended  turns=4
 2026-06-05 13:43:25 [ERROR  ] ClientError: 403 PERMISSION_DENIED  provider=gemini  status=403
+2026-06-05 13:44:00 [SETTING] auto_sync changed  value=1
+2026-06-05 13:44:10 [APP    ] Lifter exited
 ```
 
 Logs are never committed — `logs/` is in `.gitignore`.
