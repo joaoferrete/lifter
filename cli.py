@@ -41,6 +41,15 @@ STYLE = questionary.Style([
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+def _dlog(category: str, msg: str, **kv) -> None:
+    """Forward to debug_log.log without ever raising."""
+    try:
+        import debug_log
+        debug_log.log(category, msg, **kv)
+    except Exception:
+        pass
+
+
 def _time_ago(iso_str: str) -> str:
     try:
         dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
@@ -281,6 +290,7 @@ def _wizard_lift_prs() -> None:
             exercise_template_id=template_id,
             exercise_name=name,
         )
+        _dlog("GOAL", "Goal created", type="lift_pr")
         console.print(f"  [green]✓[/green] Goal saved: {name} {target_label}\n")
 
         if not questionary.confirm("  Add another lift goal?", default=False, style=STYLE).ask():
@@ -297,6 +307,7 @@ def _wizard_frequency() -> None:
     if choice:
         target = int(choice)
         save_goal(type="frequency", description=f"Train {target}× per week", target=target, unit="sessions/wk")
+        _dlog("GOAL", "Goal created", type="frequency", target=f"{target}x/wk")
         console.print(f"  [green]✓[/green] Goal saved: Train {target}× per week\n")
 
 
@@ -324,6 +335,7 @@ def _wizard_weight(goal_type: str) -> None:
         unit="kg",
         start_value=current_kg,
     )
+    _dlog("GOAL", "Goal created", type=goal_type)
     console.print(f"  [green]✓[/green] Goal saved: {direction} to {target_label}\n")
 
 
@@ -347,6 +359,7 @@ def _wizard_body_fat() -> None:
         unit="%",
         start_value=current,
     )
+    _dlog("GOAL", "Goal created", type="body_fat")
     console.print(f"  [green]✓[/green] Goal saved: Reach {target}% body fat\n")
 
 
@@ -373,6 +386,7 @@ def _wizard_volume() -> None:
         unit="sets/wk",
         muscle_group=muscle,
     )
+    _dlog("GOAL", "Goal created", type="volume", muscle=muscle, target=f"{int(target)} sets/wk")
     console.print("  [green]✓[/green] Goal saved\n")
 
 
@@ -384,6 +398,7 @@ def _wizard_custom() -> None:
     ).ask()
     if text:
         save_goal(type="custom", description=text.strip())
+        _dlog("GOAL", "Goal created", type="custom")
         console.print("  [green]✓[/green] Goal saved\n")
 
 
@@ -1156,6 +1171,7 @@ def _do_ai_settings():
             new_val = "0" if slim_on else "1"
             set_pref("ai_chat_slim", new_val)
             label = "Slim (fewer tokens)" if new_val == "1" else "Full (all analytics)"
+            _dlog("SETTING", "ai_chat_slim changed", value=label)
             console.print(f"[green]✓ Context mode set to: {label}[/green]")
 
         elif action == "language":
@@ -1168,11 +1184,13 @@ def _do_ai_settings():
             ).ask()
             if new_lang:
                 set_pref("ai_language", new_lang)
+                _dlog("SETTING", "ai_language changed", value=new_lang)
                 console.print(f"[green]✓ Language set to {new_lang}[/green]")
 
         elif action == "reset_tokens":
             if questionary.confirm("  Reset all token counters to zero?", default=False, style=STYLE).ask():
                 reset_token_usage()
+                _dlog("SETTING", "token counters reset")
                 console.print("[green]✓ Token counters reset.[/green]")
 
 
@@ -1201,12 +1219,14 @@ def _do_data_reset():
             ).ask():
                 from db.memories import clear_memories
                 clear_memories()
+                _dlog("RESET", "Coach memories cleared")
                 console.print("[green]✓ Memories cleared.[/green]")
 
         elif action == "goals":
             if questionary.confirm("  Delete all goals?", default=False, style=STYLE).ask():
                 from db.goals import clear_goals
                 clear_goals()
+                _dlog("RESET", "All goals cleared")
                 console.print("[green]✓ Goals cleared.[/green]")
 
         elif action == "sync_state":
@@ -1215,6 +1235,7 @@ def _do_data_reset():
             ).ask():
                 from db.store import set_sync_state
                 set_sync_state("last_sync", "1970-01-01T00:00:00Z")
+                _dlog("RESET", "Sync state reset")
                 console.print("[green]✓ Sync state reset. Run Sync → Incremental to re-download.[/green]")
 
         elif action == "all":
@@ -1240,6 +1261,7 @@ def _do_data_reset():
             except FileNotFoundError:
                 pass
 
+            _dlog("RESET", "Full data wipe executed")
             console.print(
                 "\n[bold green]✓ Everything wiped.[/bold green]\n"
                 "  Run [bold]Sync → Full[/bold] to re-download your workouts."
@@ -1397,6 +1419,7 @@ def _do_profile_settings() -> None:
         new_name = (questionary.text("  New display name:", style=STYLE).ask() or "").strip()
         if new_name:
             set_pref("display_name", new_name)
+            _dlog("SETTING", "display_name changed")
             console.print(f"[green]✓ Name updated to '{_esc(new_name)}'[/green]")
 
     elif action == "apikey" and active_slug:
@@ -1404,6 +1427,7 @@ def _do_profile_settings() -> None:
         if new_key:
             update_profile_key(active_slug, new_key)
             config.HEVY_API_KEY = new_key
+            _dlog("SETTING", "hevy_api_key updated", profile=active_slug)
             console.print("[green]✓ Hevy API key updated.[/green]")
 
 
@@ -1455,6 +1479,7 @@ def _do_preferences_settings() -> None:
             ).ask()
             if new_units:
                 set_pref("units", new_units)
+                _dlog("SETTING", "units changed", value=new_units)
                 console.print(f"[green]✓ Units set to {new_units}[/green]")
 
         elif action == "checkin":
@@ -1470,10 +1495,13 @@ def _do_preferences_settings() -> None:
             ).ask()
             if new_days:
                 set_pref("goals_checkin_days", new_days)
+                _dlog("SETTING", "goals_checkin_days changed", value=new_days)
                 console.print(f"[green]✓ Goal check-in set to every {new_days} days[/green]")
 
         elif action == "autosync":
-            set_pref("auto_sync", "0" if auto_sync else "1")
+            new_auto = "0" if auto_sync else "1"
+            set_pref("auto_sync", new_auto)
+            _dlog("SETTING", "auto_sync changed", value=new_auto)
             console.print(f"[green]✓ Auto-sync {'disabled' if auto_sync else 'enabled'}[/green]")
 
         elif action == "stats_window":
@@ -1485,12 +1513,14 @@ def _do_preferences_settings() -> None:
             ).ask()
             if new_window:
                 set_pref("default_stats_weeks", new_window)
+                _dlog("SETTING", "default_stats_weeks changed", value=new_window)
                 console.print(f"[green]✓ Default stats window set to {new_window}[/green]")
 
         elif action == "debug":
             new_val = not debug_on
             set_pref("debug_logging", "1" if new_val else "0")
             debug_log.enable(new_val)
+            _dlog("SETTING", "debug_logging changed", value="on" if new_val else "off")
             if new_val:
                 from debug_log import LOGS_DIR
                 console.print(f"[green]✓ Debug logging enabled.[/green] Logs → [dim]{LOGS_DIR}/debug-YYYY-MM-DD.log[/dim]")
@@ -1712,6 +1742,7 @@ def _check_stale_sync() -> None:
     stale_fit = fit_ok and _is_stale("fit_last_sync")
 
     if not stale_hevy and not stale_fit:
+        _dlog("SYNC", "Data is fresh, no sync needed")
         return
 
     console.print()
@@ -1719,16 +1750,19 @@ def _check_stale_sync() -> None:
     if stale_hevy:
         if auto_sync:
             try:
+                _dlog("SYNC", "Hevy auto-sync triggered (data stale >24h)")
                 console.print("[dim]Auto-syncing Hevy...[/dim]")
                 client = _require_hevy()
                 if client:
                     counts = incremental_sync(client)
                     console.print(f"[dim]Auto-synced Hevy: {counts['updated']} updated · {counts['deleted']} deleted.[/dim]")
             except Exception as e:
+                _dlog("SYNC", "Hevy auto-sync error", error=str(e)[:200])
                 console.print(f"[dim]Hevy auto-sync failed: {e}[/dim]")
         elif questionary.confirm(
             "  Hevy hasn't been synced in over 24h. Sync now?", default=True, style=STYLE
         ).ask():
+            _dlog("SYNC", "User accepted Hevy sync prompt")
             client = _require_hevy()
             if client:
                 counts = incremental_sync(client)
@@ -1736,19 +1770,24 @@ def _check_stale_sync() -> None:
                     f"[green]Hevy sync done:[/green] "
                     f"{counts['updated']} updated · {counts['deleted']} deleted."
                 )
+        else:
+            _dlog("SYNC", "User declined Hevy sync prompt")
 
     if stale_fit:
         if auto_sync:
             try:
+                _dlog("SYNC", "Google Fit auto-sync triggered (data stale >24h)")
                 console.print("[dim]Auto-syncing Google Fit...[/dim]")
                 from fit.sync import sync_fit
                 counts = sync_fit(days=30)
                 console.print(f"[dim]Auto-synced Fit: {counts['daily_days']} days · {counts['sleep_sessions']} sleep sessions.[/dim]")
             except Exception as e:
+                _dlog("SYNC", "Google Fit auto-sync error", error=str(e)[:200])
                 console.print(f"[dim]Fit auto-sync failed: {e}[/dim]")
         elif questionary.confirm(
             "  Google Fit hasn't been synced in over 24h. Sync now?", default=True, style=STYLE
         ).ask():
+            _dlog("SYNC", "User accepted Google Fit sync prompt")
             try:
                 from fit.sync import sync_fit
                 counts = sync_fit(days=90)
@@ -1758,6 +1797,8 @@ def _check_stale_sync() -> None:
                 )
             except Exception as e:
                 console.print(f"[red]Fit sync failed: {e}[/red]")
+        else:
+            _dlog("SYNC", "User declined Google Fit sync prompt")
 
 
 def _check_goals_and_checkin() -> None:
@@ -1909,6 +1950,11 @@ def main():
     init_db()
     import debug_log
     debug_log.init()
+    from profile_mgr import get_active_slug
+    import config as _cfg
+    _dlog("APP", "Lifter started",
+          profile=get_active_slug() or "none",
+          provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL)
     _check_goals_and_checkin()
     _check_stale_sync()
 
@@ -1927,8 +1973,10 @@ def main():
 
         if choice is None or choice == "exit":
             console.print("\n[dim]See you at the gym![/dim]\n")
+            _dlog("APP", "Lifter exited")
             break
 
+        _dlog("MENU", f"Selected: {choice}")
         set_pref("last_menu_action", choice)
         console.clear()
         action = ACTIONS.get(choice)
