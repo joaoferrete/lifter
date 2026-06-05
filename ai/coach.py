@@ -573,18 +573,25 @@ def _show_and_confirm_routine(routine: dict) -> dict:
         )
 
     if not questionary.confirm("  Push this routine to your Hevy app?", default=True).ask():
+        from debug_log import log
+        log("AI", "Routine push declined by user")
         console.print("[dim]Routine not pushed.[/dim]\n")
         return {"success": False, "message": "User declined"}
 
     try:
         with console.status("[dim]Saving routine to Hevy...[/dim]", spinner="dots"):
             from hevy.client import _routine_id
+            from debug_log import log
             resp = HevyClient().create_routine(_stamp_routine(routine))
             routine_id = _routine_id(resp)
+        log("AI", "Routine pushed to Hevy", routine_id=routine_id,
+            exercises=len(routine.get("exercises", [])))
         console.print(f"[green]✓ Routine saved to Hevy[/green] (id: {routine_id})\n")
         _show_exercise_benefits(routine.get("exercises", []))
         return {"success": True, "routine_id": routine_id}
     except Exception as e:
+        from debug_log import log
+        log("ERROR", f"Routine push failed: {type(e).__name__}", error=str(e)[:200])
         console.print(f"[red]Failed: {e}[/red]\n")
         return {"success": False, "error": str(e)}
 
@@ -637,17 +644,23 @@ def _show_and_confirm_routine_update(fc_args: dict) -> dict:
         )
 
     if not questionary.confirm("  Save these changes to your Hevy app?", default=True).ask():
+        from debug_log import log
+        log("AI", "Routine update declined by user", routine_id=routine_id)
         console.print("[dim]Update cancelled.[/dim]\n")
         return {"success": False, "message": "User declined"}
 
     try:
         with console.status("[dim]Updating routine in Hevy...[/dim]", spinner="dots"):
+            from debug_log import log
             HevyClient().update_routine(routine_id, _stamp_routine(new_routine))
             upsert_routine({"id": routine_id, **new_routine})
+        log("AI", "Routine updated in Hevy", routine_id=routine_id)
         console.print(f"[green]✓ Routine updated[/green] (id: {routine_id})\n")
         _show_exercise_benefits(new_routine.get("exercises", []))
         return {"success": True, "routine_id": routine_id}
     except Exception as e:
+        from debug_log import log
+        log("ERROR", f"Routine update failed: {type(e).__name__}", routine_id=routine_id, error=str(e)[:200])
         console.print(f"[red]Failed: {e}[/red]\n")
         return {"success": False, "error": str(e)}
 
@@ -673,6 +686,8 @@ def _handle_manage_goals(fc_args: dict) -> dict:
     ))
 
     if not questionary.confirm("  Apply this change?", default=True).ask():
+        from debug_log import log
+        log("AI", "Goal change declined by user", action=action)
         console.print("[dim]Change not applied.[/dim]\n")
         return {"success": False, "message": "User declined"}
 
@@ -715,10 +730,14 @@ def _handle_manage_goals(fc_args: dict) -> dict:
             else:
                 raise ValueError(f"Unknown action: {action}")
 
+        from debug_log import log
+        log("AI", "Goal change applied", action=action)
         console.print(f"{label}\n")
         return result
 
     except Exception as e:
+        from debug_log import log
+        log("ERROR", f"Goal change failed: {type(e).__name__}", action=action, error=str(e)[:200])
         console.print(f"[red]Failed: {e}[/red]\n")
         return {"success": False, "error": str(e)}
 

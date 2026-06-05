@@ -451,6 +451,7 @@ def run_goals_wizard(is_update: bool = False) -> None:
 
     mark_goals_asked()
     total = len(get_goals())
+    _dlog("GOAL", "Goals wizard completed", total=total, mode="update" if is_update else "new")
     console.print(f"\n  [bold green]✓ {total} goal(s) saved.[/bold green] The AI coach will now track your progress.\n")
 
 
@@ -776,6 +777,7 @@ def _do_stats():
     if not weeks_str:
         return
     weeks = int(weeks_str.split()[0])
+    _dlog("MENU", "Stats viewed", weeks=weeks)
 
     freq = workout_frequency(weeks)
     if freq["total_workouts"] == 0:
@@ -869,6 +871,7 @@ def _do_progress():
     if not weeks_str:
         return
     weeks = int(weeks_str.split()[0])
+    _dlog("MENU", "Progression viewed", type=choice, weeks=weeks)
 
     if choice == "top":
         console.rule(f"[bold]Top progressions — last {weeks} weeks[/bold]")
@@ -924,6 +927,7 @@ def _do_progress():
 
 
 def _do_records():
+    _dlog("MENU", "Personal records viewed")
     prs = all_time_records()
     if not prs:
         console.print("[yellow]No records yet. Run Sync first.[/yellow]")
@@ -953,6 +957,7 @@ def _do_goals():
     ).ask()
     if not action:
         return
+    _dlog("MENU", "Goals action selected", action=action, active_goals=len(goals))
     if action == "view":
         if not goals:
             console.print("[yellow]No goals set yet.[/yellow]")
@@ -1118,6 +1123,7 @@ def _do_chat():
     if not weeks_str:
         return
     weeks = int(weeks_str)
+    _dlog("AI", "Chat requested", weeks=weeks)
     from ai.coach import start_enhanced_chat
     start_enhanced_chat(weeks=weeks)
 
@@ -1343,6 +1349,7 @@ def _do_profiles_menu() -> None:
             choices.append(questionary.Choice("  Cancel", value=None))
             slug = questionary.select("Switch to:", choices=choices, style=STYLE).ask()
             if slug and slug != active_slug:
+                _dlog("PROFILE", "Profile switch requested", from_slug=active_slug, to_slug=slug)
                 set_active_slug(slug)
                 console.print(f"[green]Switching to '{_esc(get_profile_name(slug))}'...[/green]")
                 import os as _os
@@ -1352,6 +1359,7 @@ def _do_profiles_menu() -> None:
         elif action == "create":
             slug = _do_create_profile_flow()
             if questionary.confirm("  Switch to new profile now?", default=True, style=STYLE).ask():
+                _dlog("PROFILE", "Switched to newly created profile", slug=slug)
                 set_active_slug(slug)
                 import os as _os
                 import sys as _sys
@@ -1643,6 +1651,7 @@ def _do_fit():
             ))
             _render_recovery_panel()
         except Exception as e:
+            _dlog("ERROR", f"Google Fit sync failed: {type(e).__name__}", error=str(e)[:200])
             console.print(f"[red]{e}[/red]")
 
     elif action == "view":
@@ -1912,6 +1921,7 @@ def _bootstrap_profiles() -> None:
             _shutil.move(str(old_token), profile_dir / "fit_token.json")
         set_active_slug(slug)
         activate_profile(slug)
+        _dlog("PROFILE", "Single-user data migrated to profile", slug=slug)
         console.print(f"[green]✓ Profile '{_esc(name)}' created and data migrated.[/green]")
         console.print()
         return
@@ -1933,6 +1943,7 @@ def _bootstrap_profiles() -> None:
         ).ask() or "").strip()
         profile = create_profile(name, hevy_api_key=api_key)
         activate_profile(profile["slug"])
+        _dlog("PROFILE", "First run: profile created", slug=profile["slug"])
         console.print()
         return
 
@@ -1957,6 +1968,7 @@ def _bootstrap_profiles() -> None:
     elif slug == "_new":
         slug = _do_create_profile_flow()
 
+    _dlog("PROFILE", "Profile selected at startup", slug=slug, total_profiles=len(profiles))
     set_active_slug(slug)
     activate_profile(slug)
 
