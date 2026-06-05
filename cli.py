@@ -1265,7 +1265,7 @@ def _do_create_profile_flow() -> str:
 def _do_profiles_menu() -> None:
     from profiles import (
         list_profiles, get_active_slug, activate_profile, set_active_slug,
-        rename_profile, delete_profile, get_profile_name, update_profile_key,
+        rename_profile, delete_profile, get_profile_name,
     )
 
     while True:
@@ -1287,7 +1287,6 @@ def _do_profiles_menu() -> None:
                 questionary.Choice("  Switch profile",         value="switch"),
                 questionary.Choice("  Create new profile",     value="create"),
                 questionary.Choice("  Rename current profile", value="rename"),
-                questionary.Choice("  Update Hevy API key",    value="apikey"),
                 questionary.Choice("  Delete a profile",       value="delete"),
                 questionary.Separator("  ───────────────────────────────────────"),
                 questionary.Choice("  Back",                   value="back"),
@@ -1338,17 +1337,6 @@ def _do_profiles_menu() -> None:
                     rename_profile(active_slug, new_name)
                     console.print(f"[green]✓ Profile renamed to '{_esc(new_name)}'[/green]")
 
-        elif action == "apikey":
-            if active_slug:
-                new_key = (questionary.text(
-                    "  New Hevy API key:",
-                    style=STYLE,
-                ).ask() or "").strip()
-                if new_key:
-                    update_profile_key(active_slug, new_key)
-                    config.HEVY_API_KEY = new_key
-                    console.print("[green]✓ Hevy API key updated.[/green]")
-
         elif action == "delete":
             others = [p for p in profiles if p["slug"] != active_slug]
             if not others:
@@ -1371,20 +1359,52 @@ def _do_profiles_menu() -> None:
 
 
 def _do_profile_settings() -> None:
+    from profiles import get_active_slug, update_profile_key, PROFILES_DIR
+    import json as _json
+
+    active_slug = get_active_slug()
     name = get_pref("display_name") or ""
+
+    hevy_key = ""
+    if active_slug:
+        cfg_file = PROFILES_DIR / active_slug / "profile.json"
+        if cfg_file.exists():
+            try:
+                hevy_key = _json.loads(cfg_file.read_text()).get("hevy_api_key", "")
+            except Exception:
+                pass
+    masked_key = (hevy_key[:4] + "…" + hevy_key[-4:]) if len(hevy_key) > 8 else ("set" if hevy_key else "not set")
+
     console.print(Panel(
-        f"Display name:  [bold]{_esc(name) if name else '[dim]not set[/dim]'}[/bold]",
+        f"Display name:  [bold]{_esc(name) if name else '[dim]not set[/dim]'}[/bold]\n"
+        f"Hevy API key:  [bold]{masked_key}[/bold]",
         title="[bold]Profile[/bold]",
         border_style="cyan",
         padding=(0, 2),
     ))
-    new_name = questionary.text(
-        "  New display name (leave blank to cancel):",
+
+    action = questionary.select(
+        "Edit:",
+        choices=[
+            questionary.Choice("  Display name",  value="name"),
+            questionary.Choice("  Hevy API key",  value="apikey"),
+            questionary.Choice("  Cancel",        value="back"),
+        ],
         style=STYLE,
     ).ask()
-    if new_name and new_name.strip():
-        set_pref("display_name", new_name.strip())
-        console.print(f"[green]✓ Name updated to '{_esc(new_name.strip())}'[/green]")
+
+    if action == "name":
+        new_name = (questionary.text("  New display name:", style=STYLE).ask() or "").strip()
+        if new_name:
+            set_pref("display_name", new_name)
+            console.print(f"[green]✓ Name updated to '{_esc(new_name)}'[/green]")
+
+    elif action == "apikey" and active_slug:
+        new_key = (questionary.text("  New Hevy API key:", style=STYLE).ask() or "").strip()
+        if new_key:
+            update_profile_key(active_slug, new_key)
+            config.HEVY_API_KEY = new_key
+            console.print("[green]✓ Hevy API key updated.[/green]")
 
 
 def _do_preferences_settings() -> None:
