@@ -5,6 +5,7 @@ fit_credentials.json
 fit_token.json
 profiles/
 profiles.json
+logs/
 __pycache__/
 *.py[cod]
 *.pyo

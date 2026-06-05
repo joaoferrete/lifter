@@ -26,6 +26,17 @@ _CHAT_HISTORY_FILE = Path.home() / ".hevy_chat_history"
 
 def _friendly_error(e: Exception) -> str:
     """Return a user-friendly error message for AI provider exceptions."""
+    try:
+        from debug_log import log
+        import config as _cfg
+        import traceback as _tb
+        _status = getattr(e, "status_code", None) or getattr(e, "code", None)
+        log("ERROR", f"{type(e).__name__}: {str(e)[:200]}",
+            provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL,
+            status=_status, traceback=_tb.format_exc().splitlines()[-1])
+    except Exception:
+        pass
+
     msg = str(e)
     status = getattr(e, "status_code", None) or getattr(e, "code", None)
 
@@ -317,6 +328,9 @@ Rules:
 
 
 def get_coaching(weeks: int = 8) -> dict:
+    from debug_log import log
+    import config as _cfg
+    log("AI", "Coaching report started", provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL, weeks=weeks)
     context = _build_context(weeks)
     lang = get_pref("ai_language") or "English"
     lang_line = f"\nAlways respond entirely in {lang}.\n" if lang != "English" else ""

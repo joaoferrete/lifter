@@ -1408,18 +1408,21 @@ def _do_profile_settings() -> None:
 
 
 def _do_preferences_settings() -> None:
+    import debug_log
     while True:
         console.clear()
         units = _get_units()
         checkin_days = int(get_pref("goals_checkin_days") or 7)
         auto_sync = get_pref("auto_sync") == "1"
         default_weeks = get_pref("default_stats_weeks") or "8 weeks"
+        debug_on = get_pref("debug_logging") == "1"
 
         lines = [
             f"Weight units:          [bold]{units}[/bold]",
             f"Goal check-in:         [bold]every {checkin_days} days[/bold]",
             f"Auto-sync on startup:  [bold]{'on' if auto_sync else 'off'}[/bold]",
             f"Default stats window:  [bold]{default_weeks}[/bold]",
+            f"Debug logging:         [bold]{'on' if debug_on else 'off'}[/bold]",
         ]
         console.print(Panel("\n".join(lines), title="[bold]Preferences[/bold]", border_style="cyan", padding=(0, 2)))
 
@@ -1430,6 +1433,7 @@ def _do_preferences_settings() -> None:
                 questionary.Choice(f"  Goal check-in frequency   (every {checkin_days}d)", value="checkin"),
                 questionary.Choice(f"  Auto-sync on startup      ({'on' if auto_sync else 'off'})", value="autosync"),
                 questionary.Choice(f"  Default stats window      ({default_weeks})", value="stats_window"),
+                questionary.Choice(f"  Debug logging             ({'on' if debug_on else 'off'})", value="debug"),
                 questionary.Separator("  ───"),
                 questionary.Choice("  Back", value="back"),
             ],
@@ -1482,6 +1486,16 @@ def _do_preferences_settings() -> None:
             if new_window:
                 set_pref("default_stats_weeks", new_window)
                 console.print(f"[green]✓ Default stats window set to {new_window}[/green]")
+
+        elif action == "debug":
+            new_val = not debug_on
+            set_pref("debug_logging", "1" if new_val else "0")
+            debug_log.enable(new_val)
+            if new_val:
+                from debug_log import LOGS_DIR
+                console.print(f"[green]✓ Debug logging enabled.[/green] Logs → [dim]{LOGS_DIR}/debug-YYYY-MM-DD.log[/dim]")
+            else:
+                console.print("[green]✓ Debug logging disabled.[/green]")
 
 
 def _do_settings() -> None:
@@ -1893,6 +1907,8 @@ def _bootstrap_profiles() -> None:
 def main():
     _bootstrap_profiles()
     init_db()
+    import debug_log
+    debug_log.init()
     _check_goals_and_checkin()
     _check_stale_sync()
 

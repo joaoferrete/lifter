@@ -92,6 +92,8 @@ def _sum_points(points: list[dict], field: str = "intVal") -> int | float | None
 
 
 def sync_fit(days: int = 30) -> dict:
+    from debug_log import log
+    log("SYNC", "Google Fit sync started", days=days)
     client = FitClient()
 
     # Use local midnight boundaries so day buckets align to the user's clock,
@@ -112,7 +114,8 @@ def sync_fit(days: int = 30) -> dict:
 
     from db.store import set_sync_state
     set_sync_state("fit_last_sync", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
-
+    log("SYNC", "Google Fit sync complete",
+        daily_days=counts["daily_days"], sleep_sessions=counts["sleep_sessions"])
     return counts
 
 
