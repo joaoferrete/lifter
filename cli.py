@@ -1316,14 +1316,16 @@ def _do_profiles_menu() -> None:
             if slug and slug != active_slug:
                 set_active_slug(slug)
                 console.print(f"[green]Switching to '{_esc(get_profile_name(slug))}'...[/green]")
-                import os as _os, sys as _sys
+                import os as _os
+                import sys as _sys
                 _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
 
         elif action == "create":
             slug = _do_create_profile_flow()
             if questionary.confirm("  Switch to new profile now?", default=True, style=STYLE).ask():
                 set_active_slug(slug)
-                import os as _os, sys as _sys
+                import os as _os
+                import sys as _sys
                 _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
 
         elif action == "rename":
