@@ -1249,7 +1249,7 @@ def _do_data_reset():
 
 def _do_create_profile_flow() -> str:
     """Interactive profile creation. Returns the new slug."""
-    from profiles import create_profile
+    from profile_mgr import create_profile
     name = (questionary.text("  Profile name:", style=STYLE).ask() or "").strip()
     if not name:
         name = "New Profile"
@@ -1263,7 +1263,7 @@ def _do_create_profile_flow() -> str:
 
 
 def _do_profiles_menu() -> None:
-    from profiles import (
+    from profile_mgr import (
         list_profiles, get_active_slug, activate_profile, set_active_slug,
         rename_profile, delete_profile, get_profile_name,
     )
@@ -1359,7 +1359,7 @@ def _do_profiles_menu() -> None:
 
 
 def _do_profile_settings() -> None:
-    from profiles import get_active_slug, update_profile_key, PROFILES_DIR
+    from profile_mgr import get_active_slug, update_profile_key, PROFILES_DIR
     import json as _json
 
     active_slug = get_active_slug()
@@ -1808,7 +1808,7 @@ def _bootstrap_profiles() -> None:
     """Select or create a profile before any DB operations."""
     import shutil as _shutil
     from pathlib import Path as _Path
-    from profiles import (
+    from profile_mgr import (
         PROFILES_FILE, PROFILES_DIR, list_profiles, get_active_slug,
         set_active_slug, activate_profile, create_profile,
     )

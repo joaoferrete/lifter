@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lifter"
-version = "0.1.2"
+version = "0.2.0"
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.27",
@@ -23,7 +23,7 @@ dependencies = [
 lifter = "cli:main"
 
 [tool.setuptools]
-py-modules = ["cli", "config"]
+py-modules = ["cli", "config", "profile_mgr"]
 
 [tool.setuptools.packages.find]
 exclude = ["tests*", ".venv*"]
