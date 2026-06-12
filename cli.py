@@ -915,7 +915,7 @@ def _do_progress():
         t.add_column(_("progress.col_reps"), justify="right")
         t.add_column(_("progress.col_e1rm"), justify="right")
         prev_e1rm = None
-        for _, row in df.iterrows():
+        for _idx, row in df.iterrows():
             change = ""
             if prev_e1rm is not None:
                 delta = row["e1rm"] - prev_e1rm
