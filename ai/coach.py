@@ -108,6 +108,9 @@ def _build_context(weeks: int = 8, slim: bool = False) -> str:
 
     safe_name = sanitize_for_prompt(name, max_len=60)
 
+    now = datetime.now(timezone.utc).astimezone()
+    current_datetime_line = f"- Current date/time: {now.strftime('%A, %Y-%m-%d %H:%M')} (local)"
+
     # Days since last workout — helps the coach assess recovery state
     last_wkt = query("SELECT start_time FROM workouts ORDER BY start_time DESC LIMIT 1")
     days_since_last = None
@@ -120,6 +123,7 @@ def _build_context(weeks: int = 8, slim: bool = False) -> str:
 
     lines = [
         f"## Athlete: {safe_name}",
+        current_datetime_line,
         f"## Training summary (last {weeks} weeks)\n",
         f"- Total workouts: {freq['total_workouts']}",
         f"- Avg workouts/week: {freq['avg_per_week']}",
