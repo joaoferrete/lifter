@@ -6,6 +6,7 @@ _PROJECT_DIR = Path(__file__).resolve().parent
 load_dotenv(_PROJECT_DIR / ".env")
 
 HEVY_API_KEY: str = os.environ.get("HEVY_API_KEY", "")
+DEFAULT_LANGUAGE: str = os.environ.get("DEFAULT_LANGUAGE", "en")
 BASE_URL: str = "https://api.hevyapp.com"
 _raw_db = os.environ.get("DB_PATH")
 DB_PATH: Path = (

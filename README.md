@@ -615,6 +615,64 @@ Logs are never committed — `logs/` is in `.gitignore`.
 
 ---
 
+## Internationalization
+
+Lifter supports multiple UI languages. The translation layer lives in `i18n.py` and reads JSON files from `locales/`.
+
+### Changing the language
+
+**Per profile (recommended):** Go to **Settings → Preferences → UI language** and pick from the list. The change takes effect immediately for the rest of the session and persists across restarts.
+
+**Global bootstrap language** (shown before a profile is selected): set `DEFAULT_LANGUAGE=en` in your `.env` file. This controls the language of the profile-selector screen.
+
+### Supported languages
+
+| Code | Name |
+|------|------|
+| `en` | English |
+| `pt_BR` | Português (Brasil) |
+
+### Adding a new language
+
+1. **Copy the English locale file and translate it:**
+
+   ```bash
+   cp locales/en.json locales/fr.json
+   # edit locales/fr.json — translate every value, keep keys and {placeholders} intact
+   ```
+
+   Rules for translators:
+   - **Keys** (`"menu.sync"`) — never translate, only values.
+   - **`{placeholders}`** — keep them verbatim; they are filled at runtime (e.g. `{retry_after}`, `{name}`).
+   - **Rich markup** (`[bold]`, `[red]...[/red]`, `[dim]`) — preserve tags exactly; they control terminal formatting.
+   - Empty string values fall back to English automatically.
+
+2. **Register the language code** in `i18n.py`:
+
+   ```python
+   _SUPPORTED: set = {"en", "pt_BR", "fr"}   # add your code here
+   ```
+
+3. **Add a display name** to `_UI_LANGUAGES` in `cli.py`:
+
+   ```python
+   _UI_LANGUAGES = [
+       ("en",    "English"),
+       ("pt_BR", "Português (Brasil)"),
+       ("fr",    "Français"),           # add this line
+   ]
+   ```
+
+4. **Verify** the new locale loads:
+
+   ```bash
+   python -c "from i18n import _; import i18n; i18n.init('fr'); print(_('menu.sync'))"
+   ```
+
+   If a key is missing from your locale file, Lifter falls back to English automatically — no crash.
+
+---
+
 ## Running tests
 
 ```bash

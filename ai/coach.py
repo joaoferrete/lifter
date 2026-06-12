@@ -18,6 +18,7 @@ from analytics.frequency import workout_frequency, muscle_group_frequency
 from analytics.records import all_time_records, recent_prs, body_measurement_trend
 from db.store import query, get_routines_with_exercises
 from db.goals import goals_context_for_ai, get_pref, get_goals
+from i18n import _
 
 console = Console()
 
@@ -61,19 +62,19 @@ def _friendly_error(e: Exception) -> str:
             m = re.search(r"(\d+)\s*s", msg, re.IGNORECASE)
             retry_after = m.group(1) if m else None
         if retry_after:
-            return f"AI rate limit reached. Try again in {retry_after} seconds. (error 429)"
-        return "AI rate limit reached. Please wait a moment and try again. (error 429)"
+            return _("error.rate_limit_429", retry_after=retry_after)
+        return _("error.rate_limit_429_no_retry")
     if status == 401:
-        return "AI API key is invalid or expired. Check your API key in .env. (error 401)"
+        return _("error.api_key_invalid_401")
     if status == 403:
-        return "Access denied to AI service. Check your API key permissions. (error 403)"
+        return _("error.access_denied_403")
     if status == 400:
-        return "AI rejected the request. (error 400)"
+        return _("error.bad_request_400")
     if status is not None and status >= 500:
-        return f"AI service is temporarily unavailable. Try again in a moment. (error {status})"
+        return _("error.server_error_5xx", status=status)
     if status is not None:
-        return f"AI request failed. (error {status})"
-    return f"AI request failed. Check your API key and network connection. ({type(e).__name__})"
+        return _("error.generic_status", status=status)
+    return _("error.generic", exc_type=type(e).__name__)
 
 # ── context builder ───────────────────────────────────────────────────────────
 
@@ -344,10 +345,10 @@ def get_coaching(weeks: int = 8) -> dict:
     )
     system = _COACH_SYSTEM + lang_line
 
-    console.print(f"\n[dim]Powered by {provider_label()}[/dim]\n")
+    console.print(_("coach.powered_by", provider=provider_label()))
 
     status = console.status(
-        "[bold cyan]Generating coaching report...[/bold cyan]",
+        _("coach.generating"),
         spinner="dots",
     )
     status.start()
@@ -530,7 +531,7 @@ def _show_exercise_benefits(exercises: list) -> None:
     if benefit_lines:
         console.print(Panel(
             "\n".join(benefit_lines).strip(),
-            title="[bold green]Exercise Benefits[/bold green]",
+            title=_("chat.exercise_benefits_title"),
             border_style="green",
         ))
 
@@ -555,7 +556,7 @@ def _show_and_confirm_routine(routine: dict) -> dict:
         ex_title = ex.get("title") or ex.get("exercise_template_id", "Exercise")
         lines.append(f"  • [bold]{ex_title}[/bold]  {sets_desc}{note}")
 
-    console.print(Panel("\n".join(lines), title="[bold cyan]Proposed routine[/bold cyan]", border_style="cyan"))
+    console.print(Panel("\n".join(lines), title=_("chat.routine_panel_title"), border_style="cyan"))
 
     invalid_ids = [
         ex.get("exercise_template_id", "")
@@ -567,26 +568,23 @@ def _show_and_confirm_routine(routine: dict) -> dict:
         )
     ]
     if invalid_ids:
-        console.print(
-            f"[yellow]⚠ {len(invalid_ids)} exercise ID(s) not found in your library "
-            f"and will be skipped: {', '.join(invalid_ids[:3])}[/yellow]"
-        )
+        console.print(_("chat.routine_invalid_ids", count=len(invalid_ids), ids=', '.join(invalid_ids[:3])))
 
-    if not questionary.confirm("  Push this routine to your Hevy app?", default=True).ask():
+    if not questionary.confirm(_("chat.push_routine_prompt"), default=True).ask():
         from debug_log import log
         log("AI", "Routine push declined by user")
-        console.print("[dim]Routine not pushed.[/dim]\n")
+        console.print(_("chat.routine_not_pushed"))
         return {"success": False, "message": "User declined"}
 
     try:
-        with console.status("[dim]Saving routine to Hevy...[/dim]", spinner="dots"):
+        with console.status(_("chat.saving_routine"), spinner="dots"):
             from hevy.client import _routine_id
             from debug_log import log
             resp = HevyClient().create_routine(_stamp_routine(routine))
             routine_id = _routine_id(resp)
         log("AI", "Routine pushed to Hevy", routine_id=routine_id,
             exercises=len(routine.get("exercises", [])))
-        console.print(f"[green]✓ Routine saved to Hevy[/green] (id: {routine_id})\n")
+        console.print(_("chat.routine_pushed", routine_id=routine_id))
         _show_exercise_benefits(routine.get("exercises", []))
         return {"success": True, "routine_id": routine_id}
     except Exception as e:
@@ -629,7 +627,7 @@ def _show_and_confirm_routine_update(fc_args: dict) -> dict:
         ex_title = ex.get("title") or ex.get("exercise_template_id", "Exercise")
         lines.append(f"  • [bold]{ex_title}[/bold]  {sets_desc}{note}")
 
-    console.print(Panel("\n".join(lines), title="[bold yellow]Update routine[/bold yellow]", border_style="yellow"))
+    console.print(Panel("\n".join(lines), title=_("chat.routine_update_panel_title"), border_style="yellow"))
 
     invalid_ids = [
         ex.get("exercise_template_id", "")
@@ -638,24 +636,21 @@ def _show_and_confirm_routine_update(fc_args: dict) -> dict:
         and not query("SELECT 1 FROM exercise_templates WHERE id = ?", (ex["exercise_template_id"],))
     ]
     if invalid_ids:
-        console.print(
-            f"[yellow]⚠ {len(invalid_ids)} exercise ID(s) not found in your library "
-            f"and will be skipped: {', '.join(invalid_ids[:3])}[/yellow]"
-        )
+        console.print(_("chat.routine_invalid_ids", count=len(invalid_ids), ids=', '.join(invalid_ids[:3])))
 
-    if not questionary.confirm("  Save these changes to your Hevy app?", default=True).ask():
+    if not questionary.confirm(_("chat.save_changes_prompt"), default=True).ask():
         from debug_log import log
         log("AI", "Routine update declined by user", routine_id=routine_id)
-        console.print("[dim]Update cancelled.[/dim]\n")
+        console.print(_("chat.update_cancelled"))
         return {"success": False, "message": "User declined"}
 
     try:
-        with console.status("[dim]Updating routine in Hevy...[/dim]", spinner="dots"):
+        with console.status(_("chat.updating_routine"), spinner="dots"):
             from debug_log import log
             HevyClient().update_routine(routine_id, _stamp_routine(new_routine))
             upsert_routine({"id": routine_id, **new_routine})
         log("AI", "Routine updated in Hevy", routine_id=routine_id)
-        console.print(f"[green]✓ Routine updated[/green] (id: {routine_id})\n")
+        console.print(_("chat.routine_updated", routine_id=routine_id))
         _show_exercise_benefits(new_routine.get("exercises", []))
         return {"success": True, "routine_id": routine_id}
     except Exception as e:
@@ -676,23 +671,23 @@ def _handle_manage_goals(fc_args: dict) -> dict:
         gid = fc_args.get("goal_id")
         valid_ids = {g["id"] for g in get_goals()}
         if gid is None or int(gid) not in valid_ids:
-            console.print(f"[red]⚠ AI referenced a non-existent goal (id={gid}). Change blocked.[/red]\n")
+            console.print(_("chat.goal_invalid_id", gid=gid))
             return {"success": False, "error": f"Goal ID {gid} does not exist"}
 
     console.print(Panel(
         f"[bold]{sanitize_for_prompt(summary, max_len=200)}[/bold]",
-        title="[bold yellow]Goal Change Requested[/bold yellow]",
+        title=_("chat.goal_panel_title"),
         border_style="yellow",
     ))
 
-    if not questionary.confirm("  Apply this change?", default=True).ask():
+    if not questionary.confirm(_("chat.apply_change_prompt"), default=True).ask():
         from debug_log import log
         log("AI", "Goal change declined by user", action=action)
-        console.print("[dim]Change not applied.[/dim]\n")
+        console.print(_("chat.change_not_applied"))
         return {"success": False, "message": "User declined"}
 
     try:
-        with console.status("[dim]Applying goal change...[/dim]", spinner="dots"):
+        with console.status(_("chat.applying_change"), spinner="dots"):
             if action == "add":
                 save_goal(
                     type=fc_args.get("goal_type", "custom"),
@@ -703,7 +698,7 @@ def _handle_manage_goals(fc_args: dict) -> dict:
                     exercise_name=fc_args.get("exercise_name"),
                     muscle_group=fc_args.get("muscle_group"),
                 )
-                label = "[green]✓ Goal added[/green]"
+                label = _("chat.goal_added")
                 result: dict = {"success": True, "action": "added"}
 
             elif action == "update":
@@ -716,7 +711,7 @@ def _handle_manage_goals(fc_args: dict) -> dict:
                     target=fc_args.get("target"),
                     unit=fc_args.get("unit"),
                 )
-                label = "[green]✓ Goal updated[/green]"
+                label = _("chat.goal_updated")
                 result = {"success": True, "action": "updated"}
 
             elif action == "remove":
@@ -724,7 +719,7 @@ def _handle_manage_goals(fc_args: dict) -> dict:
                 if not gid:
                     raise ValueError("goal_id is required for remove")
                 delete_goal(int(gid))
-                label = "[green]✓ Goal removed[/green]"
+                label = _("chat.goal_removed")
                 result = {"success": True, "action": "removed"}
 
             else:
@@ -866,12 +861,8 @@ def start_enhanced_chat(weeks: int = 8) -> None:
 
     session = create_chat_session(system=system, tools=[_PUSH_ROUTINE_TOOL, _UPDATE_ROUTINE_TOOL, _MANAGE_GOALS_TOOL])
 
-    console.rule("[bold cyan]Chat with AI Coach[/bold cyan]")
-    console.print(
-        f"  [dim]Provider: {provider_label()} · {weeks} weeks of context loaded.[/dim]\n"
-        "  [dim]The coach can create routines, modify goals, and remembers past conversations.[/dim]\n"
-        "  [dim]Type [bold]quit[/bold] or press Ctrl+C to return to the menu.[/dim]\n"
-    )
+    console.rule(_("chat.rule_title"))
+    console.print(_("chat.hint", provider=provider_label(), weeks=weeks))
 
     try:
         readline.read_history_file(_CHAT_HISTORY_FILE)
@@ -883,10 +874,10 @@ def start_enhanced_chat(weeks: int = 8) -> None:
 
     while True:
         try:
-            console.print("[bold green]You:[/bold green] ", end="")
+            console.print(_("chat.you_prompt"), end="")
             user_input = input("").strip()
         except (EOFError, KeyboardInterrupt):
-            console.print("\n[dim]Returning to menu...[/dim]")
+            console.print(_("chat.returning_to_menu"))
             break
 
         if not user_input:
@@ -899,21 +890,18 @@ def start_enhanced_chat(weeks: int = 8) -> None:
 
         # ── main call ────────────────────────────────────────────────────────
         try:
-            with console.status(
-                "[bold cyan]Coach is thinking... [dim](Ctrl+C to cancel)[/dim][/bold cyan]",
-                spinner="dots",
-            ):
+            with console.status(_("chat.thinking"), spinner="dots"):
                 response = session.send(user_input)
         except KeyboardInterrupt:
             session.discard_pending_user()
-            console.print("[dim]Cancelled.[/dim]\n")
+            console.print(_("chat.cancelled"))
             continue
         except Exception as e:
             console.print(f"[red]{_friendly_error(e)}[/red]\n")
             continue
 
         if response.text:
-            console.print("[bold cyan]Coach:[/bold cyan]")
+            console.print(_("chat.coach_label"))
             console.print(Markdown(response.text))
             console.print()
             conversation_log.append({"role": "assistant", "content": response.text})
@@ -923,14 +911,11 @@ def start_enhanced_chat(weeks: int = 8) -> None:
             nudge = _missed_tool_call_nudge(response.text)
             if nudge:
                 try:
-                    with console.status(
-                        "[bold cyan]Coach is thinking...[/bold cyan]",
-                        spinner="dots",
-                    ):
+                    with console.status(_("chat.thinking_short"), spinner="dots"):
                         response = session.send(nudge)
                 except KeyboardInterrupt:
                     session.discard_pending_user()
-                    console.print("[dim]Cancelled.[/dim]\n")
+                    console.print(_("chat.cancelled"))
                     continue
                 except Exception:
                     continue
@@ -951,20 +936,17 @@ def start_enhanced_chat(weeks: int = 8) -> None:
                 tool_results.append((tc, result))
 
             try:
-                with console.status(
-                    "[bold cyan]Coach is thinking...[/bold cyan]",
-                    spinner="dots",
-                ):
+                with console.status(_("chat.thinking_short"), spinner="dots"):
                     follow = session.submit_tool_results(tool_results)
             except KeyboardInterrupt:
-                console.print("[dim]Cancelled.[/dim]\n")
+                console.print(_("chat.cancelled"))
                 continue
             except Exception as e:
                 console.print(f"[red]{_friendly_error(e)}[/red]\n")
                 continue
 
             if follow.text:
-                console.print("[bold cyan]Coach:[/bold cyan]")
+                console.print(_("chat.coach_label"))
                 console.print(Markdown(follow.text))
                 console.print()
                 conversation_log.append({"role": "assistant", "content": follow.text})
@@ -980,10 +962,10 @@ def start_enhanced_chat(weeks: int = 8) -> None:
 
     # ── extract and save memories after session ends ──
     if len(conversation_log) >= 2:
-        with console.status("[dim]Saving insights from conversation...[/dim]", spinner="dots"):
+        with console.status(_("chat.saving_insights"), spinner="dots"):
             saved = _extract_and_save_memories(conversation_log)
         _log("AI", "Memories extracted", saved=saved)
         if saved > 0:
-            console.print(f"[dim]✓ {saved} insight(s) saved for future sessions.[/dim]\n")
+            console.print(_("chat.insights_saved", count=saved))
         else:
-            console.print("[dim]No new insights to save.[/dim]\n")
+            console.print(_("chat.no_insights"))
