@@ -23,7 +23,10 @@ dependencies = [
 lifter = "cli:main"
 
 [tool.setuptools]
-py-modules = ["cli", "config", "profile_mgr", "debug_log"]
+py-modules = ["cli", "config", "profile_mgr", "debug_log", "i18n"]
+
+[tool.setuptools.package-data]
+"*" = ["locales/*.json"]
 
 [tool.setuptools.packages.find]
 exclude = ["tests*", ".venv*"]
