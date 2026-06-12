@@ -76,6 +76,16 @@ def _friendly_error(e: Exception) -> str:
         return _("error.generic_status", status=status)
     return _("error.generic", exc_type=type(e).__name__)
 
+_AI_LANG_MAP = {
+    "Portuguese (BR)": "Brazilian Portuguese",
+    "Portuguese (PT)": "European Portuguese",
+}
+
+
+def _ai_lang_instruction(lang: str) -> str:
+    return _AI_LANG_MAP.get(lang, lang)
+
+
 # ── context builder ───────────────────────────────────────────────────────────
 
 def _build_context(weeks: int = 8, slim: bool = False) -> str:
@@ -98,6 +108,9 @@ def _build_context(weeks: int = 8, slim: bool = False) -> str:
 
     safe_name = sanitize_for_prompt(name, max_len=60)
 
+    now = datetime.now(timezone.utc).astimezone()
+    current_datetime_line = f"- Current date/time: {now.strftime('%A, %Y-%m-%d %H:%M')} (local)"
+
     # Days since last workout — helps the coach assess recovery state
     last_wkt = query("SELECT start_time FROM workouts ORDER BY start_time DESC LIMIT 1")
     days_since_last = None
@@ -110,6 +123,7 @@ def _build_context(weeks: int = 8, slim: bool = False) -> str:
 
     lines = [
         f"## Athlete: {safe_name}",
+        current_datetime_line,
         f"## Training summary (last {weeks} weeks)\n",
         f"- Total workouts: {freq['total_workouts']}",
         f"- Avg workouts/week: {freq['avg_per_week']}",
@@ -336,7 +350,7 @@ def get_coaching(weeks: int = 8) -> dict:
     log("AI", "Coaching report started", provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL, weeks=weeks)
     context = _build_context(weeks)
     lang = get_pref("ai_language") or "English"
-    lang_line = f"\nAlways respond entirely in {lang}.\n" if lang != "English" else ""
+    lang_line = f"\nAlways respond entirely in {_ai_lang_instruction(lang)}.\n" if lang != "English" else ""
     prompt = (
         "<training_data>\n"
         f"{context}\n"
@@ -849,7 +863,7 @@ def start_enhanced_chat(weeks: int = 8) -> None:
          provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL, weeks=weeks,
          slim=slim, lang=get_pref("ai_language") or "English")
     lang = get_pref("ai_language") or "English"
-    lang_line = f"\nAlways respond entirely in {lang}.\n" if lang != "English" else ""
+    lang_line = f"\nAlways respond entirely in {_ai_lang_instruction(lang)}.\n" if lang != "English" else ""
     # Use XML-like delimiters so the model can clearly distinguish
     # instructions (above) from untrusted data (below).
     system = (

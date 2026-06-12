@@ -1133,7 +1133,7 @@ def _do_chat():
 # ── settings & reset ─────────────────────────────────────────────────────────
 
 _AI_LANGUAGES = [
-    "English", "Portuguese", "Spanish", "French", "German",
+    "English", "Portuguese (BR)", "Portuguese (PT)", "Spanish", "French", "German",
     "Italian", "Dutch", "Polish", "Russian", "Japanese", "Chinese",
 ]
 
@@ -1153,6 +1153,9 @@ def _do_ai_settings():
         cache_pct = int(usage["cache_read"] / usage["input"] * 100) if usage["input"] else 0
         slim_on = get_pref("ai_chat_slim") != "0"
         lang = get_pref("ai_language") or "English"
+        if lang == "Portuguese":
+            lang = "Portuguese (BR)"
+            set_pref("ai_language", lang)
 
         from config import AI_MODEL
         slim_label = _("settings.ai.context_slim") if slim_on else _("settings.ai.context_full")
