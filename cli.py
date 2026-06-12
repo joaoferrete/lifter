@@ -1133,7 +1133,7 @@ def _do_chat():
 # ── settings & reset ─────────────────────────────────────────────────────────
 
 _AI_LANGUAGES = [
-    "English", "Portuguese", "Spanish", "French", "German",
+    "English", "Portuguese (BR)", "Portuguese (PT)", "Spanish", "French", "German",
     "Italian", "Dutch", "Polish", "Russian", "Japanese", "Chinese",
 ]
 
