@@ -39,10 +39,23 @@ Personal Hevy workout client with analytics, goal tracking, Google Fit integrati
 
 ### 1. Install dependencies
 
+**Option A — directly (system Python):**
+
 ```bash
 cd lifter
 pip install -r requirements.txt
 ```
+
+**Option B — inside a virtual environment (recommended to avoid conflicts with other Python projects):**
+
+```bash
+cd lifter
+python3 -m venv .venv
+source .venv/bin/activate   # on Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+Activate the venv with `source .venv/bin/activate` each time you open a new terminal before running `python3 cli.py`. To deactivate, run `deactivate`.
 
 ### 2. Create your `.env` file
 
