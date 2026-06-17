@@ -488,6 +488,127 @@ def stream_complete(prompt: str, system: str) -> Iterator[str]:
                 yield chunk.text
 
 
+def _loads_lenient(raw: str) -> dict:
+    """Parse a JSON object, tolerating stray markdown fences around it."""
+    raw = (raw or "").strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+    return json.loads(raw)
+
+
+def complete_json(prompt: str, system: str) -> dict:
+    """One-shot completion that returns a parsed JSON object.
+
+    Uses each provider's native JSON/structured mode (or an assistant ``{`` prefill
+    for Anthropic models, which lack a JSON mode) so the result is reliably parseable.
+    A malformed free-text JSON would otherwise waste the entire output.
+    """
+    if AI_PROVIDER == "claude":
+        import anthropic
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        cached_system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        response = client.messages.create(
+            model=AI_MODEL, system=cached_system,
+            messages=[
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": "{"},
+            ],
+            max_tokens=4096,
+        )
+        _track_usage(
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+        )
+        text = "".join(b.text for b in response.content if getattr(b, "type", None) == "text")
+        return _loads_lenient("{" + text)
+
+    if AI_PROVIDER in _OPENAI_COMPAT:
+        from openai import OpenAI
+        client = OpenAI(base_url=PROVIDER_BASE_URLS[AI_PROVIDER], api_key=get_provider_api_key())
+        response = client.chat.completions.create(
+            model=AI_MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=4096,
+            response_format={"type": "json_object"},
+        )
+        if response.usage:
+            _track_usage(response.usage.prompt_tokens, response.usage.completion_tokens)
+        return _loads_lenient(response.choices[0].message.content or "")
+
+    if AI_PROVIDER == "bedrock":
+        if AI_MODEL.startswith("anthropic."):
+            import anthropic
+            try:
+                client = anthropic.AnthropicBedrock(
+                    aws_region=AWS_REGION,
+                    aws_access_key=AWS_ACCESS_KEY_ID or None,
+                    aws_secret_key=AWS_SECRET_ACCESS_KEY or None,
+                    aws_session_token=AWS_SESSION_TOKEN or None,
+                )
+            except Exception as exc:
+                if "botocore" in str(exc) or "boto3" in str(exc):
+                    raise RuntimeError(
+                        'Bedrock requires the AWS SDK extras.\n'
+                        'Run: pip install "anthropic[bedrock]"'
+                    ) from exc
+                raise
+            cached_system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+            response = client.messages.create(
+                model=AI_MODEL, system=cached_system,
+                messages=[
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": "{"},
+                ],
+                max_tokens=4096,
+            )
+            _track_usage(
+                response.usage.input_tokens,
+                response.usage.output_tokens,
+                getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+            )
+            text = "".join(b.text for b in response.content if getattr(b, "type", None) == "text")
+            return _loads_lenient("{" + text)
+
+        client = _boto3_bedrock_client()
+        response = client.converse(
+            modelId=AI_MODEL,
+            system=[{"text": system}],
+            messages=[
+                {"role": "user", "content": [{"text": prompt}]},
+                {"role": "assistant", "content": [{"text": "{"}]},
+            ],
+            inferenceConfig={"maxTokens": 4096},
+        )
+        usage = response.get("usage", {})
+        _track_usage(usage.get("inputTokens", 0), usage.get("outputTokens", 0))
+        msg = response["output"]["message"]
+        text = "".join(item.get("text", "") for item in msg.get("content", []))
+        return _loads_lenient("{" + text)
+
+    from google import genai
+    from google.genai import types
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    response = client.models.generate_content(
+        model=AI_MODEL, contents=prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=system,
+            temperature=0.4,
+            response_mime_type="application/json",
+        ),
+    )
+    um = getattr(response, "usage_metadata", None)
+    if um:
+        _track_usage(
+            getattr(um, "prompt_token_count", 0) or 0,
+            getattr(um, "candidates_token_count", 0) or 0,
+        )
+    return _loads_lenient(response.text or "")
+
+
 def provider_label() -> str:
     labels = {
         "openrouter": "OpenRouter",

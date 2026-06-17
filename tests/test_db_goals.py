@@ -99,6 +99,37 @@ def test_should_ask_goals_respects_goals_checkin_days_pref(tmp_db):
     assert should_ask_goals() is True
 
 
+def test_should_auto_report_first_time(tmp_db):
+    from db.goals import should_auto_report
+    assert should_auto_report() is True
+
+
+def test_should_auto_report_false_after_marking(tmp_db):
+    from db.goals import should_auto_report, mark_report_generated
+    mark_report_generated()
+    assert should_auto_report() is False
+
+
+def test_should_auto_report_true_after_7_days(tmp_db):
+    from datetime import datetime, timezone, timedelta
+    from db.goals import should_auto_report, set_pref
+
+    eight_days_ago = (datetime.now(timezone.utc) - timedelta(days=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    set_pref("report_last_generated", eight_days_ago)
+    assert should_auto_report() is True
+
+    three_days_ago = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    set_pref("report_last_generated", three_days_ago)
+    assert should_auto_report() is False
+
+
+def test_should_auto_report_disabled_by_pref(tmp_db):
+    from db.goals import should_auto_report, set_pref
+    set_pref("auto_report", "0")
+    # Even with no prior report (would otherwise be due), disabled wins.
+    assert should_auto_report() is False
+
+
 def test_compute_progress_frequency_goal(tmp_db):
     from db.goals import save_goal, compute_goal_progress
     seed_exercise_template(tmp_db)

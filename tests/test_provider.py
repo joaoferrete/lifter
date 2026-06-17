@@ -142,6 +142,70 @@ def test_dispatch_gemini_is_default(monkeypatch):
     MockClass.assert_called_once()
 
 
+# ── complete_json ─────────────────────────────────────────────────────────────
+
+def test_loads_lenient_plain_json():
+    assert provider_mod._loads_lenient('{"a": 1}') == {"a": 1}
+
+
+def test_loads_lenient_strips_markdown_fences():
+    raw = '```json\n{"a": 1, "b": "x"}\n```'
+    assert provider_mod._loads_lenient(raw) == {"a": 1, "b": "x"}
+
+
+def test_complete_json_openai_compat_uses_json_mode(monkeypatch, tmp_db):
+    from db.goals import get_token_usage
+    monkeypatch.setattr(provider_mod, "AI_PROVIDER", "openrouter")
+    monkeypatch.setattr(provider_mod, "AI_MODEL", "anthropic/claude-3-5-sonnet")
+
+    captured = {}
+    mock_client = MagicMock()
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        resp = MagicMock()
+        resp.choices = [MagicMock(message=MagicMock(content='{"score": 90}'))]
+        resp.usage = MagicMock(prompt_tokens=120, completion_tokens=30)
+        return resp
+
+    mock_client.chat.completions.create.side_effect = fake_create
+
+    with patch("openai.OpenAI", return_value=mock_client):
+        result = provider_mod.complete_json("analyse", system="you are a coach")
+
+    assert result == {"score": 90}
+    assert captured["response_format"] == {"type": "json_object"}
+    usage = get_token_usage()
+    assert usage["input"] == 120 and usage["output"] == 30
+
+
+def test_complete_json_claude_prefills_brace(monkeypatch, tmp_db):
+    monkeypatch.setattr(provider_mod, "AI_PROVIDER", "claude")
+    monkeypatch.setattr(provider_mod, "AI_MODEL", "claude-opus-4-8")
+
+    captured = {}
+    mock_client = MagicMock()
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        block = MagicMock()
+        block.type = "text"
+        block.text = '"score": 88}'  # model continues from the prefilled "{"
+        resp = MagicMock()
+        resp.content = [block]
+        resp.usage = MagicMock(input_tokens=200, output_tokens=20, cache_read_input_tokens=0)
+        return resp
+
+    mock_client.messages.create.side_effect = fake_create
+
+    with patch("anthropic.Anthropic", return_value=mock_client):
+        result = provider_mod.complete_json("analyse", system="you are a coach")
+
+    assert result == {"score": 88}
+    # Assistant turn must be prefilled with "{" to force JSON output.
+    assert captured["messages"][-1] == {"role": "assistant", "content": "{"}
+
+
 # ── _track_usage ──────────────────────────────────────────────────────────────
 
 def test_track_usage_calls_add_token_usage(tmp_db):

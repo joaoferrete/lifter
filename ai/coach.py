@@ -1,5 +1,6 @@
 """AI coaching — analyzes workout data, generates suggestions, manages goals."""
 import json
+import re
 import readline
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from rich.panel import Panel
 
 from datetime import datetime, timezone
 
-from ai.provider import create_chat_session, stream_complete, provider_label, ToolCall
+from ai.provider import create_chat_session, stream_complete, complete_json, provider_label, ToolCall
 from ai.sanitize import sanitize_for_prompt, ANTI_INJECTION_PREAMBLE
 from analytics.volume import muscle_group_summary, sets_per_muscle_per_week
 from analytics.progression import detect_plateaus, top_progressions
@@ -23,6 +24,21 @@ from i18n import _
 console = Console()
 
 _CHAT_HISTORY_FILE = Path.home() / ".hevy_chat_history"
+
+_ANSI_RE = re.compile(r"(\x1b\[[0-9;]*m)")
+
+
+def _readline_prompt(markup: str) -> str:
+    """Render rich markup into a readline-safe input prompt.
+
+    The prompt must be passed to input() (not printed separately) so readline
+    knows the cursor offset, and any ANSI escapes must be wrapped in \\001/\\002
+    so readline counts only the visible width. Without this, wrapping a long line
+    overwrites earlier text and backspace can delete into the prompt itself.
+    """
+    with console.capture() as cap:
+        console.print(markup, end="")
+    return _ANSI_RE.sub(lambda m: "\001" + m.group(1) + "\002", cap.get())
 
 
 def _friendly_error(e: Exception) -> str:
@@ -88,7 +104,7 @@ def _ai_lang_instruction(lang: str) -> str:
 
 # ── context builder ───────────────────────────────────────────────────────────
 
-def _build_context(weeks: int = 8, slim: bool = False) -> str:
+def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = True) -> str:
     name = get_pref("display_name") or "the athlete"
     freq = workout_frequency(weeks)
     muscle_vol = muscle_group_summary(weeks)
@@ -99,12 +115,14 @@ def _build_context(weeks: int = 8, slim: bool = False) -> str:
     prs = recent_prs(30)
     body = body_measurement_trend(weeks)
 
+    # Exercise library and saved routines only matter when the model must build or
+    # reference a routine — skip them otherwise to save input tokens.
     known = query(
         """SELECT DISTINCT et.id, et.title, et.primary_muscle_group
            FROM workout_exercises we
            JOIN exercise_templates et ON et.id = we.exercise_template_id
            ORDER BY et.primary_muscle_group, et.title"""
-    )
+    ) if include_routine else []
 
     safe_name = sanitize_for_prompt(name, max_len=60)
 
@@ -252,7 +270,7 @@ def _build_context(weeks: int = 8, slim: bool = False) -> str:
                 for b in bw:
                     lines.append(f"    - {b['title']}")
 
-    saved_routines = get_routines_with_exercises()
+    saved_routines = get_routines_with_exercises() if include_routine else []
     if saved_routines:
         lines += ["", f"## Saved routines ({len(saved_routines)} total)"]
         for r in saved_routines:
@@ -322,7 +340,6 @@ a JSON response with this exact structure:
         "title": "<exercise name>",
         "rest_seconds": 90,
         "notes": "<HOW TO PERFORM: step-by-step execution cues. ATTENTION: key form points, safety tips, and common mistakes to avoid>",
-        "benefits": "<2-3 sentences on the main benefits of this exercise for the athlete's goals>",
         "sets": [
           {"type": "warmup", "weight_kg": null, "reps": 10},
           {"type": "normal", "weight_kg": <number>, "reps": <number>}
@@ -337,58 +354,55 @@ Rules:
 - Only use exercise_template_ids from the "Exercise library" section.
 - The routine should target 4-6 exercises and address identified weaknesses.
 - Set weights should reflect the athlete's current strength level.
-- Every exercise MUST have a notes field with execution instructions and attention points, and a benefits field.
+- Every exercise MUST have a notes field with execution instructions and attention points.
 - Return ONLY the JSON object, no markdown fences or extra text.\
 """
 
 
-def get_coaching(weeks: int = 8) -> dict:
+def get_coaching(weeks: int = 8, generate_routine: bool = False) -> dict:
     from debug_log import log
     import config as _cfg
     from db.goals import get_token_usage as _get_usage
     _tokens_before = _get_usage()
-    log("AI", "Coaching report started", provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL, weeks=weeks)
-    context = _build_context(weeks)
+    # The athlete's existing routines stay in the context by default — they help the
+    # analysis and any routine edits — and this is configurable. Generating a NEW
+    # routine, on the other hand, is always an explicit request.
+    include_routines_ctx = (get_pref("ai_include_routines") != "0") or generate_routine
+    log("AI", "Coaching report started", provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL,
+        weeks=weeks, generate_routine=generate_routine, routines_in_context=include_routines_ctx)
+    context = _build_context(weeks, include_routine=include_routines_ctx)
     lang = get_pref("ai_language") or "English"
     lang_line = f"\nAlways respond entirely in {_ai_lang_instruction(lang)}.\n" if lang != "English" else ""
-    prompt = (
-        "<training_data>\n"
-        f"{context}\n"
-        "</training_data>\n\n"
+    ask_line = (
         "Please analyse my training and generate a suggested next routine."
+        if generate_routine
+        else "Please analyse my training. Do NOT generate a routine."
     )
-    system = _COACH_SYSTEM + lang_line
+    # The training data goes in the (cacheable) system block rather than the user
+    # message, so repeated reports within the cache TTL reuse it as a cache hit.
+    routine_rule = "" if generate_routine else (
+        '\nIMPORTANT: The athlete did not request a routine. Omit the "routine" field '
+        "entirely (set it to null) and do not generate any exercises.\n"
+    )
+    system = (
+        f"{_COACH_SYSTEM}{lang_line}{routine_rule}"
+        "\n\n<training_data>\n"
+        f"{context}\n"
+        "</training_data>"
+    )
+    prompt = ask_line
 
     console.print(_("coach.powered_by", provider=provider_label()))
 
-    status = console.status(
-        _("coach.generating"),
-        spinner="dots",
-    )
-    status.start()
+    with console.status(_("coach.generating"), spinner="dots"):
+        result = complete_json(prompt, system=system)
 
-    full_text = ""
-    first_token = False
-    for chunk in stream_complete(prompt, system=system):
-        if not first_token:
-            status.stop()
-            first_token = True
-        print(chunk, end="", flush=True)
-        full_text += chunk
-
-    if not first_token:
-        status.stop()
-    print()
-
-    raw = full_text.strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
     _tokens_after = _get_usage()
     log("AI", "Coaching report complete",
         input=_tokens_after["input"] - _tokens_before["input"],
         output=_tokens_after["output"] - _tokens_before["output"],
         cache_read=_tokens_after["cache_read"] - _tokens_before["cache_read"])
-    return json.loads(raw)
+    return result
 
 
 def _stamp_routine(routine: dict) -> dict:
@@ -432,8 +446,7 @@ _CHAT_SYSTEM_BASE = (
     "Address the athlete by their name when appropriate.\n"
     "EXERCISE NOTES RULES — for every exercise in any routine you create or update:\n"
     "- notes field MUST contain: step-by-step execution instructions followed by key attention points "
-    "(form cues, safety tips, common mistakes to avoid).\n"
-    "- benefits field MUST contain 2-3 sentences explaining the main benefits of that exercise for the athlete's goals."
+    "(form cues, safety tips, common mistakes to avoid)."
 )
 
 _PUSH_ROUTINE_TOOL: dict = {
@@ -452,7 +465,6 @@ _PUSH_ROUTINE_TOOL: dict = {
                     "{exercise_template_id: string (from library), title: string, "
                     "rest_seconds: integer, "
                     "notes: string (REQUIRED: step-by-step execution instructions + key attention points for form/safety), "
-                    "benefits: string (REQUIRED: 2-3 sentences on the main benefits for the athlete's goals), "
                     "sets: [{type: 'warmup'|'normal'|'failure'|'dropset', weight_kg: number, reps: integer}]}"
                 ),
                 "items": {"type": "object"},
@@ -481,7 +493,6 @@ _UPDATE_ROUTINE_TOOL: dict = {
                     "{exercise_template_id: string (from library), title: string, "
                     "rest_seconds: integer, "
                     "notes: string (REQUIRED: step-by-step execution instructions + key attention points for form/safety), "
-                    "benefits: string (REQUIRED: 2-3 sentences on the main benefits for the athlete's goals), "
                     "sets: [{type: 'warmup'|'normal'|'failure'|'dropset', weight_kg: number, reps: integer}]}"
                 ),
                 "items": {"type": "object"},
@@ -529,16 +540,71 @@ _MANAGE_GOALS_TOOL: dict = {
 
 # ── tool handlers ─────────────────────────────────────────────────────────────
 
+def _generate_benefits(exercises: list) -> dict:
+    """Generate a {exercise title: benefits} map on demand.
+
+    Benefits are no longer produced during routine generation (that wasted output
+    tokens on every report, since benefits only show when a routine is pushed).
+    This makes one small, focused call instead, tailored to the athlete's goals.
+    """
+    titles: list[str] = []
+    for ex in exercises:
+        if not isinstance(ex, dict):
+            continue
+        title = ex.get("title") or ex.get("exercise_template_id")
+        if title and title not in titles:
+            titles.append(title)
+    if not titles:
+        return {}
+
+    goals = get_goals()
+    goals_line = ""
+    if goals:
+        descs = ", ".join(sanitize_for_prompt(g["description"], max_len=80) for g in goals[:5])
+        goals_line = f"The athlete's goals: {descs}.\n"
+
+    lang = get_pref("ai_language") or "English"
+    lang_line = f"\nRespond entirely in {_ai_lang_instruction(lang)}." if lang != "English" else ""
+    system = (
+        ANTI_INJECTION_PREAMBLE
+        + "You are a strength and hypertrophy coach. For each exercise, write 2-3 sentences "
+        "on its main benefits for the athlete's goals. "
+        "Return ONLY a JSON object mapping each exercise title to its benefits string." + lang_line
+    )
+    prompt = goals_line + "Exercises:\n" + "\n".join(f"- {t}" for t in titles)
+
+    try:
+        raw = "".join(stream_complete(prompt, system=system)).strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+        data = json.loads(raw)
+        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 def _show_exercise_benefits(exercises: list) -> None:
-    """Display a benefits panel for each exercise that has a benefits field."""
+    """Display a benefits panel for each exercise, generating benefits on demand
+    when they were not produced during routine generation (the common case now)."""
+    missing = [
+        ex for ex in exercises
+        if isinstance(ex, dict)
+        and not (ex.get("benefits") or "").strip()
+        and (ex.get("title") or ex.get("exercise_template_id"))
+    ]
+    generated: dict = {}
+    if missing:
+        with console.status(_("coach.generating_benefits"), spinner="dots"):
+            generated = _generate_benefits(missing)
+
     benefit_lines = []
     for ex in exercises:
         if not isinstance(ex, dict):
             continue
-        benefits = ex.get("benefits", "").strip()
+        title = ex.get("title") or ex.get("exercise_template_id", "Exercise")
+        benefits = (ex.get("benefits") or "").strip() or generated.get(title, "").strip()
         if not benefits:
             continue
-        title = ex.get("title") or ex.get("exercise_template_id", "Exercise")
         benefit_lines.append(f"[bold]{title}[/bold]")
         benefit_lines.append(f"  {benefits}")
         benefit_lines.append("")
@@ -858,7 +924,11 @@ def start_enhanced_chat(weeks: int = 8) -> None:
     import config as _cfg
 
     slim = get_pref("ai_chat_slim") != "0"  # default True unless explicitly disabled
-    context = _build_context(weeks, slim=slim)
+    # The athlete's saved routines are included by default (helps the coach create,
+    # edit, and analyse routines); configurable via Settings → AI. Creating a routine
+    # still requires an explicit request — the push_routine tool only fires when asked.
+    include_routines = get_pref("ai_include_routines") != "0"
+    context = _build_context(weeks, slim=slim, include_routine=include_routines)
     _log("AI", "Chat session started",
          provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL, weeks=weeks,
          slim=slim, lang=get_pref("ai_language") or "English")
@@ -888,8 +958,7 @@ def start_enhanced_chat(weeks: int = 8) -> None:
 
     while True:
         try:
-            console.print(_("chat.you_prompt"), end="")
-            user_input = input("").strip()
+            user_input = input(_readline_prompt(_("chat.you_prompt"))).strip()
         except (EOFError, KeyboardInterrupt):
             console.print(_("chat.returning_to_menu"))
             break

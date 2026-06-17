@@ -219,6 +219,41 @@ def test_build_context_multiple_routines(tmp_db):
     assert "Routine B" in ctx
 
 
+# ── include_routine gating (token saving) ─────────────────────────────────────
+
+def test_build_context_omits_routine_blocks_when_include_routine_false(tmp_db):
+    from ai.coach import _build_context
+    seed_exercise_template(tmp_db)
+    seed_workout(tmp_db, "ctx-noroutine")
+    seed_routine(tmp_db, "r-skip", title="My Push Day")
+
+    ctx = _build_context(weeks=4, include_routine=False)
+    assert "Exercise library" not in ctx
+    assert "Saved routines" not in ctx
+
+
+def test_build_context_includes_routine_blocks_when_include_routine_true(tmp_db):
+    from ai.coach import _build_context
+    seed_exercise_template(tmp_db)
+    seed_workout(tmp_db, "ctx-routine")
+    seed_routine(tmp_db, "r-keep", title="My Push Day")
+
+    ctx = _build_context(weeks=4, include_routine=True)
+    assert "Exercise library" in ctx
+    assert "Saved routines" in ctx
+
+
+def test_build_context_omitting_routine_keeps_analytics(tmp_db):
+    """Gating routine blocks must not drop insight data (lossless)."""
+    from ai.coach import _build_context
+    seed_exercise_template(tmp_db)
+    seed_workout(tmp_db, "ctx-keep-analytics")
+
+    ctx = _build_context(weeks=4, include_routine=False)
+    assert "Training summary" in ctx
+    assert "Weekly volume" in ctx
+
+
 # ── update_routine tool ───────────────────────────────────────────────────────
 
 def test_show_and_confirm_routine_update_calls_hevy_update(tmp_db):
