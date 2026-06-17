@@ -18,6 +18,7 @@ from db.store import init_db, query
 from db.goals import (
     get_pref, set_pref, get_goals, clear_goals, save_goal,
     should_ask_goals, mark_goals_asked, compute_goal_progress,
+    should_auto_report, mark_report_generated,
 )
 from hevy.client import HevyClient
 from hevy.sync import full_sync, incremental_sync
@@ -989,17 +990,35 @@ def _do_coach():
         return
     weeks = int(weeks_str.split()[0])
 
+    generate_routine = questionary.confirm(
+        _("coach.include_routine_prompt"),
+        default=False,
+        style=STYLE,
+    ).ask()
+    if generate_routine is None:
+        return
+
+    _run_report(weeks, generate_routine=generate_routine)
+
+
+def _run_report(weeks: int, generate_routine: bool = False) -> bool:
+    """Generate and render a coaching report for `weeks`. Returns True on success.
+
+    `generate_routine` decides whether the AI also proposes a NEW routine — always an
+    explicit choice, never automatic. The athlete's existing routines stay in the
+    analysis context by default regardless (configurable in Settings → AI).
+    """
     from ai.coach import get_coaching, push_routine_to_hevy
 
-    _dlog("AI", "Coaching report requested", weeks=weeks)
+    _dlog("AI", "Coaching report requested", weeks=weeks, generate_routine=generate_routine)
     console.rule(_("coach.rule_title"))
     try:
-        result = get_coaching(weeks=weeks)
+        result = get_coaching(weeks=weeks, generate_routine=generate_routine)
     except Exception as e:
         from ai.coach import _friendly_error
         _dlog("ERROR", f"Coaching report failed: {type(e).__name__}", error=str(e)[:200])
         console.print(f"[red]{_friendly_error(e)}[/red]")
-        return
+        return False
 
     # ── scores ────────────────────────────────────────────────────────────────
     ws = result.get("workout_score")
@@ -1107,6 +1126,9 @@ def _do_coach():
                 except Exception as e:
                     console.print(f"[red]{e}[/red]")
 
+    mark_report_generated()
+    return True
+
 
 def _do_chat():
     if not _require_ai():
@@ -1152,6 +1174,8 @@ def _do_ai_settings():
         total = usage["input"] + usage["output"]
         cache_pct = int(usage["cache_read"] / usage["input"] * 100) if usage["input"] else 0
         slim_on = get_pref("ai_chat_slim") != "0"
+        routines_on = get_pref("ai_include_routines") != "0"
+        auto_report_on = get_pref("auto_report") != "0"
         lang = get_pref("ai_language") or "English"
         if lang == "Portuguese":
             lang = "Portuguese (BR)"
@@ -1159,9 +1183,15 @@ def _do_ai_settings():
 
         from config import AI_MODEL
         slim_label = _("settings.ai.context_slim") if slim_on else _("settings.ai.context_full")
+
+        def on_off(b):
+            return _("settings.ai.on") if b else _("settings.ai.off")
+
         lines = [
             _("settings.ai.provider_line", provider=AI_PROVIDER, model=AI_MODEL),
             _("settings.ai.context_line", mode=slim_label),
+            _("settings.ai.routines_line", state=on_off(routines_on)),
+            _("settings.ai.auto_report_line", state=on_off(auto_report_on)),
             _("settings.ai.language_line", lang=lang),
             "",
             _("settings.ai.token_usage_title"),
@@ -1181,6 +1211,14 @@ def _do_ai_settings():
                     _("settings.ai.toggle_context_choice", mode="Slim" if slim_on else "Full"),
                     value="toggle_slim",
                 ),
+                questionary.Choice(
+                    _("settings.ai.toggle_routines_choice", state=on_off(routines_on)),
+                    value="toggle_routines",
+                ),
+                questionary.Choice(
+                    _("settings.ai.toggle_auto_report_choice", state=on_off(auto_report_on)),
+                    value="toggle_auto_report",
+                ),
                 questionary.Choice(_("settings.ai.language_choice", lang=lang), value="language"),
                 questionary.Choice(_("settings.ai.reset_tokens_choice"),         value="reset_tokens"),
                 questionary.Separator("  ───"),
@@ -1198,6 +1236,18 @@ def _do_ai_settings():
             label = _("settings.ai.context_slim") if new_val == "1" else _("settings.ai.context_full")
             _dlog("SETTING", "ai_chat_slim changed", value=label)
             console.print(_("settings.ai.context_saved", mode=label))
+
+        elif action == "toggle_routines":
+            new_val = "0" if routines_on else "1"
+            set_pref("ai_include_routines", new_val)
+            _dlog("SETTING", "ai_include_routines changed", value=new_val)
+            console.print(_("settings.ai.routines_saved", state=on_off(new_val != "0")))
+
+        elif action == "toggle_auto_report":
+            new_val = "0" if auto_report_on else "1"
+            set_pref("auto_report", new_val)
+            _dlog("SETTING", "auto_report changed", value=new_val)
+            console.print(_("settings.ai.auto_report_saved", state=on_off(new_val != "0")))
 
         elif action == "language":
             choices = _AI_LANGUAGES + ([] if lang in _AI_LANGUAGES else [lang])
@@ -1875,6 +1925,26 @@ def _check_goals_and_checkin() -> None:
             _weekly_checkin()
 
 
+def _check_auto_report() -> None:
+    """Generate a coaching report automatically once every 7 days at startup."""
+    if not should_auto_report():
+        return
+    # Silent AI check — never nag at startup when AI isn't configured.
+    if AI_PROVIDER != "bedrock" and not get_provider_api_key():
+        return
+    # Nothing to report on yet — skip until there's training data.
+    from db.store import query
+    if not query("SELECT 1 FROM workouts LIMIT 1"):
+        return
+
+    console.print()
+    console.print(_("coach.auto_report_intro"))
+    _dlog("AI", "Auto coaching report triggered (7-day)")
+    # Analysis only — creating a routine stays an explicit user action.
+    if _run_report(weeks=8, generate_routine=False):
+        _pause()
+
+
 # ── main loop ─────────────────────────────────────────────────────────────────
 
 ACTIONS = {
@@ -2033,6 +2103,7 @@ def main():
           provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL)
     _check_goals_and_checkin()
     _check_stale_sync()
+    _check_auto_report()
 
     while True:
         console.clear()

@@ -167,6 +167,26 @@ def mark_goals_asked() -> None:
     set_pref("goals_last_asked", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
+# ── auto coaching report timing ───────────────────────────────────────────────
+
+def should_auto_report() -> bool:
+    """True when the 7-day auto coaching report is due (and not disabled)."""
+    if get_pref("auto_report") == "0":
+        return False
+    last = get_pref("report_last_generated")
+    if not last:
+        return True
+    try:
+        dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - dt).days >= 7
+    except Exception:
+        return True
+
+
+def mark_report_generated() -> None:
+    set_pref("report_last_generated", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+
 # ── progress computation ──────────────────────────────────────────────────────
 
 def compute_goal_progress() -> list[dict]:
