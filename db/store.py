@@ -6,12 +6,21 @@ from typing import Any
 import config
 
 
-def _conn(db_path: Path | None = None) -> sqlite3.Connection:
+def connect(db_path: Path | None = None) -> sqlite3.Connection:
+    """Single SQLite connection factory for the whole app.
+
+    Applies WAL + foreign-key enforcement consistently. All modules should use
+    this instead of opening their own connections."""
     conn = sqlite3.connect(db_path if db_path is not None else config.DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
+
+
+# Internal alias kept so the existing test harness (which monkeypatches
+# `db.store._conn`) and the rest of this module keep working unchanged.
+_conn = connect
 
 
 def init_db(db_path: Path | None = None) -> None:
@@ -166,6 +175,8 @@ def init_db(db_path: Path | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_exercises_workout ON workout_exercises(workout_id);
             CREATE INDEX IF NOT EXISTS idx_workouts_start ON workouts(start_time);
             CREATE INDEX IF NOT EXISTS idx_routine_ex_routine ON routine_exercises(routine_id);
+            CREATE INDEX IF NOT EXISTS idx_body_measurements_date ON body_measurements(date);
+            CREATE INDEX IF NOT EXISTS idx_user_goals_achieved ON user_goals(achieved_at);
         """)
 
 

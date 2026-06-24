@@ -1,16 +1,14 @@
 """User goals and preferences management."""
 import calendar
-import sqlite3
 from datetime import date, datetime, timezone
 
-import config
+from db.store import connect as _conn
 
 
-def _conn():
-    conn = sqlite3.connect(config.DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
+def _invalidate_render_cache() -> None:
+    """Drop memoized render data after a goal mutation (see render_cache)."""
+    from render_cache import invalidate
+    invalidate()
 
 
 # ── preferences ───────────────────────────────────────────────────────────────
@@ -202,6 +200,7 @@ def save_goal(
             (type, description, target, unit, exercise_template_id,
              exercise_name, muscle_group, start_value),
         )
+    _invalidate_render_cache()
 
 
 def get_goals() -> list[dict]:
@@ -221,6 +220,7 @@ def get_all_goals() -> list[dict]:
 def clear_goals() -> None:
     with _conn() as conn:
         conn.execute("DELETE FROM user_goals")
+    _invalidate_render_cache()
 
 
 def mark_goal_achieved(goal_id: int) -> None:
@@ -233,6 +233,7 @@ def mark_goal_achieved(goal_id: int) -> None:
 def delete_goal(goal_id: int) -> None:
     with _conn() as conn:
         conn.execute("DELETE FROM user_goals WHERE id = ?", (goal_id,))
+    _invalidate_render_cache()
 
 
 def update_goal_fields(
@@ -248,6 +249,7 @@ def update_goal_fields(
             conn.execute("UPDATE user_goals SET target = ? WHERE id = ?", (target, goal_id))
         if unit is not None:
             conn.execute("UPDATE user_goals SET unit = ? WHERE id = ?", (unit, goal_id))
+    _invalidate_render_cache()
 
 
 # ── goals check-in timing ─────────────────────────────────────────────────────
@@ -292,7 +294,15 @@ def mark_report_generated() -> None:
 # ── progress computation ──────────────────────────────────────────────────────
 
 def compute_goal_progress() -> list[dict]:
-    """Compute current progress for every active goal. Marks achieved goals."""
+    """Compute current progress for every active goal. Marks achieved goals.
+
+    Memoized per active DB (invalidated on goal edits and sync) — this runs on
+    every menu/snapshot render and each goal triggers analytics queries."""
+    from render_cache import cached
+    return cached("goal_progress", _compute_goal_progress)
+
+
+def _compute_goal_progress() -> list[dict]:
     from db.store import query
 
     goals = get_goals()

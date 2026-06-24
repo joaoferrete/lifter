@@ -139,7 +139,22 @@ _MUSCLE_GROUPS: dict = {
 }
 
 
+def _week_choices(weeks: list[int]) -> list:
+    """Localized '{n} weeks' choices whose values stay the canonical 'N weeks'
+    string (parsed elsewhere via .split() and stored as a pref)."""
+    return [questionary.Choice(_("time.weeks", n=n), value=f"{n} weeks") for n in weeks]
+
+
+def _day_choices(days: list[int]) -> list:
+    return [questionary.Choice(_("time.days", n=n), value=f"{n} days") for n in days]
+
+
 def _sets_by_group(weeks: int = 4) -> dict:
+    from render_cache import cached
+    return cached(f"sets_by_group:{weeks}", lambda: _sets_by_group_uncached(weeks))
+
+
+def _sets_by_group_uncached(weeks: int = 4) -> dict:
     spw = sets_per_muscle_per_week(weeks)
     groups: dict = {}
     other = 0.0
@@ -185,11 +200,11 @@ def _render_snapshot_panel() -> None:
     if ws_raw or cs_raw:
         score_lines = []
         if ws_raw:
-            score_lines.append(_fmt_score_bar("Training", int(ws_raw)))
+            score_lines.append(_fmt_score_bar(_("score.training"), int(ws_raw)))
         if hs_raw:
-            score_lines.append(_fmt_score_bar("Health", int(hs_raw)))
+            score_lines.append(_fmt_score_bar(_("score.health"), int(hs_raw)))
         if cs_raw:
-            score_lines.append(_fmt_score_bar("Overall", int(cs_raw)))
+            score_lines.append(_fmt_score_bar(_("score.overall"), int(cs_raw)))
         lines.append(_("snapshot.scores_title"))
         lines.extend(score_lines)
         lines.append("")
@@ -408,7 +423,11 @@ def run_goals_wizard(is_update: bool = False) -> None:
     name = get_pref("display_name")
     if not name:
         console.print()
-        name = questionary.text(_("wizard.name_prompt"), style=STYLE).ask()
+        name = questionary.text(
+            _("wizard.name_prompt"),
+            validate=lambda v: bool(v.strip()) or _("validate.name_required"),
+            style=STYLE,
+        ).ask()
         if name:
             set_pref("display_name", name.strip())
 
@@ -773,7 +792,7 @@ def _do_stats():
     default_period = get_pref("default_stats_weeks") or "8 weeks"
     weeks_str = questionary.select(
         _("stats.time_period"),
-        choices=["4 weeks", "8 weeks", "12 weeks", "24 weeks"],
+        choices=_week_choices([4, 8, 12, 24]),
         default=default_period,
         style=STYLE,
     ).ask()
@@ -867,7 +886,7 @@ def _do_progress():
 
     weeks_str = questionary.select(
         _("progress.time_period"),
-        choices=["8 weeks", "12 weeks", "24 weeks", "52 weeks"],
+        choices=_week_choices([8, 12, 24, 52]),
         default="12 weeks",
         style=STYLE,
     ).ask()
@@ -982,7 +1001,7 @@ def _do_coach():
         return
     weeks_str = questionary.select(
         _("coach.weeks_prompt"),
-        choices=["4 weeks", "8 weeks", "12 weeks", "16 weeks"],
+        choices=_week_choices([4, 8, 12, 16]),
         default="8 weeks",
         style=STYLE,
     ).ask()
@@ -1024,7 +1043,7 @@ def _run_report(weeks: int, generate_routine: bool = False) -> bool:
     ws = result.get("workout_score")
     hs = result.get("health_score")
     cs = result.get("combined_score")
-    score_items = [("Training", ws), ("Health", hs), ("Overall", cs)]
+    score_items = [(_("score.training"), ws), (_("score.health"), hs), (_("score.overall"), cs)]
     score_items = [(lbl, v) for lbl, v in score_items if v is not None]
     if score_items:
         score_lines = [_fmt_score_bar(lbl, int(val), bar_width=16) for lbl, val in score_items]
@@ -1114,7 +1133,11 @@ def _run_report(weeks: int, generate_routine: bool = False) -> bool:
             if ex.get("notes"):
                 console.print(f"    [dim italic]{ex['notes']}[/dim italic]")
         console.print()
-        if questionary.confirm(_("coach.push_routine_prompt", title=routine.get("title")), default=False, style=STYLE).ask():
+        n_exercises = len([e for e in routine.get("exercises", []) if isinstance(e, dict)])
+        if questionary.confirm(
+            _("coach.push_routine_prompt", title=routine.get("title"), count=n_exercises),
+            default=False, style=STYLE,
+        ).ask():
             client = _require_hevy()
             if client:
                 try:
@@ -1136,9 +1159,9 @@ def _do_chat():
     weeks_str = questionary.select(
         _("chat.context_prompt"),
         choices=[
-            questionary.Choice("4 weeks",              value=4),
-            questionary.Choice("8 weeks",              value=8),
-            questionary.Choice("12 weeks",             value=12),
+            questionary.Choice(_("time.weeks", n=4),   value=4),
+            questionary.Choice(_("time.weeks", n=8),   value=8),
+            questionary.Choice(_("time.weeks", n=12),  value=12),
             questionary.Choice(_("chat.all_time"),     value=16),
         ],
         default=8,
@@ -1189,6 +1212,14 @@ def _do_ai_settings():
         usage_month = get_token_usage_month()
         usage_total = get_token_usage()
         reset_day = get_token_reset_day()
+        try:
+            history_turns = max(0, int(get_pref("ai_chat_history_turns") or 12))
+        except (TypeError, ValueError):
+            history_turns = 12
+        history_label = (
+            _("settings.ai.history_unlimited") if history_turns == 0
+            else str(history_turns)
+        )
         slim_on = get_pref("ai_chat_slim") != "0"
         routines_on = get_pref("ai_include_routines") != "0"
         auto_report_on = get_pref("auto_report") != "0"
@@ -1209,6 +1240,7 @@ def _do_ai_settings():
             _("settings.ai.routines_line", state=on_off(routines_on)),
             _("settings.ai.auto_report_line", state=on_off(auto_report_on)),
             _("settings.ai.language_line", lang=lang),
+            _("settings.ai.history_turns_line", turns=history_label),
             _("settings.ai.reset_day_line", day=reset_day),
             "",
         ]
@@ -1234,6 +1266,7 @@ def _do_ai_settings():
                     value="toggle_auto_report",
                 ),
                 questionary.Choice(_("settings.ai.language_choice", lang=lang), value="language"),
+                questionary.Choice(_("settings.ai.history_turns_choice", turns=history_label), value="history_turns"),
                 questionary.Choice(_("settings.ai.reset_day_choice", day=reset_day), value="reset_day"),
                 questionary.Choice(_("settings.ai.reset_tokens_choice"),         value="reset_tokens"),
                 questionary.Separator("  ───"),
@@ -1276,6 +1309,18 @@ def _do_ai_settings():
                 set_pref("ai_language", new_lang)
                 _dlog("SETTING", "ai_language changed", value=new_lang)
                 console.print(_("settings.ai.language_saved", lang=new_lang))
+
+        elif action == "history_turns":
+            answer = questionary.text(
+                _("settings.ai.history_turns_prompt"),
+                default=str(history_turns),
+                validate=lambda v: (v.isdigit() and 0 <= int(v) <= 100) or _("settings.ai.history_turns_invalid"),
+                style=STYLE,
+            ).ask()
+            if answer is not None and answer.isdigit():
+                set_pref("ai_chat_history_turns", str(int(answer)))
+                _dlog("SETTING", "ai_chat_history_turns changed", value=answer)
+                console.print(_("settings.ai.history_turns_saved", turns=int(answer)))
 
         elif action == "reset_day":
             answer = questionary.text(
@@ -1341,6 +1386,25 @@ def _do_data_reset():
                 console.print(_("data_reset.sync_state_done"))
 
         elif action == "all":
+            # Spell out exactly what the wipe removes so it's never a surprise.
+            def _count(sql):
+                try:
+                    return query(sql)[0]["n"]
+                except Exception:
+                    return 0
+            summary_lines = [
+                _("data_reset.all_item_workouts", n=_count("SELECT COUNT(*) AS n FROM workouts")),
+                _("data_reset.all_item_goals", n=_count("SELECT COUNT(*) AS n FROM user_goals")),
+                _("data_reset.all_item_measurements", n=_count("SELECT COUNT(*) AS n FROM body_measurements")),
+                _("data_reset.all_item_routines", n=_count("SELECT COUNT(*) AS n FROM routines")),
+                _("data_reset.all_item_memories", n=_count("SELECT COUNT(*) AS n FROM chat_memories")),
+                _("data_reset.all_item_fit", n=_count("SELECT COUNT(*) AS n FROM fit_daily")),
+            ]
+            console.print(Panel(
+                "\n".join(summary_lines),
+                title=_("data_reset.all_summary_title"),
+                border_style="red",
+            ))
             console.print(_("data_reset.all_warning"))
             if not questionary.confirm(_("data_reset.all_confirm1"), default=False, style=STYLE).ask():
                 continue
@@ -1359,6 +1423,8 @@ def _do_data_reset():
             except FileNotFoundError:
                 pass
 
+            from render_cache import invalidate
+            invalidate()
             _dlog("RESET", "Full data wipe executed")
             console.print(_("data_reset.all_done"))
             return  # DB is gone — exit all the way back to main
@@ -1367,7 +1433,11 @@ def _do_data_reset():
 def _do_create_profile_flow() -> str:
     """Interactive profile creation. Returns the new slug."""
     from profile_mgr import create_profile, PROFILES_DIR
-    name = (questionary.text(_("profiles.name_prompt"), style=STYLE).ask() or "").strip()
+    name = (questionary.text(
+        _("profiles.name_prompt"),
+        validate=lambda v: bool(v.strip()) or _("validate.name_required"),
+        style=STYLE,
+    ).ask() or "").strip()
     if not name:
         name = "New Profile"
     api_key = (questionary.text(
@@ -1627,7 +1697,7 @@ def _do_preferences_settings() -> None:
         elif action == "stats_window":
             new_window = questionary.select(
                 _("settings.prefs.stats_window_prompt"),
-                choices=["4 weeks", "8 weeks", "12 weeks", "24 weeks"],
+                choices=_week_choices([4, 8, 12, 24]),
                 default=default_weeks,
                 style=STYLE,
             ).ask()
@@ -1710,15 +1780,15 @@ def _render_recovery_panel() -> None:
             return
         parts = []
         if rec:
-            parts.append(f"Recovery [{rec['color']}]{rec['score']}/100 {rec['label']}[/{rec['color']}]")
+            parts.append(_("fit.metric_recovery", color=rec['color'], score=rec['score'], label=rec['label']))
         if sleep.get("avg_hours"):
-            parts.append(f"Sleep {sleep['avg_hours']}h avg")
+            parts.append(_("fit.metric_sleep", hours=sleep['avg_hours']))
         if activity.get("avg_steps"):
-            parts.append(f"Steps {int(activity['avg_steps']):,}/day")
+            parts.append(_("fit.metric_steps", steps=f"{int(activity['avg_steps']):,}"))
         if activity.get("resting_hr"):
-            parts.append(f"RHR {activity['resting_hr']} bpm")
+            parts.append(_("fit.metric_rhr", rhr=activity['resting_hr']))
         if parts:
-            console.print(Panel("  ·  ".join(parts), title="[bold green]Recovery[/bold green]",
+            console.print(Panel("  ·  ".join(parts), title=_("fit.recovery_panel_title"),
                                 border_style="green", padding=(0, 2)))
             console.print()
     except Exception:
@@ -1750,20 +1820,19 @@ def _do_fit():
             return
         days_str = questionary.select(
             _("fit.days_prompt"),
-            choices=["7 days", "14 days", "30 days", "90 days"],
+            choices=_day_choices([7, 14, 30, 90]),
             default="30 days",
             style=STYLE,
         ).ask()
         if not days_str:
             return
         days = int(days_str.split()[0])
-        console.print(_("fit.syncing_n_days", days=days))
         try:
             from fit.sync import sync_fit
-            counts = sync_fit(days=days)
+            with console.status(_("fit.syncing_n_days", days=days), spinner="dots"):
+                counts = sync_fit(days=days)
             console.print(Panel(
-                f"[bold green]{counts['daily_days']}[/bold green] daily records  ·  "
-                f"[bold green]{counts['sleep_sessions']}[/bold green] sleep sessions",
+                _("fit.sync_counts", daily=counts['daily_days'], sleep=counts['sleep_sessions']),
                 title=_("fit.sync_complete_title"),
                 border_style="green",
             ))
@@ -1787,21 +1856,7 @@ def _do_fit():
 
 def _fit_setup() -> None:
     console.rule(_("fit.connect_rule"))
-    console.print("""
-  [bold]Step 1[/bold] — Create OAuth credentials in Google Cloud Console:
-
-    1. Go to [link]https://console.cloud.google.com[/link]
-    2. Create a new project (or select an existing one)
-    3. Go to [bold]APIs & Services → Library[/bold] and enable [bold]Fitness API[/bold]
-    4. Go to [bold]APIs & Services → OAuth consent screen[/bold]
-       → External → fill in app name → add your Gmail as a test user
-    5. Go to [bold]APIs & Services → Credentials → Create Credentials → OAuth client ID[/bold]
-       → Application type: [bold]Desktop app[/bold]
-    6. Download the JSON file and save it as [bold]fit_credentials.json[/bold]
-       in this project folder
-
-  [bold]Step 2[/bold] — The browser will open for you to approve access.
-""")
+    console.print(_("fit.setup_instructions"))
 
     if not questionary.confirm(_("fit.ready_to_auth"), default=True, style=STYLE).ask():
         return
@@ -1831,14 +1886,14 @@ def _render_fit_dashboard() -> None:
         score = rec["score"]
         bar_w = int(score / 100 * 30)
         bar = f"[{rec['color']}]{'█' * bar_w}[/{rec['color']}][dim]{'░' * (30 - bar_w)}[/dim]"
-        console.print(f"\n  Recovery Score  {bar}  [{rec['color']}]{score}/100  {rec['label']}[/{rec['color']}]\n")
+        console.print(f"\n  {_('fit.recovery_score_label')}  {bar}  [{rec['color']}]{score}/100  {rec['label']}[/{rec['color']}]\n")
 
-    for label, days in [("Last 7 days", 7), ("Last 14 days", 14)]:
+    for days in (7, 14):
         sleep = sleep_summary(days)
         activity = activity_summary(days)
         if not sleep and not activity:
             continue
-        console.rule(f"[dim]{label}[/dim]")
+        console.rule(f"[dim]{_('fit.last_n_days', n=days)}[/dim]")
         t = Table(box=box.SIMPLE)
         t.add_column(_("fit.col_metric"), style="bold")
         t.add_column(_("fit.col_value"), justify="right")
@@ -1913,9 +1968,9 @@ def _check_stale_sync() -> None:
         if auto_sync:
             try:
                 _dlog("SYNC", "Google Fit auto-sync triggered (data stale >24h)")
-                console.print(_("sync.auto_syncing_fit"))
                 from fit.sync import sync_fit
-                counts = sync_fit(days=30)
+                with console.status(_("sync.auto_syncing_fit"), spinner="dots"):
+                    counts = sync_fit(days=30)
                 console.print(_("sync.auto_synced_fit", daily_days=counts["daily_days"], sleep_sessions=counts["sleep_sessions"]))
             except Exception as e:
                 _dlog("SYNC", "Google Fit auto-sync error", error=str(e)[:200])
@@ -1926,7 +1981,8 @@ def _check_stale_sync() -> None:
             _dlog("SYNC", "User accepted Google Fit sync prompt")
             try:
                 from fit.sync import sync_fit
-                counts = sync_fit(days=90)
+                with console.status(_("sync.fit_syncing"), spinner="dots"):
+                    counts = sync_fit(days=90)
                 console.print(_("sync.fit_done", daily_days=counts["daily_days"], sleep_sessions=counts["sleep_sessions"]))
             except Exception as e:
                 console.print(_("error.fit_sync_failed", error=e))

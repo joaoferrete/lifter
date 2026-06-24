@@ -70,6 +70,8 @@ def full_sync(client: HevyClient) -> dict:
         _sync_routines(client, progress, counts)
 
     set_sync_state("last_sync", _now_iso())
+    from render_cache import invalidate
+    invalidate()
     log("SYNC", "Hevy full sync complete",
         workouts=counts["workouts"], templates=counts["templates"],
         body_measurements=counts["body_measurements"], routines=counts["routines"])
@@ -113,6 +115,8 @@ def incremental_sync(client: HevyClient) -> dict:
         _sync_routines(client, progress, counts)
 
     set_sync_state("last_sync", _now_iso())
+    from render_cache import invalidate
+    invalidate()
     log("SYNC", "Hevy incremental sync complete",
         updated=counts["updated"], deleted=counts["deleted"], routines=counts["routines"])
     return counts

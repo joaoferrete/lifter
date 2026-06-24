@@ -50,23 +50,52 @@ def exercise_progression(template_id: str, weeks: int = 12) -> pd.DataFrame:
 
 
 def all_exercise_progressions(weeks: int = 12) -> dict[str, pd.DataFrame]:
-    """Return progression data for every exercise that has at least 3 sessions."""
+    """Return progression data for every exercise that has at least 3 sessions.
+
+    Uses a single query + in-pandas grouping instead of one query per exercise
+    (was an N+1 hot path called twice per coaching report)."""
+    weeks = max(1, int(weeks))
     rows = query(
         """
-        SELECT DISTINCT ws.exercise_template_id, et.title
+        SELECT ws.exercise_template_id AS template_id, et.title AS title,
+               w.start_time, ws.weight_kg, ws.reps
         FROM workout_sets ws
+        JOIN workouts w ON w.id = ws.workout_id
         JOIN exercise_templates et ON et.id = ws.exercise_template_id
         WHERE ws.type = 'normal'
           AND ws.weight_kg IS NOT NULL
           AND ws.reps IS NOT NULL
-        """
+          AND ws.reps > 0
+          AND w.start_time >= datetime('now', ?)
+        ORDER BY w.start_time
+        """,
+        (f"-{weeks * 7} days",),
+    )
+    if not rows:
+        return {}
+
+    df = pd.DataFrame(rows)
+    df["start_time"] = pd.to_datetime(df["start_time"], utc=True)
+    df["date"] = df["start_time"].dt.date
+    df["e1rm"] = df.apply(lambda r: _e1rm(r["weight_kg"], r["reps"]), axis=1)
+
+    # Best e1RM per exercise per day (mirrors exercise_progression's per-day pick).
+    best = (
+        df.sort_values("e1rm", ascending=False)
+        .groupby(["template_id", "date"], as_index=False)
+        .first()
     )
 
-    result = {}
-    for row in rows:
-        df = exercise_progression(row["exercise_template_id"], weeks)
-        if len(df) >= 3:
-            result[row["title"]] = df
+    result: dict[str, pd.DataFrame] = {}
+    for _template_id, g in best.groupby("template_id"):
+        per = (
+            g.sort_values("date")
+            .reset_index(drop=True)[["date", "weight_kg", "reps", "e1rm", "title"]]
+            .rename(columns={"weight_kg": "best_weight_kg", "reps": "best_reps"})
+        )
+        if len(per) >= 3:
+            title = per["title"].iloc[0]
+            result[title] = per.drop(columns=["title"])
     return result
 
 
