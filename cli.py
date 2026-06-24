@@ -1218,7 +1218,7 @@ def _do_ai_settings():
             history_turns = 12
         history_label = (
             _("settings.ai.history_unlimited") if history_turns == 0
-            else str(history_turns)
+            else _("settings.ai.history_count", n=history_turns)
         )
         slim_on = get_pref("ai_chat_slim") != "0"
         routines_on = get_pref("ai_include_routines") != "0"
@@ -1318,9 +1318,14 @@ def _do_ai_settings():
                 style=STYLE,
             ).ask()
             if answer is not None and answer.isdigit():
-                set_pref("ai_chat_history_turns", str(int(answer)))
-                _dlog("SETTING", "ai_chat_history_turns changed", value=answer)
-                console.print(_("settings.ai.history_turns_saved", turns=int(answer)))
+                n = int(answer)
+                set_pref("ai_chat_history_turns", str(n))
+                _dlog("SETTING", "ai_chat_history_turns changed", value=n)
+                saved_label = (
+                    _("settings.ai.history_unlimited") if n == 0
+                    else _("settings.ai.history_count", n=n)
+                )
+                console.print(_("settings.ai.history_turns_saved", turns=saved_label))
 
         elif action == "reset_day":
             answer = questionary.text(
