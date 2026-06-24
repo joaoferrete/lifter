@@ -1,13 +1,5 @@
 """Persistent coach memories — facts extracted from chat conversations."""
-import sqlite3
-import config
-
-
-def _conn():
-    conn = sqlite3.connect(config.DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
+from db.store import connect as _conn
 
 
 def save_memory(summary: str, category: str = "general") -> None:

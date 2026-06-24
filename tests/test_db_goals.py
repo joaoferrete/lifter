@@ -209,3 +209,56 @@ def test_reset_token_usage_clears_counters(tmp_db):
     reset_token_usage()
     usage = get_token_usage()
     assert usage == {"input": 0, "output": 0, "cache_read": 0}
+
+
+# ── monthly token counter ──────────────────────────────────────────────────────
+
+def test_add_token_usage_increments_month_and_total(tmp_db):
+    from db.goals import add_token_usage, get_token_usage, get_token_usage_month
+    add_token_usage(input_tokens=1000, output_tokens=250, cache_read_tokens=80)
+    assert get_token_usage_month() == {"input": 1000, "output": 250, "cache_read": 80}
+    assert get_token_usage() == {"input": 1000, "output": 250, "cache_read": 80}
+
+
+def test_month_counter_resets_on_period_rollover_but_total_kept(tmp_db):
+    from db.goals import add_token_usage, get_token_usage, get_token_usage_month, set_pref, get_pref
+    add_token_usage(input_tokens=1500, output_tokens=300, cache_read_tokens=50)
+    # Force a stale period so the next access triggers a rollover.
+    set_pref("ai_tokens_period_start", "2000-01-01")
+    assert get_token_usage_month() == {"input": 0, "output": 0, "cache_read": 0}
+    assert get_token_usage() == {"input": 1500, "output": 300, "cache_read": 50}
+    # The period anchor is refreshed.
+    assert get_pref("ai_tokens_period_start") != "2000-01-01"
+
+
+def test_reset_token_usage_clears_month_and_total(tmp_db):
+    from db.goals import add_token_usage, get_token_usage, get_token_usage_month, reset_token_usage
+    add_token_usage(input_tokens=5000, output_tokens=1000, cache_read_tokens=3000)
+    reset_token_usage()
+    assert get_token_usage() == {"input": 0, "output": 0, "cache_read": 0}
+    assert get_token_usage_month() == {"input": 0, "output": 0, "cache_read": 0}
+
+
+def test_token_reset_day_config(tmp_db):
+    from db.goals import get_token_reset_day, set_token_reset_day
+    assert get_token_reset_day() == 1  # default
+    set_token_reset_day(15)
+    assert get_token_reset_day() == 15
+    set_token_reset_day(99)  # clamped to 31
+    assert get_token_reset_day() == 31
+    set_token_reset_day(0)   # clamped to 1
+    assert get_token_reset_day() == 1
+
+
+@pytest.mark.parametrize("reset_day,today,expected", [
+    (1,  (2026, 6, 24), (2026, 6, 1)),    # plain start-of-month
+    (31, (2026, 2, 20), (2026, 1, 31)),   # day 31 clamps; period started prev month
+    (31, (2026, 2, 28), (2026, 2, 28)),   # last day of short month
+    (15, (2026, 3, 10), (2026, 2, 15)),   # before reset day -> previous month
+    (15, (2026, 3, 15), (2026, 3, 15)),   # on the reset day -> this month
+    (20, (2026, 1, 5),  (2025, 12, 20)),  # January wraps to December
+])
+def test_current_period_start(reset_day, today, expected):
+    from datetime import date
+    from db.goals import _current_period_start
+    assert _current_period_start(reset_day, date(*today)) == date(*expected)

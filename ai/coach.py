@@ -394,8 +394,10 @@ def get_coaching(weeks: int = 8, generate_routine: bool = False) -> dict:
 
     console.print(_("coach.powered_by", provider=provider_label()))
 
+    # A routine adds many exercises to the JSON; plain analysis is far smaller.
+    report_max_tokens = 4096 if generate_routine else 2048
     with console.status(_("coach.generating"), spinner="dots"):
-        result = complete_json(prompt, system=system)
+        result = complete_json(prompt, system=system, max_tokens=report_max_tokens)
 
     _tokens_after = _get_usage()
     log("AI", "Coaching report complete",
@@ -574,7 +576,7 @@ def _generate_benefits(exercises: list) -> dict:
     prompt = goals_line + "Exercises:\n" + "\n".join(f"- {t}" for t in titles)
 
     try:
-        raw = "".join(stream_complete(prompt, system=system)).strip()
+        raw = "".join(stream_complete(prompt, system=system, max_tokens=1024)).strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
         data = json.loads(raw)
@@ -890,7 +892,8 @@ def _extract_and_save_memories(conversation_log: list[dict]) -> int:
 
     try:
         full_text = ""
-        for chunk in stream_complete(_MEMORY_PROMPT + conv_text[:5000], system=_MEMORY_SYSTEM):
+        for chunk in stream_complete(_MEMORY_PROMPT + conv_text[:5000], system=_MEMORY_SYSTEM,
+                                     max_tokens=1024):
             full_text += chunk
 
         raw = full_text.strip()

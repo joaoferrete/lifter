@@ -15,6 +15,118 @@ from config import (
 )
 
 
+# Default output-token ceiling. Per-task callers pass smaller values (e.g. memory
+# extraction, short JSON) so we don't reserve a large budget for tiny outputs.
+_DEFAULT_MAX_TOKENS = 4096
+
+# How many recent user turns a chat keeps verbatim before older ones get folded
+# into a running summary. 0 disables windowing (unlimited history).
+_DEFAULT_HISTORY_TURNS = 12
+
+
+def _history_keep_turns() -> int:
+    """Configured number of recent user turns to keep verbatim (pref, default 12)."""
+    try:
+        from db.goals import get_pref
+        raw = get_pref("ai_chat_history_turns")
+        return max(0, int(raw)) if raw is not None else _DEFAULT_HISTORY_TURNS
+    except Exception:
+        return _DEFAULT_HISTORY_TURNS
+
+
+_SUMMARY_SYSTEM = (
+    "You compress chat history for a fitness coach. Output a terse summary (2-5 sentences) "
+    "capturing durable facts about the athlete, decisions made, and the session's goal. "
+    "No preamble, no markdown — just the summary text."
+)
+
+
+def _summarize_history(old_summary: str, dropped_texts: list[str]) -> str:
+    """Fold dropped chat turns into a short running summary. Best-effort.
+
+    Returns the previous summary unchanged on any failure, so windowing never
+    breaks a live conversation."""
+    joined = "\n".join(t for t in dropped_texts if t)[:4000]
+    if not joined.strip():
+        return old_summary
+    prompt = (
+        f"Existing summary (may be empty):\n{old_summary or '(none)'}\n\n"
+        f"Older messages to fold in:\n{joined}\n\n"
+        "Return the updated summary."
+    )
+    try:
+        out = "".join(stream_complete(prompt, system=_SUMMARY_SYSTEM, max_tokens=256)).strip()
+        return out or old_summary
+    except Exception:
+        return old_summary
+
+
+class _WindowedChat:
+    """Mixin: trims old turns from a message-list chat session, folding them into
+    a running summary stored in the system block.
+
+    Subclasses set ``self._keep_turns`` and ``self._summary`` and implement the
+    small format-specific adapters below. Cutting only at real user-utterance
+    boundaries guarantees we never split a tool_use / tool_result pair."""
+
+    # ── adapters (overridden per provider) ────────────────────────────────────
+    def _history_messages(self) -> list:
+        raise NotImplementedError
+
+    def _set_history_messages(self, msgs: list) -> None:
+        raise NotImplementedError
+
+    def _is_user_utterance(self, msg) -> bool:
+        raise NotImplementedError
+
+    def _msg_text(self, msg) -> str:
+        raise NotImplementedError
+
+    def _set_summary_in_system(self, summary: str) -> None:
+        raise NotImplementedError
+
+    # ── orchestration ─────────────────────────────────────────────────────────
+    def _maybe_window(self) -> None:
+        keep = getattr(self, "_keep_turns", 0)
+        if not keep:
+            return
+        msgs = self._history_messages()
+        utterances = [i for i, m in enumerate(msgs) if self._is_user_utterance(m)]
+        if len(utterances) <= keep:
+            return
+        cut = utterances[len(utterances) - keep]
+        dropped, kept = msgs[:cut], msgs[cut:]
+        texts = [self._msg_text(m) for m in dropped]
+        self._summary = _summarize_history(getattr(self, "_summary", ""), texts)
+        if self._summary:
+            self._set_summary_in_system(self._summary)
+        self._set_history_messages(kept)
+        try:
+            from debug_log import log
+            log("AI", "chat history windowed",
+                keep_turns=keep, dropped_msgs=len(dropped), kept_msgs=len(kept))
+        except Exception:
+            pass
+
+
+def _blocks_text(content) -> str:
+    """Best-effort text extraction from a string / list-of-blocks message body."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        out = []
+        for it in content:
+            if isinstance(it, dict):
+                if it.get("type") == "text" and it.get("text"):
+                    out.append(it["text"])
+                elif "text" in it and isinstance(it["text"], str):
+                    out.append(it["text"])
+            elif getattr(it, "type", None) == "text":
+                out.append(getattr(it, "text", "") or "")
+        return " ".join(out)
+    return ""
+
+
 def _track_usage(input_tokens: int = 0, output_tokens: int = 0, cache_read: int = 0) -> None:
     """Persist token usage totals silently — never raises."""
     if not (input_tokens or output_tokens or cache_read):
@@ -50,23 +162,80 @@ class ChatResponse:
 # ── Gemini ────────────────────────────────────────────────────────────────────
 
 class GeminiChatSession:
-    def __init__(self, system: str, tools: list[dict] | None = None):
+    def __init__(self, system: str, tools: list[dict] | None = None,
+                 max_tokens: int = _DEFAULT_MAX_TOKENS):
         from google import genai
         from google.genai import types
         self._types = types
         self._client = genai.Client(api_key=GEMINI_API_KEY)
-        tool_obj = types.Tool(function_declarations=tools) if tools else None
-        self._chat = self._client.chats.create(
+        # Kept so we can rebuild the chat with a trimmed history during windowing.
+        self._base_system = system
+        self._max_tokens = max_tokens
+        self._keep_turns = _history_keep_turns()
+        self._summary = ""
+        self._tool_obj = types.Tool(function_declarations=tools) if tools else None
+        self._chat = self._new_chat(system, [])
+
+    def _new_chat(self, system: str, history: list):
+        types = self._types
+        return self._client.chats.create(
             model=AI_MODEL,
+            history=history,
             config=types.GenerateContentConfig(
                 system_instruction=system,
-                tools=[tool_obj] if tool_obj else None,
+                tools=[self._tool_obj] if self._tool_obj else None,
                 temperature=0.7,
+                max_output_tokens=self._max_tokens,
             ),
         )
 
+    def _maybe_window(self) -> None:
+        """Best-effort: fold old turns into a summary and rebuild the chat with a
+        trimmed history. The Gemini SDK owns history, so this reads get_history()
+        and recreates the chat — guarded so any SDK-shape mismatch leaves the live
+        chat untouched (degrades to unlimited history)."""
+        if not self._keep_turns:
+            return
+        try:
+            history = list(self._chat.get_history())
+        except Exception:
+            return  # SDK doesn't expose history in the expected way — skip safely
+
+        def _is_user_utterance(c) -> bool:
+            if getattr(c, "role", None) != "user":
+                return False
+            parts = getattr(c, "parts", None) or []
+            return not any(getattr(p, "function_response", None) for p in parts)
+
+        def _text(c) -> str:
+            return " ".join(
+                getattr(p, "text", "") or "" for p in (getattr(c, "parts", None) or [])
+            )
+
+        utterances = [i for i, c in enumerate(history) if _is_user_utterance(c)]
+        if len(utterances) <= self._keep_turns:
+            return
+        cut = utterances[len(utterances) - self._keep_turns]
+        dropped, kept = history[:cut], history[cut:]
+        self._summary = _summarize_history(self._summary, [_text(c) for c in dropped])
+        new_system = self._base_system
+        if self._summary:
+            new_system = f"{self._base_system}\n\n## Summary of earlier conversation\n{self._summary}"
+        try:
+            self._chat = self._new_chat(new_system, kept)
+        except Exception:
+            return  # keep the existing chat if rebuild fails
+        try:
+            from debug_log import log
+            log("AI", "chat history windowed",
+                keep_turns=self._keep_turns, dropped_msgs=len(dropped), kept_msgs=len(kept))
+        except Exception:
+            pass
+
     def send(self, user_message: str) -> ChatResponse:
-        return self._parse(self._chat.send_message(user_message))
+        result = self._parse(self._chat.send_message(user_message))
+        self._maybe_window()
+        return result
 
     def discard_pending_user(self) -> None:
         pass  # Gemini SDK owns history; rollback not supported
@@ -104,16 +273,38 @@ class GeminiChatSession:
 
 # ── Claude (Anthropic direct) ─────────────────────────────────────────────────
 
-class ClaudeChatSession:
-    def __init__(self, system: str, tools: list[dict] | None = None):
+class ClaudeChatSession(_WindowedChat):
+    def __init__(self, system: str, tools: list[dict] | None = None,
+                 max_tokens: int = _DEFAULT_MAX_TOKENS):
         import anthropic
         self._client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        self._max_tokens = max_tokens
+        self._base_system = system
+        self._keep_turns = _history_keep_turns()
+        self._summary = ""
         self._system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
         self._tools = [
             {"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
             for t in (tools or [])
         ]
         self._messages: list[dict] = []
+
+    # ── windowing adapters ────────────────────────────────────────────────────
+    def _history_messages(self) -> list:
+        return self._messages
+
+    def _set_history_messages(self, msgs: list) -> None:
+        self._messages = msgs
+
+    def _is_user_utterance(self, msg) -> bool:
+        return msg.get("role") == "user" and isinstance(msg.get("content"), str)
+
+    def _msg_text(self, msg) -> str:
+        return _blocks_text(msg.get("content"))
+
+    def _set_summary_in_system(self, summary: str) -> None:
+        text = f"{self._base_system}\n\n## Summary of earlier conversation\n{summary}"
+        self._system = [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
 
     def send(self, user_message: str) -> ChatResponse:
         self._messages.append({"role": "user", "content": user_message})
@@ -137,7 +328,8 @@ class ClaudeChatSession:
         return self._call()
 
     def _call(self) -> ChatResponse:
-        kwargs: dict = dict(model=AI_MODEL, system=self._system, messages=self._messages, max_tokens=4096)
+        kwargs: dict = dict(model=AI_MODEL, system=self._system, messages=self._messages,
+                            max_tokens=self._max_tokens)
         if self._tools:
             kwargs["tools"] = self._tools
         response = self._client.messages.create(**kwargs)
@@ -147,6 +339,7 @@ class ClaudeChatSession:
             response.usage.output_tokens,
             getattr(response.usage, "cache_read_input_tokens", 0) or 0,
         )
+        self._maybe_window()
         return self._parse(response)
 
     def _parse(self, response) -> ChatResponse:
@@ -161,14 +354,19 @@ class ClaudeChatSession:
 
 # ── OpenAI-compatible (OpenRouter / Groq / GitHub Models) ────────────────────
 
-class OpenAICompatibleChatSession:
+class OpenAICompatibleChatSession(_WindowedChat):
     """Works with any provider that speaks the OpenAI Chat Completions API."""
 
-    def __init__(self, system: str, tools: list[dict] | None = None):
+    def __init__(self, system: str, tools: list[dict] | None = None,
+                 max_tokens: int = _DEFAULT_MAX_TOKENS):
         from openai import OpenAI
         base_url = PROVIDER_BASE_URLS[AI_PROVIDER]
         api_key = get_provider_api_key()
         self._client = OpenAI(base_url=base_url, api_key=api_key)
+        self._max_tokens = max_tokens
+        self._base_system = system
+        self._keep_turns = _history_keep_turns()
+        self._summary = ""
         self._tools = [
             {"type": "function", "function": {
                 "name": t["name"],
@@ -178,6 +376,25 @@ class OpenAICompatibleChatSession:
             for t in (tools or [])
         ]
         self._messages: list[dict] = [{"role": "system", "content": system}]
+
+    # ── windowing adapters (messages[0] is the system message — keep it) ──────
+    def _history_messages(self) -> list:
+        return self._messages[1:]
+
+    def _set_history_messages(self, msgs: list) -> None:
+        self._messages = self._messages[:1] + msgs
+
+    def _is_user_utterance(self, msg) -> bool:
+        return msg.get("role") == "user" and isinstance(msg.get("content"), str)
+
+    def _msg_text(self, msg) -> str:
+        return _blocks_text(msg.get("content"))
+
+    def _set_summary_in_system(self, summary: str) -> None:
+        self._messages[0] = {
+            "role": "system",
+            "content": f"{self._base_system}\n\n## Summary of earlier conversation\n{summary}",
+        }
 
     def send(self, user_message: str) -> ChatResponse:
         self._messages.append({"role": "user", "content": user_message})
@@ -196,7 +413,7 @@ class OpenAICompatibleChatSession:
         return self._call()
 
     def _call(self) -> ChatResponse:
-        kwargs: dict = dict(model=AI_MODEL, messages=self._messages, max_tokens=4096)
+        kwargs: dict = dict(model=AI_MODEL, messages=self._messages, max_tokens=self._max_tokens)
         if self._tools:
             kwargs["tools"] = self._tools
         response = self._client.chat.completions.create(**kwargs)
@@ -215,6 +432,7 @@ class OpenAICompatibleChatSession:
         self._messages.append(msg_dict)
         if response.usage:
             _track_usage(response.usage.prompt_tokens, response.usage.completion_tokens)
+        self._maybe_window()
         return self._parse(msg)
 
     def _parse(self, msg) -> ChatResponse:
@@ -232,11 +450,16 @@ class OpenAICompatibleChatSession:
 
 # ── Amazon Bedrock (Claude via Anthropic SDK) ─────────────────────────────────
 
-class BedrockChatSession:
+class BedrockChatSession(_WindowedChat):
     """Claude-on-Bedrock via anthropic.AnthropicBedrock. Requires: pip install 'anthropic[bedrock]'."""
 
-    def __init__(self, system: str, tools: list[dict] | None = None):
+    def __init__(self, system: str, tools: list[dict] | None = None,
+                 max_tokens: int = _DEFAULT_MAX_TOKENS):
         import anthropic
+        self._max_tokens = max_tokens
+        self._base_system = system
+        self._keep_turns = _history_keep_turns()
+        self._summary = ""
         try:
             self._client = anthropic.AnthropicBedrock(
                 aws_region=AWS_REGION,
@@ -258,6 +481,23 @@ class BedrockChatSession:
         ]
         self._messages: list[dict] = []
 
+    # ── windowing adapters (same message shape as ClaudeChatSession) ──────────
+    def _history_messages(self) -> list:
+        return self._messages
+
+    def _set_history_messages(self, msgs: list) -> None:
+        self._messages = msgs
+
+    def _is_user_utterance(self, msg) -> bool:
+        return msg.get("role") == "user" and isinstance(msg.get("content"), str)
+
+    def _msg_text(self, msg) -> str:
+        return _blocks_text(msg.get("content"))
+
+    def _set_summary_in_system(self, summary: str) -> None:
+        text = f"{self._base_system}\n\n## Summary of earlier conversation\n{summary}"
+        self._system = [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
+
     def send(self, user_message: str) -> ChatResponse:
         self._messages.append({"role": "user", "content": user_message})
         return self._call()
@@ -280,7 +520,8 @@ class BedrockChatSession:
         return self._call()
 
     def _call(self) -> ChatResponse:
-        kwargs: dict = dict(model=AI_MODEL, system=self._system, messages=self._messages, max_tokens=4096)
+        kwargs: dict = dict(model=AI_MODEL, system=self._system, messages=self._messages,
+                            max_tokens=self._max_tokens)
         if self._tools:
             kwargs["tools"] = self._tools
         response = self._client.messages.create(**kwargs)
@@ -290,6 +531,7 @@ class BedrockChatSession:
             response.usage.output_tokens,
             getattr(response.usage, "cache_read_input_tokens", 0) or 0,
         )
+        self._maybe_window()
         texts, tool_calls = [], []
         for block in response.content:
             if block.type == "text":
@@ -313,11 +555,16 @@ def _boto3_bedrock_client():
     return boto3.client("bedrock-runtime", **kwargs)
 
 
-class BedrockConverseChatSession:
+class BedrockConverseChatSession(_WindowedChat):
     """Non-Claude models on Bedrock (Gemma, Llama, etc.) via boto3 Converse API."""
 
-    def __init__(self, system: str, tools: list[dict] | None = None):
+    def __init__(self, system: str, tools: list[dict] | None = None,
+                 max_tokens: int = _DEFAULT_MAX_TOKENS):
         self._client = _boto3_bedrock_client()
+        self._max_tokens = max_tokens
+        self._base_system = system
+        self._keep_turns = _history_keep_turns()
+        self._summary = ""
         self._system = [{"text": system}]
         self._tool_config: dict | None = None
         if tools:
@@ -334,6 +581,28 @@ class BedrockConverseChatSession:
                 ]
             }
         self._messages: list[dict] = []
+
+    # ── windowing adapters (Converse content is a list of typed items) ────────
+    def _history_messages(self) -> list:
+        return self._messages
+
+    def _set_history_messages(self, msgs: list) -> None:
+        self._messages = msgs
+
+    def _is_user_utterance(self, msg) -> bool:
+        content = msg.get("content") or []
+        return msg.get("role") == "user" and not any(
+            isinstance(it, dict) and "toolResult" in it for it in content
+        )
+
+    def _msg_text(self, msg) -> str:
+        return " ".join(
+            it["text"] for it in (msg.get("content") or [])
+            if isinstance(it, dict) and isinstance(it.get("text"), str)
+        )
+
+    def _set_summary_in_system(self, summary: str) -> None:
+        self._system = [{"text": f"{self._base_system}\n\n## Summary of earlier conversation\n{summary}"}]
 
     def send(self, user_message: str) -> ChatResponse:
         self._messages.append({"role": "user", "content": [{"text": user_message}]})
@@ -361,7 +630,7 @@ class BedrockConverseChatSession:
             "modelId": AI_MODEL,
             "system": self._system,
             "messages": self._messages,
-            "inferenceConfig": {"maxTokens": 4096},
+            "inferenceConfig": {"maxTokens": self._max_tokens},
         }
         if self._tool_config:
             kwargs["toolConfig"] = self._tool_config
@@ -370,6 +639,7 @@ class BedrockConverseChatSession:
         self._messages.append(msg)
         usage = response.get("usage", {})
         _track_usage(usage.get("inputTokens", 0), usage.get("outputTokens", 0))
+        self._maybe_window()
         texts, tool_calls = [], []
         for item in msg.get("content", []):
             if "text" in item:
@@ -385,19 +655,20 @@ class BedrockConverseChatSession:
 _OPENAI_COMPAT = {"openrouter", "groq", "github"}
 
 
-def create_chat_session(system: str, tools: list[dict] | None = None):
+def create_chat_session(system: str, tools: list[dict] | None = None,
+                        max_tokens: int = _DEFAULT_MAX_TOKENS):
     if AI_PROVIDER == "claude":
-        return ClaudeChatSession(system=system, tools=tools)
+        return ClaudeChatSession(system=system, tools=tools, max_tokens=max_tokens)
     if AI_PROVIDER in _OPENAI_COMPAT:
-        return OpenAICompatibleChatSession(system=system, tools=tools)
+        return OpenAICompatibleChatSession(system=system, tools=tools, max_tokens=max_tokens)
     if AI_PROVIDER == "bedrock":
         if AI_MODEL.startswith("anthropic."):
-            return BedrockChatSession(system=system, tools=tools)
-        return BedrockConverseChatSession(system=system, tools=tools)
-    return GeminiChatSession(system=system, tools=tools)
+            return BedrockChatSession(system=system, tools=tools, max_tokens=max_tokens)
+        return BedrockConverseChatSession(system=system, tools=tools, max_tokens=max_tokens)
+    return GeminiChatSession(system=system, tools=tools, max_tokens=max_tokens)
 
 
-def stream_complete(prompt: str, system: str) -> Iterator[str]:
+def stream_complete(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOKENS) -> Iterator[str]:
     """One-shot streaming completion with no session state or tool calls."""
     if AI_PROVIDER == "claude":
         import anthropic
@@ -406,7 +677,7 @@ def stream_complete(prompt: str, system: str) -> Iterator[str]:
         with client.messages.stream(
             model=AI_MODEL, system=cached_system,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=4096,
+            max_tokens=max_tokens,
         ) as stream:
             yield from stream.text_stream
             final = stream.get_final_message()
@@ -425,7 +696,7 @@ def stream_complete(prompt: str, system: str) -> Iterator[str]:
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=4096,
+            max_tokens=max_tokens,
             stream=True,
         )
         for chunk in stream:
@@ -453,7 +724,7 @@ def stream_complete(prompt: str, system: str) -> Iterator[str]:
             with client.messages.stream(
                 model=AI_MODEL, system=cached_system,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=4096,
+                max_tokens=max_tokens,
             ) as stream:
                 yield from stream.text_stream
                 final = stream.get_final_message()
@@ -468,7 +739,7 @@ def stream_complete(prompt: str, system: str) -> Iterator[str]:
                 modelId=AI_MODEL,
                 system=[{"text": system}],
                 messages=[{"role": "user", "content": [{"text": prompt}]}],
-                inferenceConfig={"maxTokens": 4096},
+                inferenceConfig={"maxTokens": max_tokens},
             )
             for event in response.get("stream", []):
                 if "contentBlockDelta" in event:
@@ -496,7 +767,7 @@ def _loads_lenient(raw: str) -> dict:
     return json.loads(raw)
 
 
-def complete_json(prompt: str, system: str) -> dict:
+def complete_json(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOKENS) -> dict:
     """One-shot completion that returns a parsed JSON object.
 
     Uses each provider's native JSON/structured mode (or an assistant ``{`` prefill
@@ -513,7 +784,7 @@ def complete_json(prompt: str, system: str) -> dict:
                 {"role": "user", "content": prompt},
                 {"role": "assistant", "content": "{"},
             ],
-            max_tokens=4096,
+            max_tokens=max_tokens,
         )
         _track_usage(
             response.usage.input_tokens,
@@ -532,7 +803,7 @@ def complete_json(prompt: str, system: str) -> dict:
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=4096,
+            max_tokens=max_tokens,
             response_format={"type": "json_object"},
         )
         if response.usage:
@@ -563,7 +834,7 @@ def complete_json(prompt: str, system: str) -> dict:
                     {"role": "user", "content": prompt},
                     {"role": "assistant", "content": "{"},
                 ],
-                max_tokens=4096,
+                max_tokens=max_tokens,
             )
             _track_usage(
                 response.usage.input_tokens,
@@ -581,7 +852,7 @@ def complete_json(prompt: str, system: str) -> dict:
                 {"role": "user", "content": [{"text": prompt}]},
                 {"role": "assistant", "content": [{"text": "{"}]},
             ],
-            inferenceConfig={"maxTokens": 4096},
+            inferenceConfig={"maxTokens": max_tokens},
         )
         usage = response.get("usage", {})
         _track_usage(usage.get("inputTokens", 0), usage.get("outputTokens", 0))

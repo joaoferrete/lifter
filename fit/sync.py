@@ -1,17 +1,9 @@
 """Sync sleep, steps, calories, and heart rate from Google Fit."""
 import os
-import sqlite3
 from datetime import datetime, timezone, timedelta
 
-import config
+from db.store import connect as _conn
 from fit.client import FitClient
-
-
-def _conn():
-    conn = sqlite3.connect(config.DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
 
 
 def _ms(dt: datetime) -> int:
@@ -114,6 +106,8 @@ def sync_fit(days: int = 30) -> dict:
 
     from db.store import set_sync_state
     set_sync_state("fit_last_sync", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    from render_cache import invalidate
+    invalidate()
     log("SYNC", "Google Fit sync complete",
         daily_days=counts["daily_days"], sleep_sessions=counts["sleep_sessions"])
     return counts

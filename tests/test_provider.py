@@ -80,7 +80,7 @@ def test_dispatch_claude(monkeypatch):
     with patch.object(provider_mod, "ClaudeChatSession") as MockClass:
         MockClass.return_value = MagicMock()
         provider_mod.create_chat_session("sys")
-    MockClass.assert_called_once_with(system="sys", tools=None)
+    MockClass.assert_called_once_with(system="sys", tools=None, max_tokens=4096)
 
 
 def test_dispatch_claude_passes_tools(monkeypatch):
@@ -89,7 +89,7 @@ def test_dispatch_claude_passes_tools(monkeypatch):
     with patch.object(provider_mod, "ClaudeChatSession") as MockClass:
         MockClass.return_value = MagicMock()
         provider_mod.create_chat_session("sys", tools=tools)
-    MockClass.assert_called_once_with(system="sys", tools=tools)
+    MockClass.assert_called_once_with(system="sys", tools=tools, max_tokens=4096)
 
 
 def test_dispatch_openrouter(monkeypatch):
@@ -97,7 +97,7 @@ def test_dispatch_openrouter(monkeypatch):
     with patch.object(provider_mod, "OpenAICompatibleChatSession") as MockClass:
         MockClass.return_value = MagicMock()
         provider_mod.create_chat_session("sys")
-    MockClass.assert_called_once_with(system="sys", tools=None)
+    MockClass.assert_called_once_with(system="sys", tools=None, max_tokens=4096)
 
 
 def test_dispatch_groq(monkeypatch):
@@ -244,3 +244,89 @@ def test_track_usage_never_raises_on_db_error(monkeypatch):
         raise RuntimeError("db exploded")
     monkeypatch.setattr("db.goals.add_token_usage", boom)
     provider_mod._track_usage(input_tokens=999)  # must not raise
+
+
+# ── chat history windowing (P2) ────────────────────────────────────────────────
+
+def test_summarize_history_returns_old_on_empty():
+    assert provider_mod._summarize_history("prev", []) == "prev"
+    assert provider_mod._summarize_history("prev", ["", "  "]) == "prev"
+
+
+def test_blocks_text_handles_str_and_blocks():
+    assert provider_mod._blocks_text("hi") == "hi"
+    assert provider_mod._blocks_text([{"type": "text", "text": "a"}, {"type": "tool_use"}]) == "a"
+
+
+def test_openai_session_windows_history(monkeypatch):
+    monkeypatch.setattr(provider_mod, "AI_PROVIDER", "openrouter")
+    monkeypatch.setattr(provider_mod, "_summarize_history", lambda old, texts: "SUMMARY")
+    with patch("openai.OpenAI", return_value=MagicMock()):
+        s = provider_mod.OpenAICompatibleChatSession("BASE")
+    s._keep_turns = 2
+    s._messages = [{"role": "system", "content": "BASE"}]
+    for i in range(4):
+        s._messages.append({"role": "user", "content": f"u{i}"})
+        s._messages.append({"role": "assistant", "content": f"a{i}"})
+
+    s._maybe_window()
+
+    assert s._messages[0]["role"] == "system"
+    assert "SUMMARY" in s._messages[0]["content"]
+    contents = [m.get("content") for m in s._messages]
+    assert "u2" in contents and "u3" in contents
+    assert "u0" not in contents and "u1" not in contents
+
+
+def test_openai_session_no_window_when_under_limit(monkeypatch):
+    monkeypatch.setattr(provider_mod, "AI_PROVIDER", "openrouter")
+    with patch("openai.OpenAI", return_value=MagicMock()):
+        s = provider_mod.OpenAICompatibleChatSession("BASE")
+    s._keep_turns = 5
+    s._messages = [{"role": "system", "content": "BASE"},
+                   {"role": "user", "content": "u0"},
+                   {"role": "assistant", "content": "a0"}]
+    before = list(s._messages)
+    s._maybe_window()
+    assert s._messages == before  # untouched
+
+
+def test_claude_session_windows_at_user_boundary(monkeypatch):
+    monkeypatch.setattr(provider_mod, "AI_PROVIDER", "claude")
+    monkeypatch.setattr(provider_mod, "_summarize_history", lambda old, texts: "S")
+    with patch("anthropic.Anthropic", return_value=MagicMock()):
+        s = provider_mod.ClaudeChatSession("BASE")
+    s._keep_turns = 1
+    s._messages = [
+        {"role": "user", "content": "u0"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1"}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "{}"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "a0"}]},
+        {"role": "user", "content": "u1"},
+        {"role": "assistant", "content": [{"type": "text", "text": "a1"}]},
+    ]
+    s._maybe_window()
+
+    # Cut at the last user utterance ("u1") — the orphaned tool_result is dropped,
+    # so the kept slice has no dangling tool_result.
+    assert s._messages[0] == {"role": "user", "content": "u1"}
+    assert not any(
+        isinstance(m.get("content"), list)
+        and any(b.get("type") == "tool_result" for b in m["content"])
+        for m in s._messages
+    )
+    assert "S" in s._system[0]["text"] and "BASE" in s._system[0]["text"]
+
+
+def test_keep_turns_zero_disables_windowing(monkeypatch):
+    monkeypatch.setattr(provider_mod, "AI_PROVIDER", "openrouter")
+    with patch("openai.OpenAI", return_value=MagicMock()):
+        s = provider_mod.OpenAICompatibleChatSession("BASE")
+    s._keep_turns = 0
+    s._messages = [{"role": "system", "content": "BASE"}]
+    for i in range(10):
+        s._messages.append({"role": "user", "content": f"u{i}"})
+        s._messages.append({"role": "assistant", "content": f"a{i}"})
+    n = len(s._messages)
+    s._maybe_window()
+    assert len(s._messages) == n  # disabled — nothing trimmed
