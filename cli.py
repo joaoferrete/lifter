@@ -1166,13 +1166,29 @@ _UI_LANGUAGES = [
 
 
 def _do_ai_settings():
-    from db.goals import get_pref, set_pref, get_token_usage, reset_token_usage
+    from db.goals import (
+        get_pref, set_pref, get_token_usage, get_token_usage_month,
+        reset_token_usage, get_token_reset_day, set_token_reset_day,
+    )
+
+    def _token_block(title, usage):
+        total = usage["input"] + usage["output"]
+        cache_pct = int(usage["cache_read"] / usage["input"] * 100) if usage["input"] else 0
+        block = [
+            title,
+            _("settings.ai.tokens_input", count=f"{usage['input']:,}"),
+            _("settings.ai.tokens_output", count=f"{usage['output']:,}"),
+            _("settings.ai.tokens_total", count=f"{total:,}"),
+        ]
+        if usage["cache_read"]:
+            block.append(_("settings.ai.tokens_cached", count=f"{usage['cache_read']:,}", pct=cache_pct))
+        return block
 
     while True:
         console.clear()
-        usage = get_token_usage()
-        total = usage["input"] + usage["output"]
-        cache_pct = int(usage["cache_read"] / usage["input"] * 100) if usage["input"] else 0
+        usage_month = get_token_usage_month()
+        usage_total = get_token_usage()
+        reset_day = get_token_reset_day()
         slim_on = get_pref("ai_chat_slim") != "0"
         routines_on = get_pref("ai_include_routines") != "0"
         auto_report_on = get_pref("auto_report") != "0"
@@ -1193,14 +1209,12 @@ def _do_ai_settings():
             _("settings.ai.routines_line", state=on_off(routines_on)),
             _("settings.ai.auto_report_line", state=on_off(auto_report_on)),
             _("settings.ai.language_line", lang=lang),
+            _("settings.ai.reset_day_line", day=reset_day),
             "",
-            _("settings.ai.token_usage_title"),
-            _("settings.ai.tokens_input", count=f"{usage['input']:,}"),
-            _("settings.ai.tokens_output", count=f"{usage['output']:,}"),
-            _("settings.ai.tokens_total", count=f"{total:,}"),
         ]
-        if usage["cache_read"]:
-            lines.append(_("settings.ai.tokens_cached", count=f"{usage['cache_read']:,}", pct=cache_pct))
+        lines += _token_block(_("settings.ai.token_usage_month_title"), usage_month)
+        lines.append("")
+        lines += _token_block(_("settings.ai.token_usage_total_title"), usage_total)
 
         console.print(Panel("\n".join(lines), title=_("settings.ai.title"), border_style="cyan"))
 
@@ -1220,6 +1234,7 @@ def _do_ai_settings():
                     value="toggle_auto_report",
                 ),
                 questionary.Choice(_("settings.ai.language_choice", lang=lang), value="language"),
+                questionary.Choice(_("settings.ai.reset_day_choice", day=reset_day), value="reset_day"),
                 questionary.Choice(_("settings.ai.reset_tokens_choice"),         value="reset_tokens"),
                 questionary.Separator("  ───"),
                 questionary.Choice(_("nav.back"),                                 value="back"),
@@ -1262,10 +1277,22 @@ def _do_ai_settings():
                 _dlog("SETTING", "ai_language changed", value=new_lang)
                 console.print(_("settings.ai.language_saved", lang=new_lang))
 
+        elif action == "reset_day":
+            answer = questionary.text(
+                _("settings.ai.reset_day_prompt"),
+                default=str(reset_day),
+                validate=lambda v: (v.isdigit() and 1 <= int(v) <= 31) or _("settings.ai.reset_day_invalid"),
+                style=STYLE,
+            ).ask()
+            if answer:
+                set_token_reset_day(int(answer))
+                _dlog("SETTING", "ai_tokens_reset_day changed", value=answer)
+                console.print(_("settings.ai.reset_day_saved", day=int(answer)))
+
         elif action == "reset_tokens":
             if questionary.confirm(_("settings.ai.reset_tokens_prompt"), default=False, style=STYLE).ask():
                 reset_token_usage()
-                _dlog("SETTING", "token counters reset")
+                _dlog("SETTING", "token counters reset (month + lifetime)")
                 console.print(_("settings.ai.reset_tokens_done"))
 
 
@@ -2101,6 +2128,8 @@ def main():
     _dlog("APP", "Lifter started",
           profile=get_active_slug() or "none",
           provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL)
+    from db.goals import maybe_rollover_tokens
+    maybe_rollover_tokens()   # reset monthly token counter if the period rolled over
     _check_goals_and_checkin()
     _check_stale_sync()
     _check_auto_report()
