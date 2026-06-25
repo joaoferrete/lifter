@@ -40,8 +40,11 @@
 
   "error.hevy_api_key_not_set": "[red]Chave de API do Hevy não configurada. Vá em Configurações → Perfis.[/red]",
   "error.ai_key_not_set": "[red]{var} não definida no .env (AI_PROVIDER={provider})[/red]",
+  "error.ai_provider_unknown": "[red]AI_PROVIDER '{provider}' desconhecido. Defina AI_PROVIDER no .env como um de: {valid}.[/red]",
+  "error.ai_bedrock_no_creds": "[red]Amazon Bedrock sem credenciais. Defina AWS_BEARER_TOKEN_BEDROCK (uma API key / bearer token do Bedrock), ou AWS_ACCESS_KEY_ID e AWS_SECRET_ACCESS_KEY, no .env.[/red]",
   "error.rate_limit_429": "Limite de requisições da IA atingido. Tente novamente em {retry_after} segundos. (erro 429)",
   "error.rate_limit_429_no_retry": "Limite de requisições da IA atingido. Aguarde um momento e tente novamente. (erro 429)",
+  "error.request_too_large_413": "A requisição excede o limite de tokens por minuto do provider de IA (free tier). Aguarde um minuto e tente de novo, faça upgrade do tier, ou troque AI_PROVIDER (ex.: gemini/claude/bedrock) no .env. (erro 413)",
   "error.api_key_invalid_401": "Chave de API inválida ou expirada. Verifique sua chave no .env. (erro 401)",
   "error.access_denied_403": "Acesso negado ao serviço de IA. Verifique as permissões da sua chave. (erro 403)",
   "error.bad_request_400": "A IA rejeitou a requisição. (erro 400)",

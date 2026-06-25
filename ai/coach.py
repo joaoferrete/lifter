@@ -80,6 +80,8 @@ def _friendly_error(e: Exception) -> str:
         if retry_after:
             return _("error.rate_limit_429", retry_after=retry_after)
         return _("error.rate_limit_429_no_retry")
+    if status == 413 or "rate_limit_exceeded" in msg or "tokens per minute" in msg.lower():
+        return _("error.request_too_large_413")
     if status == 401:
         return _("error.api_key_invalid_401")
     if status == 403:

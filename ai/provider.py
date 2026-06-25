@@ -10,7 +10,8 @@ from config import (
     GEMINI_API_KEY, ANTHROPIC_API_KEY,
     OPENROUTER_API_KEY, GROQ_API_KEY, GITHUB_TOKEN,
     AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
-    PROVIDER_BASE_URLS,
+    AWS_BEARER_TOKEN_BEDROCK,
+    PROVIDER_BASE_URLS, KNOWN_PROVIDERS,
     get_provider_api_key,
 )
 
@@ -450,30 +451,60 @@ class OpenAICompatibleChatSession(_WindowedChat):
 
 # ── Amazon Bedrock (Claude via Anthropic SDK) ─────────────────────────────────
 
+def _anthropic_bedrock_client():
+    """Build an AnthropicBedrock client for Claude-on-Bedrock.
+
+    Two auth paths:
+      • Bearer token (AWS_BEARER_TOKEN_BEDROCK) — the SDK sends
+        ``Authorization: Bearer …`` and skips SigV4, so boto3/botocore is NOT
+        required. Cannot be combined with AWS credentials (the SDK rejects it).
+      • AWS credentials via boto3 (needs: pip install 'anthropic[bedrock]').
+    """
+    import anthropic
+    if AWS_BEARER_TOKEN_BEDROCK:
+        # Bearer path: pass only the region + api_key — passing any aws_* arg
+        # alongside api_key makes the SDK raise ValueError.
+        return anthropic.AnthropicBedrock(
+            aws_region=AWS_REGION,
+            api_key=AWS_BEARER_TOKEN_BEDROCK,
+        )
+    if not (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY):
+        raise RuntimeError(
+            "Amazon Bedrock has no credentials configured.\n"
+            "Set AWS_BEARER_TOKEN_BEDROCK (a Bedrock API key / bearer token), or "
+            "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, in your .env."
+        )
+    try:
+        return anthropic.AnthropicBedrock(
+            aws_region=AWS_REGION,
+            aws_access_key=AWS_ACCESS_KEY_ID or None,
+            aws_secret_key=AWS_SECRET_ACCESS_KEY or None,
+            aws_session_token=AWS_SESSION_TOKEN or None,
+        )
+    except Exception as exc:
+        if "botocore" in str(exc) or "boto3" in str(exc):
+            raise RuntimeError(
+                'Bedrock with AWS credentials requires the AWS SDK extras.\n'
+                'Run: pip install "anthropic[bedrock]" — or use a bearer token '
+                "(AWS_BEARER_TOKEN_BEDROCK), which needs no extra install."
+            ) from exc
+        raise
+
+
 class BedrockChatSession(_WindowedChat):
-    """Claude-on-Bedrock via anthropic.AnthropicBedrock. Requires: pip install 'anthropic[bedrock]'."""
+    """Claude-on-Bedrock via anthropic.AnthropicBedrock.
+
+    Auth: a bearer token (AWS_BEARER_TOKEN_BEDROCK, no boto3 needed) or AWS
+    credentials (pip install 'anthropic[bedrock]'). See _anthropic_bedrock_client.
+    """
 
     def __init__(self, system: str, tools: list[dict] | None = None,
                  max_tokens: int = _DEFAULT_MAX_TOKENS):
-        import anthropic
         self._max_tokens = max_tokens
         self._base_system = system
         self._keep_turns = _history_keep_turns()
         self._summary = ""
-        try:
-            self._client = anthropic.AnthropicBedrock(
-                aws_region=AWS_REGION,
-                aws_access_key=AWS_ACCESS_KEY_ID or None,
-                aws_secret_key=AWS_SECRET_ACCESS_KEY or None,
-                aws_session_token=AWS_SESSION_TOKEN or None,
-            )
-        except Exception as exc:
-            if "botocore" in str(exc) or "boto3" in str(exc):
-                raise RuntimeError(
-                    'Bedrock requires the AWS SDK extras.\n'
-                    'Run: pip install "anthropic[bedrock]"'
-                ) from exc
-            raise
+        self._client = _anthropic_bedrock_client()
         self._system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
         self._tools = [
             {"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
@@ -544,7 +575,26 @@ class BedrockChatSession(_WindowedChat):
 # ── Amazon Bedrock (non-Claude models via boto3 Converse API) ─────────────────
 
 def _boto3_bedrock_client():
-    import boto3
+    """boto3 bedrock-runtime client for non-Claude (Converse) models.
+
+    Unlike the Claude path, the Converse API requires boto3/botocore. A bearer
+    token (AWS_BEARER_TOKEN_BEDROCK) is honored automatically by recent botocore
+    versions — it's read from the environment, so we don't pass it here.
+    """
+    if not (AWS_BEARER_TOKEN_BEDROCK or (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY)):
+        raise RuntimeError(
+            "Amazon Bedrock has no credentials configured.\n"
+            "Set AWS_BEARER_TOKEN_BEDROCK (a Bedrock API key / bearer token), or "
+            "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, in your .env."
+        )
+    try:
+        import boto3
+    except ImportError as exc:
+        raise RuntimeError(
+            f"Bedrock model '{AI_MODEL}' uses the Converse API, which requires boto3.\n"
+            'Run: pip install "anthropic[bedrock]" — or pick a Claude model '
+            "(anthropic.*), which works with a bearer token alone."
+        ) from exc
     kwargs: dict = {"region_name": AWS_REGION}
     if AWS_ACCESS_KEY_ID:
         kwargs["aws_access_key_id"] = AWS_ACCESS_KEY_ID
@@ -655,14 +705,36 @@ class BedrockConverseChatSession(_WindowedChat):
 _OPENAI_COMPAT = {"openrouter", "groq", "github"}
 
 
+def _is_bedrock_claude_model() -> bool:
+    """True if AI_MODEL is a Claude model on Bedrock (Messages API / AnthropicBedrock).
+
+    Matches both the bare foundation ID (``anthropic.claude-…``) and cross-region
+    inference profiles (``us.anthropic.claude-…``, ``eu.``, ``apac.``,
+    ``global.anthropic.claude-…``). Non-Claude models (``meta.``, ``mistral.``,
+    ``amazon.``) go through the boto3 Converse path instead.
+    """
+    return "anthropic.claude" in AI_MODEL
+
+
+def _ensure_known_provider() -> None:
+    """Fail loudly on an unknown AI_PROVIDER instead of silently using Gemini."""
+    if AI_PROVIDER not in KNOWN_PROVIDERS:
+        valid = ", ".join(sorted(KNOWN_PROVIDERS))
+        raise RuntimeError(
+            f"Unknown AI_PROVIDER '{AI_PROVIDER}'. Set AI_PROVIDER in your .env to "
+            f"one of: {valid}."
+        )
+
+
 def create_chat_session(system: str, tools: list[dict] | None = None,
                         max_tokens: int = _DEFAULT_MAX_TOKENS):
+    _ensure_known_provider()
     if AI_PROVIDER == "claude":
         return ClaudeChatSession(system=system, tools=tools, max_tokens=max_tokens)
     if AI_PROVIDER in _OPENAI_COMPAT:
         return OpenAICompatibleChatSession(system=system, tools=tools, max_tokens=max_tokens)
     if AI_PROVIDER == "bedrock":
-        if AI_MODEL.startswith("anthropic."):
+        if _is_bedrock_claude_model():
             return BedrockChatSession(system=system, tools=tools, max_tokens=max_tokens)
         return BedrockConverseChatSession(system=system, tools=tools, max_tokens=max_tokens)
     return GeminiChatSession(system=system, tools=tools, max_tokens=max_tokens)
@@ -670,6 +742,7 @@ def create_chat_session(system: str, tools: list[dict] | None = None,
 
 def stream_complete(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOKENS) -> Iterator[str]:
     """One-shot streaming completion with no session state or tool calls."""
+    _ensure_known_provider()
     if AI_PROVIDER == "claude":
         import anthropic
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -704,22 +777,8 @@ def stream_complete(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOK
                 yield chunk.choices[0].delta.content
 
     elif AI_PROVIDER == "bedrock":
-        if AI_MODEL.startswith("anthropic."):
-            import anthropic
-            try:
-                client = anthropic.AnthropicBedrock(
-                    aws_region=AWS_REGION,
-                    aws_access_key=AWS_ACCESS_KEY_ID or None,
-                    aws_secret_key=AWS_SECRET_ACCESS_KEY or None,
-                    aws_session_token=AWS_SESSION_TOKEN or None,
-                )
-            except Exception as exc:
-                if "botocore" in str(exc) or "boto3" in str(exc):
-                    raise RuntimeError(
-                        'Bedrock requires the AWS SDK extras.\n'
-                        'Run: pip install "anthropic[bedrock]"'
-                    ) from exc
-                raise
+        if _is_bedrock_claude_model():
+            client = _anthropic_bedrock_client()
             cached_system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
             with client.messages.stream(
                 model=AI_MODEL, system=cached_system,
@@ -774,6 +833,7 @@ def complete_json(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOKEN
     for Anthropic models, which lack a JSON mode) so the result is reliably parseable.
     A malformed free-text JSON would otherwise waste the entire output.
     """
+    _ensure_known_provider()
     if AI_PROVIDER == "claude":
         import anthropic
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -811,22 +871,8 @@ def complete_json(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOKEN
         return _loads_lenient(response.choices[0].message.content or "")
 
     if AI_PROVIDER == "bedrock":
-        if AI_MODEL.startswith("anthropic."):
-            import anthropic
-            try:
-                client = anthropic.AnthropicBedrock(
-                    aws_region=AWS_REGION,
-                    aws_access_key=AWS_ACCESS_KEY_ID or None,
-                    aws_secret_key=AWS_SECRET_ACCESS_KEY or None,
-                    aws_session_token=AWS_SESSION_TOKEN or None,
-                )
-            except Exception as exc:
-                if "botocore" in str(exc) or "boto3" in str(exc):
-                    raise RuntimeError(
-                        'Bedrock requires the AWS SDK extras.\n'
-                        'Run: pip install "anthropic[bedrock]"'
-                    ) from exc
-                raise
+        if _is_bedrock_claude_model():
+            client = _anthropic_bedrock_client()
             cached_system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
             response = client.messages.create(
                 model=AI_MODEL, system=cached_system,

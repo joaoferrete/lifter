@@ -118,7 +118,18 @@ def test_dispatch_github(monkeypatch):
 
 def test_dispatch_bedrock_claude_model(monkeypatch):
     monkeypatch.setattr(provider_mod, "AI_PROVIDER", "bedrock")
-    monkeypatch.setattr(provider_mod, "AI_MODEL", "anthropic.claude-3-5-sonnet-20241022-v2:0")
+    monkeypatch.setattr(provider_mod, "AI_MODEL", "anthropic.claude-haiku-4-5-20251001-v1:0")
+    with patch.object(provider_mod, "BedrockChatSession") as MockClass:
+        MockClass.return_value = MagicMock()
+        provider_mod.create_chat_session("sys")
+    MockClass.assert_called_once()
+
+
+def test_dispatch_bedrock_claude_inference_profile(monkeypatch):
+    """A cross-region inference profile (us.anthropic.claude-…) still routes to
+    the Claude path, not the boto3 Converse path."""
+    monkeypatch.setattr(provider_mod, "AI_PROVIDER", "bedrock")
+    monkeypatch.setattr(provider_mod, "AI_MODEL", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
     with patch.object(provider_mod, "BedrockChatSession") as MockClass:
         MockClass.return_value = MagicMock()
         provider_mod.create_chat_session("sys")
@@ -140,6 +151,50 @@ def test_dispatch_gemini_is_default(monkeypatch):
         MockClass.return_value = MagicMock()
         provider_mod.create_chat_session("sys")
     MockClass.assert_called_once()
+
+
+def test_dispatch_unknown_provider_raises(monkeypatch):
+    """A typo'd AI_PROVIDER must fail loudly, not silently fall back to Gemini."""
+    import pytest
+    monkeypatch.setattr(provider_mod, "AI_PROVIDER", "claud")  # typo
+    with pytest.raises(RuntimeError, match="Unknown AI_PROVIDER"):
+        provider_mod.create_chat_session("sys")
+
+
+# ── Bedrock bearer token ──────────────────────────────────────────────────────
+
+def test_anthropic_bedrock_client_uses_bearer_token(monkeypatch):
+    """With a bearer token set, build AnthropicBedrock(api_key=...) and no AWS keys."""
+    monkeypatch.setattr(provider_mod, "AWS_BEARER_TOKEN_BEDROCK", "tok-123")
+    monkeypatch.setattr(provider_mod, "AWS_REGION", "us-east-1")
+    import anthropic
+    with patch.object(anthropic, "AnthropicBedrock") as MockClient:
+        provider_mod._anthropic_bedrock_client()
+    MockClient.assert_called_once_with(aws_region="us-east-1", api_key="tok-123")
+
+
+def test_anthropic_bedrock_client_uses_aws_credentials(monkeypatch):
+    """Without a bearer token, fall back to AWS credentials."""
+    monkeypatch.setattr(provider_mod, "AWS_BEARER_TOKEN_BEDROCK", "")
+    monkeypatch.setattr(provider_mod, "AWS_ACCESS_KEY_ID", "AKIA")
+    monkeypatch.setattr(provider_mod, "AWS_SECRET_ACCESS_KEY", "secret")
+    monkeypatch.setattr(provider_mod, "AWS_SESSION_TOKEN", "")
+    import anthropic
+    with patch.object(anthropic, "AnthropicBedrock") as MockClient:
+        provider_mod._anthropic_bedrock_client()
+    _, kwargs = MockClient.call_args
+    assert kwargs["aws_access_key"] == "AKIA"
+    assert "api_key" not in kwargs
+
+
+def test_anthropic_bedrock_client_no_creds_raises(monkeypatch):
+    """No bearer token and no AWS keys → clear error, not a cryptic SDK failure."""
+    import pytest
+    monkeypatch.setattr(provider_mod, "AWS_BEARER_TOKEN_BEDROCK", "")
+    monkeypatch.setattr(provider_mod, "AWS_ACCESS_KEY_ID", "")
+    monkeypatch.setattr(provider_mod, "AWS_SECRET_ACCESS_KEY", "")
+    with pytest.raises(RuntimeError, match="no credentials"):
+        provider_mod._anthropic_bedrock_client()
 
 
 # ── complete_json ─────────────────────────────────────────────────────────────
