@@ -83,11 +83,38 @@ def _require_hevy() -> Optional[HevyClient]:
     return HevyClient()
 
 
-def _require_ai() -> bool:
+def _is_placeholder_key(value: str) -> bool:
+    """True if the key is still a .env.example placeholder (e.g. 'sk-or-your-key')."""
+    return "your-" in value.lower()
+
+
+def _ai_configured() -> bool:
+    """Silent check: is the current AI provider usable? (prints nothing)."""
+    if AI_PROVIDER not in config.KNOWN_PROVIDERS:
+        return False
     if AI_PROVIDER == "bedrock":
-        return True  # uses boto3 env credentials — no API key to check here
+        return bool(config.AWS_BEARER_TOKEN_BEDROCK or (
+            config.AWS_ACCESS_KEY_ID and config.AWS_SECRET_ACCESS_KEY
+        ))
     key = get_provider_api_key()
-    if not key:
+    return bool(key) and not _is_placeholder_key(key)
+
+
+def _require_ai() -> bool:
+    if AI_PROVIDER not in config.KNOWN_PROVIDERS:
+        valid = ", ".join(sorted(config.KNOWN_PROVIDERS))
+        console.print(_("error.ai_provider_unknown", provider=AI_PROVIDER, valid=valid))
+        return False
+    if AI_PROVIDER == "bedrock":
+        # Either a bearer token (no boto3 needed) or AWS access keys.
+        if config.AWS_BEARER_TOKEN_BEDROCK or (
+            config.AWS_ACCESS_KEY_ID and config.AWS_SECRET_ACCESS_KEY
+        ):
+            return True
+        console.print(_("error.ai_bedrock_no_creds"))
+        return False
+    key = get_provider_api_key()
+    if not key or _is_placeholder_key(key):
         key_names = {
             "gemini":     "GEMINI_API_KEY",
             "claude":     "ANTHROPIC_API_KEY",
@@ -2018,7 +2045,7 @@ def _check_auto_report() -> None:
     if not should_auto_report():
         return
     # Silent AI check — never nag at startup when AI isn't configured.
-    if AI_PROVIDER != "bedrock" and not get_provider_api_key():
+    if not _ai_configured():
         return
     # Nothing to report on yet — skip until there's training data.
     from db.store import query

@@ -83,7 +83,7 @@ Lifter will ask for it on first run. You can also update it later via **Settings
 ```
 AI_PROVIDER=gemini
 GEMINI_API_KEY=your-key-here
-# AI_MODEL=gemini-2.5-flash   ← optional, defaults to gemini-2.5-pro
+# AI_MODEL=gemini-2.5-pro   ← optional, defaults to gemini-flash-latest
 ```
 
 **Option B — Claude (Anthropic):**
@@ -108,7 +108,7 @@ ANTHROPIC_API_KEY=sk-ant-your-key-here
 ```
 AI_PROVIDER=openrouter
 OPENROUTER_API_KEY=your-key-here
-# AI_MODEL=anthropic/claude-3-5-sonnet   ← optional, defaults to anthropic/claude-3-5-sonnet
+# AI_MODEL=anthropic/claude-opus-4.8   ← optional, defaults to anthropic/claude-sonnet-4.6
 ```
 
 **Option D — Groq (fast inference, free tier available):**
@@ -119,39 +119,52 @@ OPENROUTER_API_KEY=your-key-here
 ```
 AI_PROVIDER=groq
 GROQ_API_KEY=your-key-here
-# AI_MODEL=llama-3.3-70b-versatile   ← optional, defaults to llama-3.3-70b-versatile
+# AI_MODEL=openai/gpt-oss-120b   ← optional, defaults to openai/gpt-oss-120b
 ```
+
+> **Note:** Groq deprecated `llama-3.3-70b-versatile` for free/developer tiers (June 2026). The default is now `openai/gpt-oss-120b`, which supports tool calling.
 
 **Option E — GitHub Models (free if you have a GitHub account):**
 
-1. Go to [github.com/marketplace/models](https://github.com/marketplace/models) and generate a personal access token
+1. Go to [github.com/marketplace/models](https://github.com/marketplace/models) and generate a fine-grained personal access token with the **`models:read`** permission
 2. Add to `.env`:
 
 ```
 AI_PROVIDER=github
 GITHUB_TOKEN=your-token-here
-# AI_MODEL=gpt-4o   ← optional, defaults to gpt-4o
+# AI_MODEL=openai/gpt-4o   ← optional, defaults to openai/gpt-4o
 ```
+
+> **Note:** GitHub Models uses the `https://models.github.ai/inference` endpoint and requires model names in `publisher/model` format (e.g. `openai/gpt-4o`, `meta/Llama-3.3-70B-Instruct`). A plain `gpt-4o` (no publisher prefix) returns HTTP 400.
 
 **Option F — Amazon Bedrock:**
 
-Requires an AWS account with Bedrock model access enabled. Credentials are read from the environment using the standard AWS credential chain (IAM role, `~/.aws/credentials`, or explicit keys).
+Requires an AWS account with Bedrock model access enabled. There are two ways to authenticate:
 
-1. Install the Bedrock extras: `pip install "anthropic[bedrock]"` (only needed for Claude models on Bedrock)
-2. Add to `.env`:
+- **Bearer token (Bedrock API key)** — set `AWS_BEARER_TOKEN_BEDROCK`. For **Claude models** this works with **no `boto3` install required**. This is the simplest option if you can't use AWS access keys.
+- **AWS credentials (boto3)** — standard AWS credential chain (IAM role, `~/.aws/credentials`, or explicit keys). Requires `pip install "anthropic[bedrock]"` for Claude models, and is required for non-Claude (Converse) models such as Llama or Mistral.
+
+Add to `.env`:
 
 ```
 AI_PROVIDER=bedrock
 AWS_REGION=us-east-1
 # For Claude models:
-# AI_MODEL=anthropic.claude-3-5-sonnet-20241022-v2:0   ← default
+# AI_MODEL=anthropic.claude-haiku-4-5-20251001-v1:0   ← default
+#   (some regions require a cross-region inference profile, e.g.
+#    us.anthropic.claude-haiku-4-5-20251001-v1:0 or global.anthropic.…)
 # For non-Claude models (Llama, Mistral, etc.) use their Bedrock model ID.
 
-# Explicit credentials (optional — omit if using IAM role or aws configure):
+# Auth option A — bearer token (Claude models need no boto3 install):
+# AWS_BEARER_TOKEN_BEDROCK=your-bedrock-api-key
+
+# Auth option B — AWS credentials (omit if using IAM role or aws configure):
 # AWS_ACCESS_KEY_ID=
 # AWS_SECRET_ACCESS_KEY=
 # AWS_SESSION_TOKEN=      ← only needed for temporary credentials
 ```
+
+> A bearer token and AWS credentials are mutually exclusive on the Claude path — set one or the other, not both.
 
 ### 5. Run the initial sync
 
@@ -556,8 +569,9 @@ GROQ_API_KEY=
 GITHUB_TOKEN=
 AI_MODEL=                 # optional — overrides the provider default (see setup section)
 
-# Amazon Bedrock (only when AI_PROVIDER=bedrock)
+# Amazon Bedrock (only when AI_PROVIDER=bedrock) — use a bearer token OR AWS credentials
 AWS_REGION=us-east-1
+AWS_BEARER_TOKEN_BEDROCK= # Bedrock API key / bearer token (Claude models need no boto3)
 AWS_ACCESS_KEY_ID=        # optional if using IAM role or aws configure
 AWS_SECRET_ACCESS_KEY=
 AWS_SESSION_TOKEN=        # optional, for temporary credentials

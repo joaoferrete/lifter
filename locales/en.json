@@ -40,6 +40,8 @@
 
   "error.hevy_api_key_not_set": "[red]Hevy API key not set. Go to Settings → Profiles to add it.[/red]",
   "error.ai_key_not_set": "[red]{var} not set in .env (AI_PROVIDER={provider})[/red]",
+  "error.ai_provider_unknown": "[red]Unknown AI_PROVIDER '{provider}'. Set AI_PROVIDER in .env to one of: {valid}.[/red]",
+  "error.ai_bedrock_no_creds": "[red]Amazon Bedrock has no credentials. Set AWS_BEARER_TOKEN_BEDROCK (a Bedrock API key / bearer token), or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, in .env.[/red]",
   "error.rate_limit_429": "AI rate limit reached. Try again in {retry_after} seconds. (error 429)",
   "error.rate_limit_429_no_retry": "AI rate limit reached. Please wait a moment and try again. (error 429)",
   "error.api_key_invalid_401": "AI API key is invalid or expired. Check your API key in .env. (error 401)",
