@@ -44,6 +44,7 @@
   "error.ai_bedrock_no_creds": "[red]Amazon Bedrock has no credentials. Set AWS_BEARER_TOKEN_BEDROCK (a Bedrock API key / bearer token), or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, in .env.[/red]",
   "error.rate_limit_429": "AI rate limit reached. Try again in {retry_after} seconds. (error 429)",
   "error.rate_limit_429_no_retry": "AI rate limit reached. Please wait a moment and try again. (error 429)",
+  "error.request_too_large_413": "Request exceeds the AI provider's per-minute token limit (free tier). Wait a minute and retry, upgrade your provider tier, or switch AI_PROVIDER (e.g. gemini/claude/bedrock) in .env. (error 413)",
   "error.api_key_invalid_401": "AI API key is invalid or expired. Check your API key in .env. (error 401)",
   "error.access_denied_403": "Access denied to AI service. Check your API key permissions. (error 403)",
   "error.bad_request_400": "AI rejected the request. (error 400)",

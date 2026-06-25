@@ -150,9 +150,10 @@ Add to `.env`:
 AI_PROVIDER=bedrock
 AWS_REGION=us-east-1
 # For Claude models:
-# AI_MODEL=anthropic.claude-haiku-4-5-20251001-v1:0   ← default
-#   (some regions require a cross-region inference profile, e.g.
-#    us.anthropic.claude-haiku-4-5-20251001-v1:0 or global.anthropic.…)
+# AI_MODEL=us.anthropic.claude-haiku-4-5-20251001-v1:0   ← default (US inference profile)
+#   Claude models on Bedrock require a cross-region inference profile, not the
+#   bare model ID — using "anthropic.claude-…" directly returns a 400. Match the
+#   prefix to your region: us.* for US regions, eu.* for EU, apac.* for APAC.
 # For non-Claude models (Llama, Mistral, etc.) use their Bedrock model ID.
 
 # Auth option A — bearer token (Claude models need no boto3 install):

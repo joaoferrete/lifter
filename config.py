@@ -58,7 +58,7 @@ _DEFAULT_MODELS: dict[str, str] = {
     "openrouter":  "openrouter/owl-alpha",
     "groq":        "openai/gpt-oss-120b",
     "github":      "openai/gpt-4o",  # GitHub Models requires the publisher/ prefix
-    "bedrock":     "anthropic.claude-haiku-4-5-20251001-v1:0",
+    "bedrock":     "us.anthropic.claude-haiku-4-5-20251001-v1:0",
 }
 
 AI_MODEL: str = (
