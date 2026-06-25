@@ -55,7 +55,7 @@ PROVIDER_BASE_URLS: dict[str, str] = {
 _DEFAULT_MODELS: dict[str, str] = {
     "gemini":      "gemini-flash-latest",
     "claude":      "claude-opus-4-8",
-    "openrouter":  "anthropic/claude-sonnet-4.6",
+    "openrouter":  "openrouter/owl-alpha",
     "groq":        "openai/gpt-oss-120b",
     "github":      "openai/gpt-4o",  # GitHub Models requires the publisher/ prefix
     "bedrock":     "anthropic.claude-haiku-4-5-20251001-v1:0",
