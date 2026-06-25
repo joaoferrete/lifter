@@ -108,7 +108,7 @@ ANTHROPIC_API_KEY=sk-ant-your-key-here
 ```
 AI_PROVIDER=openrouter
 OPENROUTER_API_KEY=your-key-here
-# AI_MODEL=anthropic/claude-opus-4.8   ← optional, defaults to anthropic/claude-sonnet-4.6
+# AI_MODEL=anthropic/claude-opus-4.8   ← optional, defaults to openrouter/owl-alpha
 ```
 
 **Option D — Groq (fast inference, free tier available):**
