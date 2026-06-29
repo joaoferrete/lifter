@@ -7,6 +7,24 @@ Personal Hevy workout client with analytics, goal tracking, Google Fit integrati
 
 ---
 
+## Contents
+
+- [What it does](#what-it-does)
+- [Requirements](#requirements)
+- [Setup](#setup)
+- [Install system-wide (optional)](#install-system-wide-optional)
+- [Profiles](#profiles)
+- [Google Fit setup (optional)](#google-fit-setup-optional)
+- [Menu reference](#menu-reference)
+- [Header reference](#header-reference)
+- [Configuration reference](#configuration-reference)
+- [Debug logs](#debug-logs)
+- [Internationalization](#internationalization)
+- [License](#license)
+- [Contributing](#contributing)
+
+---
+
 ## What it does
 
 | Feature | Details |
@@ -17,7 +35,7 @@ Personal Hevy workout client with analytics, goal tracking, Google Fit integrati
 | **Body measurements** | Log your current weight and body-fat % manually (no Google Fit required) from the **Body measurements** menu item. Stores your height per profile and shows your **BMI** in the snapshot and stats. |
 | **AI Report** | One-shot coaching report: Training / Health / Combined scores (0–100), volume distribution by muscle group and by individual muscle, strengths, weaknesses, recommendations, and a complete routine tailored to your goals. |
 | **AI Chat** | Interactive coach that knows your full history, can push routines to Hevy, and can update your goals — all with your approval. Chat is the first option in the main menu. |
-| **Snapshot** | At-a-glance panel shown before every menu: last report scores, volume split by muscle group, and all goal progress bars. |
+| **Snapshot** | At-a-glance panel shown before every menu: last report scores, volume split by muscle group, latest weight / body-fat / BMI, and all goal progress bars. |
 | **Memory** | After every chat the AI extracts key insights (injuries, preferences, feedback) and saves them. Future sessions start with that context already loaded. |
 | **Google Fit** | Syncs sleep, steps, calories, and resting HR. Recovery score shown in the header and used in AI suggestions. |
 | **Profiles** | Multiple independent profiles on the same machine — each with its own workout history, goals, memories, Hevy account, and Google Fit connection. |
@@ -510,66 +528,6 @@ The panel at the top of every screen shows:
 
 ---
 
-## Architecture
-
-```
-lifter/
-├── hevy/
-│   ├── client.py        API wrapper (all Hevy endpoints + payload sanitization)
-│   └── sync.py          Full + incremental sync via /v1/workouts/events
-├── db/
-│   ├── store.py         SQLite schema + upsert helpers
-│   ├── goals.py         Goal CRUD, progress computation, user preferences
-│   └── memories.py      Chat memory: save/load/context
-├── fit/
-│   ├── auth.py          Google OAuth (InstalledAppFlow, token persistence)
-│   ├── client.py        Google Fit REST API (aggregate + sessions)
-│   ├── sync.py          Sync sleep and daily stats
-│   └── analytics.py     Recovery score, sleep summary, activity summary
-├── analytics/
-│   ├── volume.py        Weekly tonnage per muscle group
-│   ├── progression.py   e1RM progression and plateau detection
-│   ├── frequency.py     Workout cadence and session duration
-│   └── records.py       Personal records and body measurement trends
-├── ai/
-│   ├── provider.py      Unified ChatSession abstraction (Gemini, Claude, OpenRouter, Groq, GitHub Models, Bedrock)
-│   ├── coach.py         Coaching report (with scores + distribution), chat loop, goal tools, memory extraction
-│   └── sanitize.py      Input sanitization and prompt-injection defence
-├── cli.py               Interactive menu (questionary + Rich)
-├── config.py            .env loader
-├── profile_mgr.py       Multi-profile management (create, activate, switch, delete)
-├── debug_log.py         Structured debug logging (toggled via Settings → Preferences)
-├── profiles/            Per-profile data directories (gitignored)
-│   └── {slug}/
-│       ├── hevy.db          Local SQLite database
-│       ├── fit_token.json   Google OAuth token (created automatically)
-│       └── profile.json     Profile name and Hevy API key
-└── fit_credentials.json Google OAuth credentials (you create this)
-```
-
----
-
-## Database tables
-
-| Table | Contents |
-|---|---|
-| `workouts` | Workout metadata |
-| `workout_exercises` | Exercises per workout |
-| `workout_sets` | Sets per exercise (weight, reps, type) |
-| `exercise_templates` | Exercise library with muscle group tags |
-| `body_measurements` | Weight, fat %, body measurements by date |
-| `fit_sleep` | Sleep session duration by date |
-| `fit_daily` | Steps, calories, avg/min HR, active minutes by date |
-| `routines` | Workout routines (created by AI or synced from Hevy) |
-| `routine_exercises` | Exercises within routines |
-| `routine_sets` | Sets within routine exercises |
-| `user_goals` | Active and achieved training goals |
-| `user_preferences` | Display name, units, auto-sync, default windows, cached scores, and other settings |
-| `chat_memories` | Insights extracted from past conversations |
-| `sync_state` | Last sync timestamps and other state keys |
-
----
-
 ## Configuration reference
 
 ### `.env` (global, AI provider keys only)
@@ -674,57 +632,16 @@ Lifter supports multiple UI languages. The translation layer lives in `i18n.py` 
 | `en` | English |
 | `pt_BR` | Português (Brasil) |
 
-### Adding a new language
-
-1. **Copy the English locale file and translate it:**
-
-   ```bash
-   cp locales/en.json locales/fr.json
-   # edit locales/fr.json — translate every value, keep keys and {placeholders} intact
-   ```
-
-   Rules for translators:
-   - **Keys** (`"menu.sync"`) — never translate, only values.
-   - **`{placeholders}`** — keep them verbatim; they are filled at runtime (e.g. `{retry_after}`, `{name}`).
-   - **Rich markup** (`[bold]`, `[red]...[/red]`, `[dim]`) — preserve tags exactly; they control terminal formatting.
-   - Empty string values fall back to English automatically.
-
-2. **Register the language code** in `i18n.py`:
-
-   ```python
-   _SUPPORTED: set = {"en", "pt_BR", "fr"}   # add your code here
-   ```
-
-3. **Add a display name** to `_UI_LANGUAGES` in `cli.py`:
-
-   ```python
-   _UI_LANGUAGES = [
-       ("en",    "English"),
-       ("pt_BR", "Português (Brasil)"),
-       ("fr",    "Français"),           # add this line
-   ]
-   ```
-
-4. **Verify** the new locale loads:
-
-   ```bash
-   python -c "from i18n import _; import i18n; i18n.init('fr'); print(_('menu.sync'))"
-   ```
-
-   If a key is missing from your locale file, Lifter falls back to English automatically — no crash.
+Want to add a language? See [CONTRIBUTING.md](CONTRIBUTING.md#adding-a-translation).
 
 ---
 
-## Running tests
+## License
 
-```bash
-python -m pytest tests/
-```
-
-The test suite uses an in-memory SQLite database per test — no real `hevy.db` is touched. All AI provider calls and external HTTP requests are mocked.
+Licensed under the AGPL-3.0 License — see [LICENSE](LICENSE).
 
 ---
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, branch naming, commit format, CI checks, and the PR template.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, project architecture, the database schema, running tests, branch naming, commit format, CI checks, adding a translation, and the PR template.

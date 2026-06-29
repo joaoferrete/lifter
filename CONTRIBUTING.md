@@ -41,6 +41,63 @@ cp .env.example .env
 | `ruff` | Linter and formatter |
 | `pip-audit` | Dependency vulnerability scanner |
 
+## Project architecture
+
+```
+lifter/
+├── hevy/
+│   ├── client.py        API wrapper (all Hevy endpoints + payload sanitization)
+│   └── sync.py          Full + incremental sync via /v1/workouts/events
+├── db/
+│   ├── store.py         SQLite schema + upsert helpers
+│   ├── goals.py         Goal CRUD, progress computation, user preferences
+│   └── memories.py      Chat memory: save/load/context
+├── fit/
+│   ├── auth.py          Google OAuth (InstalledAppFlow, token persistence)
+│   ├── client.py        Google Fit REST API (aggregate + sessions)
+│   ├── sync.py          Sync sleep and daily stats
+│   └── analytics.py     Recovery score, sleep summary, activity summary
+├── analytics/
+│   ├── volume.py        Weekly tonnage per muscle group
+│   ├── progression.py   e1RM progression and plateau detection
+│   ├── frequency.py     Workout cadence and session duration
+│   └── records.py       Personal records, body measurement trends, BMI helpers
+├── ai/
+│   ├── provider.py      Unified ChatSession abstraction (Gemini, Claude, OpenRouter, Groq, GitHub Models, Bedrock)
+│   ├── coach.py         Coaching report (with scores + distribution), chat loop, goal tools, memory extraction
+│   └── sanitize.py      Input sanitization and prompt-injection defence
+├── cli.py               Interactive menu (questionary + Rich)
+├── config.py            .env loader
+├── profile_mgr.py       Multi-profile management (create, activate, switch, delete)
+├── debug_log.py         Structured debug logging (toggled via Settings → Preferences)
+├── i18n.py              Translation layer (reads locales/*.json)
+├── profiles/            Per-profile data directories (gitignored)
+│   └── {slug}/
+│       ├── hevy.db          Local SQLite database
+│       ├── fit_token.json   Google OAuth token (created automatically)
+│       └── profile.json     Profile name and Hevy API key
+└── fit_credentials.json Google OAuth credentials (you create this)
+```
+
+## Database tables
+
+| Table | Contents |
+|---|---|
+| `workouts` | Workout metadata |
+| `workout_exercises` | Exercises per workout |
+| `workout_sets` | Sets per exercise (weight, reps, type) |
+| `exercise_templates` | Exercise library with muscle group tags |
+| `body_measurements` | Weight, fat %, body measurements by date |
+| `fit_sleep` | Sleep session duration by date |
+| `fit_daily` | Steps, calories, avg/min HR, active minutes by date |
+| `routines` | Workout routines (created by AI or synced from Hevy) |
+| `routine_exercises` | Exercises within routines |
+| `routine_sets` | Sets within routine exercises |
+| `user_goals` | Active and achieved training goals |
+| `user_preferences` | Display name, units, height, auto-sync, default windows, cached scores, and other settings |
+| `chat_memories` | Insights extracted from past conversations |
+| `sync_state` | Last sync timestamps and other state keys |
+
 ## Making changes
 
 ```bash
@@ -65,6 +122,8 @@ ruff check . --ignore E501,E402,F401 --exclude tests/
 git commit -m "feat: add support for X"
 git commit -m "fix: correct Y when Z"
 ```
+
+The test suite uses an in-memory SQLite database per test — no real `hevy.db` is touched — and all AI provider calls and external HTTP requests are mocked.
 
 ### Commit message format
 
@@ -141,6 +200,47 @@ The template is stored at [`.github/pull_request_template.md`](.github/pull_requ
 - New dependencies without justification
 - AI providers that require self-hosting
 - Changes that remove existing functionality
+
+## Adding a translation
+
+The UI translation layer lives in `i18n.py` and reads JSON files from `locales/`. To add a new language:
+
+1. **Copy the English locale file and translate it:**
+
+   ```bash
+   cp locales/en.json locales/fr.json
+   # edit locales/fr.json — translate every value, keep keys and {placeholders} intact
+   ```
+
+   Rules for translators:
+   - **Keys** (`"menu.sync"`) — never translate, only values.
+   - **`{placeholders}`** — keep them verbatim; they are filled at runtime (e.g. `{retry_after}`, `{name}`).
+   - **Rich markup** (`[bold]`, `[red]...[/red]`, `[dim]`) — preserve tags exactly; they control terminal formatting.
+   - Empty string values fall back to English automatically.
+
+2. **Register the language code** in `i18n.py`:
+
+   ```python
+   _SUPPORTED: set = {"en", "pt_BR", "fr"}   # add your code here
+   ```
+
+3. **Add a display name** to `_UI_LANGUAGES` in `cli.py`:
+
+   ```python
+   _UI_LANGUAGES = [
+       ("en",    "English"),
+       ("pt_BR", "Português (Brasil)"),
+       ("fr",    "Français"),           # add this line
+   ]
+   ```
+
+4. **Verify** the new locale loads:
+
+   ```bash
+   python -c "from i18n import _; import i18n; i18n.init('fr'); print(_('menu.sync'))"
+   ```
+
+   If a key is missing from your locale file, Lifter falls back to English automatically — no crash.
 
 ## Code style
 
