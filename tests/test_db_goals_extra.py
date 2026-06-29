@@ -124,3 +124,44 @@ def test_get_all_goals_ordered_by_id_desc(tmp_db):
     goals = get_all_goals()
     assert goals[0]["description"] == "Second"
     assert goals[1]["description"] == "First"
+
+
+# ── negative progress, initial value, baseline backfill ───────────────────────
+
+def test_weight_loss_negative_progress_when_worse(tmp_db):
+    """Gaining weight on a weight-loss goal yields negative progress (not floored at 0)."""
+    from db.goals import save_goal, compute_goal_progress
+    from db.store import upsert_body_measurement
+    # start=80, target=70, current=82 → (80-82)/(80-70) = -20 %
+    upsert_body_measurement({"date": "2024-01-01", "weight_kg": 82.0}, db_path=tmp_db)
+    save_goal(type="weight_loss", description="Lose to 70", target=70.0, unit="kg", start_value=80.0)
+    p = compute_goal_progress()[0]
+    assert p["pct"] == -20.0
+    assert p["start"] == 80.0
+    assert p["current"] == 82.0
+    assert p["achieved"] is False
+
+
+def test_body_fat_negative_progress_when_worse(tmp_db):
+    from db.goals import save_goal, compute_goal_progress
+    from db.store import upsert_body_measurement
+    # start=20, target=15, current=22 → (20-22)/(20-15) = -40 %
+    upsert_body_measurement({"date": "2024-01-01", "fat_percent": 22.0}, db_path=tmp_db)
+    save_goal(type="body_fat", description="BF to 15", target=15.0, unit="%", start_value=20.0)
+    p = compute_goal_progress()[0]
+    assert p["pct"] == -40.0
+    assert p["start"] == 20.0
+
+
+def test_missing_start_value_is_backfilled(tmp_db):
+    """A goal created without start_value (e.g. via the AI tool) gets its baseline seeded
+    from the current measurement so progress isn't stuck at 0 with start==current forever."""
+    from db.goals import save_goal, compute_goal_progress, get_goals
+    from db.store import upsert_body_measurement
+    upsert_body_measurement({"date": "2024-01-01", "weight_kg": 75.0}, db_path=tmp_db)
+    save_goal(type="weight_loss", description="AI loss", target=70.0, unit="kg", start_value=None)
+    p = compute_goal_progress()[0]
+    assert p["start"] == 75.0
+    assert p["pct"] == 0.0
+    # baseline persisted to the row
+    assert get_goals()[0]["start_value"] == 75.0

@@ -13,14 +13,15 @@ Personal Hevy workout client with analytics, goal tracking, Google Fit integrati
 |---|---|
 | **Sync** | Fetches your full Hevy workout history locally. Every sync shows a report with new workouts, PRs set, training streak, and volume vs last week. |
 | **Analytics** | Volume per muscle group, exercise progression (e1RM), personal records, plateau detection. |
-| **Goals** | Set lift targets, frequency goals, body weight / fat / volume targets. Multiple goals of any type coexist. Tracks progress automatically after every sync. |
+| **Goals** | Set lift targets, frequency goals, body weight / fat / volume targets. Multiple goals of any type coexist. Tracks progress automatically after every sync — body-composition goals show **initial → current → target** and progress can go **negative** when you move the wrong way. |
+| **Body measurements** | Log your current weight and body-fat % manually (no Google Fit required) from the **Body measurements** menu item. Stores your height per profile and shows your **BMI** in the snapshot and stats. |
 | **AI Report** | One-shot coaching report: Training / Health / Combined scores (0–100), volume distribution by muscle group and by individual muscle, strengths, weaknesses, recommendations, and a complete routine tailored to your goals. |
 | **AI Chat** | Interactive coach that knows your full history, can push routines to Hevy, and can update your goals — all with your approval. Chat is the first option in the main menu. |
 | **Snapshot** | At-a-glance panel shown before every menu: last report scores, volume split by muscle group, and all goal progress bars. |
 | **Memory** | After every chat the AI extracts key insights (injuries, preferences, feedback) and saves them. Future sessions start with that context already loaded. |
 | **Google Fit** | Syncs sleep, steps, calories, and resting HR. Recovery score shown in the header and used in AI suggestions. |
 | **Profiles** | Multiple independent profiles on the same machine — each with its own workout history, goals, memories, Hevy account, and Google Fit connection. |
-| **Settings** | Weight units (kg / lbs), goal check-in frequency, auto-sync on startup, default stats window, display name, Hevy API key, AI provider settings, debug logging — all configurable through the menu. |
+| **Settings** | Weight units (kg / lbs), height, goal check-in frequency, auto-sync on startup, default stats window, display name, Hevy API key, AI provider settings, debug logging — all configurable through the menu. |
 | **Multi-model** | Works with Gemini (default), Claude, OpenRouter, Groq, GitHub Models, or Amazon Bedrock — swap with one env variable. |
 | **Debug logs** | Toggleable structured logging to `logs/debug-YYYY-MM-DD.log` covering sync, AI, goals, settings, profile, and error events. |
 
@@ -293,6 +294,7 @@ Run `python3 cli.py` to open the interactive menu.
   Chat with coach
   ─────────────────────
   My goals
+  Body measurements
   Dashboard & stats
   Exercise progression
   Personal records
@@ -304,7 +306,7 @@ Run `python3 cli.py` to open the interactive menu.
   Exit
 ```
 
-> **Quick view panel** — shown above the menu on every launch: last AI report scores (Training / Health / Overall), volume split by muscle group, and compact goal progress bars.
+> **Quick view panel** — shown above the menu on every launch: last AI report scores (Training / Health / Overall), volume split by muscle group, latest weight / body-fat / BMI, and compact goal progress bars.
 
 ### Sync new workouts
 
@@ -358,7 +360,18 @@ Multiple goals coexist — you can have a lift PR goal, a frequency goal, a cust
 **Check-in**: configurable frequency (7 / 14 / 30 days) — the app asks if your goals are still the same.  
 **Progress bars**: shown in the Quick view panel and after every sync (green ≥80%, yellow ≥50%, red <50%, ★ when achieved).
 
+A baseline is captured when a goal is created (including goals you ask the AI coach to add). Body-composition goals (weight / body fat) display **initial → current → target**, and the percentage can go **negative** if you move away from the target — so a regression is visible rather than hidden at 0%.
+
 Weight input in the goals wizard follows your units preference (kg or lbs) and is stored as kg internally.
+
+### Body measurements
+
+**Menu → Body measurements** lets you record your current **weight** and **body-fat %** by hand — useful when you don't use Google Fit. Entries are stored against today's date and immediately feed goal progress and the snapshot.
+
+- On **first run** the app asks for your **height** and **current weight** so progress and BMI work from day one.
+- Returning profiles are prompted for a fresh weight only when the latest reading is **stale** (older than your check-in frequency) — never on every launch.
+- **Height** is stored per profile and editable under **Settings → Profile**. Input/display respect your unit preference (cm for metric, ft/in for imperial).
+- **BMI** (`weight ÷ height²`) is computed on the fly and shown in the snapshot, the stats body table, and the AI coaching context.
 
 ### Dashboard & stats
 
@@ -366,7 +379,7 @@ Full analytics for a selectable time period (4 / 8 / 12 / 24 weeks). The default
 
 - Workout frequency, average duration, rest days, longest streak
 - Volume by muscle group with inline bar chart, sets/week, sessions/week
-- Body measurement trends (weight, body fat %)
+- Body measurement trends (weight, body fat %, BMI)
 - Personal records set in the last 30 days
 - Plateau warnings for stalled exercises
 
@@ -426,6 +439,7 @@ When connected, the Google Fit menu item shows a ✓ status chip.
 |---|---|
 | **Display name** | Your name shown in the header and used by the AI coach |
 | **Hevy API key** | The API key for this profile's Hevy account |
+| **Height** | Your height (per profile), used to compute BMI. Input/display follow your unit preference (cm or ft/in) |
 
 #### Preferences
 

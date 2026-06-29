@@ -184,6 +184,11 @@ def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = T
             f"  - Weight: {body.get('weight_kg')} kg (change: {body.get('weight_change_kg', 'N/A')} kg)",
             f"  - Body fat: {body.get('fat_percent')}% (change: {body.get('fat_change_pct', 'N/A')}%)",
         ]
+        from analytics.records import compute_bmi, get_height_cm
+        _height_cm = get_height_cm()
+        _bmi = compute_bmi(body.get("weight_kg"), _height_cm)
+        if _bmi is not None:
+            lines.append(f"  - Height: {_height_cm} cm | BMI: {_bmi}")
 
     if prs:
         lines += ["", "## Personal records set in last 30 days"]
@@ -677,8 +682,15 @@ def _show_exercise_benefits(exercises: list) -> None:
     ]
     generated: dict = {}
     if missing:
-        with console.status(_("coach.generating_benefits"), spinner="dots"):
-            generated = _generate_benefits(missing)
+        # Benefits are purely cosmetic — the routine is already saved. Let Ctrl+C skip
+        # the generation gracefully instead of crashing the app (KeyboardInterrupt is a
+        # BaseException, so _generate_benefits' own `except Exception` does not catch it).
+        try:
+            with console.status(_("coach.generating_benefits"), spinner="dots"):
+                generated = _generate_benefits(missing)
+        except KeyboardInterrupt:
+            console.print(_("coach.benefits_skipped"))
+            generated = {}
 
     benefit_lines = []
     for ex in exercises:
@@ -888,14 +900,30 @@ def _handle_manage_goals(fc_args: dict) -> dict:
     try:
         with console.status(_("chat.applying_change"), spinner="dots"):
             if action == "add":
+                goal_type = fc_args.get("goal_type", "custom")
+                # Capture the current body metric as the baseline so progress tracks from
+                # today (mirrors the CLI wizard). Without this, start_value stays NULL and
+                # progress is stuck at 0%.
+                start_value = None
+                if goal_type in ("weight_loss", "weight_gain"):
+                    _rows = query(
+                        "SELECT weight_kg FROM body_measurements WHERE weight_kg IS NOT NULL ORDER BY date DESC LIMIT 1"
+                    )
+                    start_value = float(_rows[0]["weight_kg"]) if _rows else None
+                elif goal_type == "body_fat":
+                    _rows = query(
+                        "SELECT fat_percent FROM body_measurements WHERE fat_percent IS NOT NULL ORDER BY date DESC LIMIT 1"
+                    )
+                    start_value = float(_rows[0]["fat_percent"]) if _rows else None
                 save_goal(
-                    type=fc_args.get("goal_type", "custom"),
+                    type=goal_type,
                     description=fc_args.get("description", ""),
                     target=fc_args.get("target"),
                     unit=fc_args.get("unit"),
                     exercise_template_id=fc_args.get("exercise_template_id"),
                     exercise_name=fc_args.get("exercise_name"),
                     muscle_group=fc_args.get("muscle_group"),
+                    start_value=start_value,
                 )
                 label = _("chat.goal_added")
                 result: dict = {"success": True, "action": "added"}

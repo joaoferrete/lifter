@@ -143,6 +143,10 @@ def _kg_to_lbs(kg: float) -> float:
     return round(float(kg) * 2.20462, 1)
 
 
+def _lbs_to_kg(lbs: float) -> float:
+    return round(float(lbs) / 2.20462, 2)
+
+
 def _fmt_weight(kg_val) -> str:
     if kg_val is None:
         return "—"
@@ -151,6 +155,45 @@ def _fmt_weight(kg_val) -> str:
         lbs = _kg_to_lbs(val)
         return f"{int(lbs) if lbs == int(lbs) else lbs} lbs"
     return f"{int(val) if val == int(val) else val} kg"
+
+
+def _fmt_height(cm_val) -> str:
+    """Format a height (stored in cm) per the user's unit preference."""
+    if cm_val is None:
+        return "—"
+    cm = float(cm_val)
+    if _get_units() == "lbs":  # imperial → feet'inches"
+        total_in = cm / 2.54
+        feet = int(total_in // 12)
+        inches = int(round(total_in - feet * 12))
+        if inches == 12:  # rounding spill-over
+            feet += 1
+            inches = 0
+        return f"{feet}'{inches}\""
+    return f"{int(cm) if cm == int(cm) else round(cm, 1)} cm"
+
+
+def _parse_height_to_cm(raw: str) -> float | None:
+    """Parse a height entered as cm (metric) or feet/inches (imperial) into cm.
+
+    Imperial accepts: 5'11, 5'11", 5 11, or a plain number of inches (e.g. 71).
+    Metric accepts a plain number of cm.
+    """
+    s = (raw or "").strip().replace('"', "").replace("”", "").replace("’", "'")
+    if not s:
+        return None
+    try:
+        if _get_units() == "lbs":
+            if "'" in s or " " in s:
+                parts = s.replace("'", " ").split()
+                feet = float(parts[0])
+                inches = float(parts[1]) if len(parts) > 1 and parts[1] else 0.0
+                return round((feet * 12 + inches) * 2.54, 1)
+            # plain number → inches
+            return round(float(s) * 2.54, 1)
+        return round(float(s), 1)  # metric: cm
+    except (ValueError, IndexError):
+        return None
 
 
 # ── score & muscle-distribution helpers ──────────────────────────────────────
@@ -250,6 +293,20 @@ def _render_snapshot_panel() -> None:
         lines.append("  ".join(dist_parts))
         lines.append("")
 
+    # Body: latest weight + BMI (when height is known)
+    from analytics.records import compute_bmi, get_height_cm
+    body = body_measurement_trend(8)
+    if body.get("weight_kg"):
+        body_parts = [f"[bold]{_fmt_weight(body['weight_kg'])}[/bold]"]
+        if body.get("fat_percent"):
+            body_parts.append(f"{body['fat_percent']}% {_('snapshot.body_fat_short')}")
+        bmi = compute_bmi(body.get("weight_kg"), get_height_cm())
+        if bmi is not None:
+            body_parts.append(f"{_('snapshot.bmi_short')} {bmi}")
+        lines.append(_("snapshot.body_title"))
+        lines.append("  " + "  ·  ".join(body_parts))
+        lines.append("")
+
     # Compact goal progress
     from db.goals import compute_goal_progress
     progress = compute_goal_progress()
@@ -259,8 +316,8 @@ def _render_snapshot_panel() -> None:
         lines.append(_("snapshot.goals_title"))
         for g in numeric[:4]:
             pct = float(g["pct"])
-            color = _score_color(int(pct))
-            bw = max(1, int(pct / 100 * 8))
+            color = _score_color(max(0, int(pct)))
+            bw = max(0, min(8, int(pct / 100 * 8)))
             bar = f"[{color}]{'█' * bw}[/{color}][dim]{'░' * (8 - bw)}[/dim]"
             desc = g["description"][:30]
             lines.append(f"  {bar} [{color}]{pct:.0f}%[/{color}]  [dim]{desc}[/dim]")
@@ -560,19 +617,24 @@ def _render_goals_progress() -> None:
             continue
 
         pct = float(pct)
-        filled = max(1, int(pct / 100 * 22))
+        filled = max(0, min(22, int(pct / 100 * 22)))
         bar_color = "green" if pct >= 80 else "yellow" if pct >= 50 else "red"
         bar = f"[{bar_color}]{'█' * filled}[/{bar_color}][dim]{'░' * (22 - filled)}[/dim]"
 
         current = g.get("current")
         target = g.get("target")
+        start = g.get("start")
         unit = g.get("unit", "")
 
+        def _fmt_val(v) -> str:
+            return _fmt_weight(v) if unit == "kg" else f"{v}{unit}" if unit else f"{v}"
+
         if current is not None and target is not None:
-            if unit == "kg":
-                detail = f"  {_fmt_weight(current)} → {_fmt_weight(target)}  ({pct:.0f}%)"
+            if start is not None:
+                # Body metrics (weight / body fat): show initial → current → target.
+                detail = f"  {_fmt_val(start)} → {_fmt_val(current)} → {_fmt_val(target)}  ({pct:.0f}%)"
             else:
-                detail = f"  {current} {unit} → {target} {unit}  ({pct:.0f}%)"
+                detail = f"  {_fmt_val(current)} → {_fmt_val(target)}  ({pct:.0f}%)"
         else:
             detail = f"  {pct:.0f}%"
 
@@ -874,6 +936,10 @@ def _do_stats():
         wt_change = body.get('weight_change_kg')
         bt.add_row(_("stats.row_weight"), _fmt_weight(body.get('weight_kg')), _fmt_weight(wt_change) if wt_change not in (None, '—') else '—')
         bt.add_row(_("stats.row_body_fat"), f"{body.get('fat_percent')}%", f"{body.get('fat_change_pct', '—')}%")
+        from analytics.records import compute_bmi, get_height_cm
+        bmi = compute_bmi(body.get('weight_kg'), get_height_cm())
+        if bmi is not None:
+            bt.add_row(_("stats.row_bmi"), str(bmi), "—")
         console.print(bt)
 
     prs = recent_prs(30)
@@ -897,6 +963,163 @@ def _do_stats():
 
     console.rule(_("stats.goals_rule"))
     _render_goals_progress()
+
+
+# ── body measurements (manual entry / onboarding) ─────────────────────────────
+
+def _is_number(v: str) -> bool:
+    return v.strip().replace(".", "", 1).isdigit()
+
+
+def _save_body_today(weight_kg: float | None = None, fat_percent: float | None = None) -> None:
+    """Upsert today's body_measurements row, preserving other fields already set today."""
+    from db.store import upsert_body_measurement
+    from db.goals import _invalidate_render_cache
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    existing = query("SELECT * FROM body_measurements WHERE date = ?", (today,))
+    row = dict(existing[0]) if existing else {}
+    row["date"] = today
+    if weight_kg is not None:
+        row["weight_kg"] = weight_kg
+    if fat_percent is not None:
+        row["fat_percent"] = fat_percent
+    upsert_body_measurement(row)
+    _invalidate_render_cache()
+    _dlog("BODY", "Body measurement saved", date=today,
+          weight_kg=weight_kg, fat_percent=fat_percent)
+
+
+def _prompt_weight_kg() -> float | None:
+    """Prompt for a weight in the user's unit; return it converted to kg (or None)."""
+    units = _get_units()
+    raw = questionary.text(
+        _("body.weight_prompt", units=units),
+        style=STYLE,
+        validate=lambda v: (not v.strip()) or _is_number(v) or _("validate.enter_number"),
+    ).ask()
+    if not raw or not raw.strip():
+        return None
+    val = float(raw)
+    return _lbs_to_kg(val) if units == "lbs" else val
+
+
+def _prompt_and_save_height() -> bool:
+    """Prompt for height (unit-aware) and store it as the per-profile height_cm pref."""
+    units = _get_units()
+    prompt_key = "body.height_prompt_imperial" if units == "lbs" else "body.height_prompt_metric"
+    raw = questionary.text(_(prompt_key), style=STYLE).ask()
+    if not raw or not raw.strip():
+        return False
+    cm = _parse_height_to_cm(raw)
+    if cm is None or cm <= 0:
+        console.print(_("body.height_invalid"))
+        return False
+    set_pref("height_cm", str(cm))
+    _dlog("BODY", "Height set", height_cm=cm)
+    console.print(_("body.height_saved", height=_fmt_height(cm)))
+    return True
+
+
+def _do_body_entry() -> None:
+    """Manually record current weight / body-fat and show BMI. Main-menu action."""
+    from analytics.records import compute_bmi, get_height_cm
+    console.clear()
+
+    body = body_measurement_trend(8)
+    cur_w, cur_f = body.get("weight_kg"), body.get("fat_percent")
+    height_cm = get_height_cm()
+    info = []
+    if cur_w:
+        info.append(_("body.current_weight", weight=_fmt_weight(cur_w)))
+    if cur_f:
+        info.append(_("body.current_fat", fat=cur_f))
+    if height_cm:
+        info.append(_("body.current_height", height=_fmt_height(height_cm)))
+    bmi = compute_bmi(cur_w, height_cm)
+    if bmi is not None:
+        info.append(_("body.current_bmi", bmi=bmi))
+    if info:
+        console.print(Panel("\n".join(info), title=_("body.panel_title"),
+                            border_style="cyan", padding=(0, 2)))
+
+    weight_kg = _prompt_weight_kg()
+    f_raw = questionary.text(
+        _("body.fat_prompt"),
+        style=STYLE,
+        validate=lambda v: (not v.strip()) or _is_number(v) or _("validate.enter_number"),
+    ).ask()
+    fat = float(f_raw) if f_raw and f_raw.strip() else None
+
+    if weight_kg is None and fat is None:
+        console.print(_("body.nothing_entered"))
+        return
+
+    _save_body_today(weight_kg=weight_kg, fat_percent=fat)
+
+    # Height is needed for BMI — offer to set it if still unknown.
+    if get_height_cm() is None:
+        _prompt_and_save_height()
+
+    new_bmi = compute_bmi(weight_kg if weight_kg is not None else cur_w, get_height_cm())
+    if new_bmi is not None:
+        console.print(_("body.saved_with_bmi", bmi=new_bmi))
+    else:
+        console.print(_("body.saved"))
+
+
+def _onboard_body_metrics() -> None:
+    """First-run baseline: ask height + current weight (Google Fit may not be connected)."""
+    console.print()
+    console.print(_("body.onboard_intro"))
+    _prompt_and_save_height()
+    weight_kg = _prompt_weight_kg()
+    if weight_kg is not None:
+        _save_body_today(weight_kg=weight_kg)
+    set_pref("weight_last_asked", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+
+def _check_body_checkin() -> None:
+    """Ask for current weight when the latest reading is stale; ask height once if unset."""
+    from analytics.records import get_height_cm
+    try:
+        cadence = int(get_pref("goals_checkin_days") or 7)
+    except (TypeError, ValueError):
+        cadence = 7
+
+    need_height = get_height_cm() is None
+
+    rows = query("SELECT date FROM body_measurements WHERE weight_kg IS NOT NULL ORDER BY date DESC LIMIT 1")
+    stale = True
+    if rows:
+        try:
+            last = datetime.fromisoformat(rows[0]["date"]).date()
+            stale = (datetime.now(timezone.utc).date() - last).days >= cadence
+        except Exception:
+            stale = True
+
+    # Don't re-prompt within the cadence even if the user declined last time.
+    asked_recently = False
+    last_asked = get_pref("weight_last_asked")
+    if last_asked:
+        try:
+            asked = datetime.fromisoformat(last_asked.replace("Z", "+00:00"))
+            asked_recently = (datetime.now(timezone.utc) - asked).days < cadence
+        except Exception:
+            asked_recently = False
+
+    if not need_height and (not stale or asked_recently):
+        return
+
+    console.print()
+    if need_height:
+        _prompt_and_save_height()
+    if stale and not asked_recently:
+        if questionary.confirm(_("body.update_weight_prompt"), default=True, style=STYLE).ask():
+            weight_kg = _prompt_weight_kg()
+            if weight_kg is not None:
+                _save_body_today(weight_kg=weight_kg)
+                console.print(_("body.saved"))
+        set_pref("weight_last_asked", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
 def _do_progress():
@@ -1612,9 +1835,13 @@ def _do_profile_settings() -> None:
                 pass
     masked_key = (hevy_key[:4] + "…" + hevy_key[-4:]) if len(hevy_key) > 8 else ("set" if hevy_key else "not set")
 
+    from analytics.records import get_height_cm
+    height_cm = get_height_cm()
+    height_line = _("profile.height_label", height=_fmt_height(height_cm)) if height_cm else _("profile.height_notset")
+
     name_line = _("profile.display_name_label", name=_esc(name)) if name else _("profile.display_name_notset")
     console.print(Panel(
-        f"{name_line}\n{_('profile.api_key_label', key=masked_key)}",
+        f"{name_line}\n{_('profile.api_key_label', key=masked_key)}\n{height_line}",
         title=_("profile.panel_title"),
         border_style="cyan",
         padding=(0, 2),
@@ -1625,6 +1852,7 @@ def _do_profile_settings() -> None:
         choices=[
             questionary.Choice(_("profile.display_name_choice"), value="name"),
             questionary.Choice(_("profile.api_key_choice"),      value="apikey"),
+            questionary.Choice(_("profile.height_choice"),       value="height"),
             questionary.Choice(_("nav.cancel"),                  value="back"),
         ],
         style=STYLE,
@@ -1644,6 +1872,9 @@ def _do_profile_settings() -> None:
             config.HEVY_API_KEY = new_key
             _dlog("SETTING", "hevy_api_key updated", profile=active_slug)
             console.print(_("profile.api_key_updated"))
+
+    elif action == "height":
+        _prompt_and_save_height()
 
 
 def _do_preferences_settings() -> None:
@@ -2068,6 +2299,7 @@ ACTIONS = {
     "progress": _do_progress,
     "records":  _do_records,
     "goals":    _do_goals,
+    "body":     _do_body_entry,
     "fit":      _do_fit,
     "coach":    _do_coach,
     "chat":     _do_chat,
@@ -2090,6 +2322,7 @@ def _build_menu() -> tuple:
         questionary.Choice(_("menu.chat"),     value="chat"),
         questionary.Separator("  ──────────────────────────────────"),
         questionary.Choice(_("menu.goals"),    value="goals"),
+        questionary.Choice(_("menu.body"),     value="body"),
         questionary.Choice(_("menu.stats"),    value="stats"),
         questionary.Choice(_("menu.progress"), value="progress"),
         questionary.Choice(_("menu.records"),  value="records"),
@@ -2173,6 +2406,8 @@ def _bootstrap_profiles() -> None:
         import i18n as _i18n
         _i18n.init(lang_code)
         _dlog("PROFILE", "First run: profile created", slug=profile["slug"])
+        # Baseline body metrics — the user may not have Google Fit connected yet.
+        _onboard_body_metrics()
         console.print()
         return
 
@@ -2219,6 +2454,7 @@ def main():
     from db.goals import maybe_rollover_tokens
     maybe_rollover_tokens()   # reset monthly token counter if the period rolled over
     _check_goals_and_checkin()
+    _check_body_checkin()
     _check_stale_sync()
     _check_auto_report()
 
