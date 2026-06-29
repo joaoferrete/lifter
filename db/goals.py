@@ -241,6 +241,7 @@ def update_goal_fields(
     description: str | None = None,
     target: float | None = None,
     unit: str | None = None,
+    start_value: float | None = None,
 ) -> None:
     with _conn() as conn:
         if description is not None:
@@ -249,6 +250,8 @@ def update_goal_fields(
             conn.execute("UPDATE user_goals SET target = ? WHERE id = ?", (target, goal_id))
         if unit is not None:
             conn.execute("UPDATE user_goals SET unit = ? WHERE id = ?", (unit, goal_id))
+        if start_value is not None:
+            conn.execute("UPDATE user_goals SET start_value = ? WHERE id = ?", (start_value, goal_id))
     _invalidate_render_cache()
 
 
@@ -356,14 +359,24 @@ def _compute_goal_progress() -> list[dict]:
                 if rows:
                     current = float(rows[0]["weight_kg"])
                     target = goal["target"] or current
-                    start = goal["start_value"] or current
+                    # Capture the baseline once if it was never stored (e.g. AI-created
+                    # goals), so progress isn't stuck at 0 with start == current forever.
+                    if goal["start_value"] is None:
+                        update_goal_fields(goal["id"], start_value=current)
+                        start = current
+                    else:
+                        start = float(goal["start_value"])
                     result["current"] = current
-                    if goal["type"] == "weight_loss" and start > target:
-                        result["pct"] = min((start - current) / (start - target) * 100, 100)
-                        result["achieved"] = current <= target
-                    elif goal["type"] == "weight_gain" and start < target:
-                        result["pct"] = min((current - start) / (target - start) * 100, 100)
-                        result["achieved"] = current >= target
+                    result["start"] = start
+                    # Compute even when the athlete moved the wrong way, so progress can
+                    # go negative (no max(0, ...) floor). Only cap the top at 100%.
+                    if start != target:
+                        if goal["type"] == "weight_loss":
+                            result["pct"] = min((start - current) / (start - target) * 100, 100)
+                            result["achieved"] = current <= target
+                        else:  # weight_gain
+                            result["pct"] = min((current - start) / (target - start) * 100, 100)
+                            result["achieved"] = current >= target
 
             elif goal["type"] == "body_fat":
                 rows = query(
@@ -372,9 +385,14 @@ def _compute_goal_progress() -> list[dict]:
                 if rows:
                     current = float(rows[0]["fat_percent"])
                     target = goal["target"] or current
-                    start = goal["start_value"] or current
+                    if goal["start_value"] is None:
+                        update_goal_fields(goal["id"], start_value=current)
+                        start = current
+                    else:
+                        start = float(goal["start_value"])
                     result["current"] = current
-                    if start > target:
+                    result["start"] = start
+                    if start != target:
                         result["pct"] = min((start - current) / (start - target) * 100, 100)
                         result["achieved"] = current <= target
 

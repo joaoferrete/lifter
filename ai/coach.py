@@ -106,7 +106,8 @@ def _ai_lang_instruction(lang: str) -> str:
 
 # ── context builder ───────────────────────────────────────────────────────────
 
-def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = True) -> str:
+def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = True,
+                   full_library: bool = False) -> str:
     name = get_pref("display_name") or "the athlete"
     freq = workout_frequency(weeks)
     muscle_vol = muscle_group_summary(weeks)
@@ -119,12 +120,27 @@ def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = T
 
     # Exercise library and saved routines only matter when the model must build or
     # reference a routine — skip them otherwise to save input tokens.
-    known = query(
-        """SELECT DISTINCT et.id, et.title, et.primary_muscle_group
-           FROM workout_exercises we
-           JOIN exercise_templates et ON et.id = we.exercise_template_id
-           ORDER BY et.primary_muscle_group, et.title"""
-    ) if include_routine else []
+    #
+    # By default the library lists only exercises the athlete has actually performed
+    # (cheap, a few dozen rows). The full 433-row catalogue is far heavier (~8k tokens),
+    # so it is injected only when explicitly generating a routine in a path that cannot
+    # use tools (full_library=True). Interactive chat keeps the lean list and reaches the
+    # rest of the catalogue on demand via the find_exercises tool.
+    if not include_routine:
+        known = []
+    elif full_library:
+        known = query(
+            """SELECT id, title, type, primary_muscle_group
+               FROM exercise_templates
+               ORDER BY primary_muscle_group, title"""
+        )
+    else:
+        known = query(
+            """SELECT DISTINCT et.id, et.title, et.type, et.primary_muscle_group
+               FROM workout_exercises we
+               JOIN exercise_templates et ON et.id = we.exercise_template_id
+               ORDER BY et.primary_muscle_group, et.title"""
+        )
 
     safe_name = sanitize_for_prompt(name, max_len=60)
 
@@ -168,6 +184,11 @@ def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = T
             f"  - Weight: {body.get('weight_kg')} kg (change: {body.get('weight_change_kg', 'N/A')} kg)",
             f"  - Body fat: {body.get('fat_percent')}% (change: {body.get('fat_change_pct', 'N/A')}%)",
         ]
+        from analytics.records import compute_bmi, get_height_cm
+        _height_cm = get_height_cm()
+        _bmi = compute_bmi(body.get("weight_kg"), _height_cm)
+        if _bmi is not None:
+            lines.append(f"  - Height: {_height_cm} cm | BMI: {_bmi}")
 
     if prs:
         lines += ["", "## Personal records set in last 30 days"]
@@ -293,9 +314,20 @@ def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = T
                 lines.append(f"    - {ex['title']}{set_desc}")
 
     if known:
-        lines += ["", "## Exercise library (use these IDs in routines)"]
+        if full_library:
+            lines += ["", "## Exercise library (use these IDs in routines)"]
+        else:
+            lines += [
+                "",
+                "## Exercise library — exercises the athlete has performed (use these IDs in routines)",
+                "  (This lists only previously-used exercises. For any OTHER exercise — e.g. a cardio"
+                " machine like bike/elliptical/treadmill, or a new variation — call the find_exercises"
+                " tool to look up its exercise_template_id before using it.)",
+            ]
         for ex in known:
-            lines.append(f"  - {ex['title']} | id: {ex['id']} | muscle: {ex['primary_muscle_group']}")
+            lines.append(
+                f"  - {ex['title']} | id: {ex['id']} | type: {ex['type']} | muscle: {ex['primary_muscle_group']}"
+            )
 
     return "\n".join(lines)
 
@@ -346,6 +378,10 @@ a JSON response with this exact structure:
           {"type": "warmup", "weight_kg": null, "reps": 10},
           {"type": "normal", "weight_kg": <number>, "reps": <number>}
         ]
+        // For cardio exercises (library type "duration" or "distance_duration", e.g. bike,
+        // elliptical, treadmill, rowing) DO NOT use weight_kg/reps. Instead use
+        // {"type": "normal", "duration_seconds": <number>} and add "distance_meters": <number>
+        // when the exercise tracks distance ("distance_duration").
       }
     ]
   }
@@ -353,7 +389,12 @@ a JSON response with this exact structure:
 
 Rules:
 - Tailor recommendations to the athlete's stated goals and memories from past conversations.
-- Only use exercise_template_ids from the "Exercise library" section.
+- Only use exercise_template_ids from the "Exercise library" section. Any exercise listed
+  there can be used (including cardio such as bike/elliptical/treadmill), not only those the
+  athlete has done before.
+- Match the set metric to the exercise's library "type": weight_reps/reps_only use
+  weight_kg/reps; "duration" uses duration_seconds; "distance_duration" uses duration_seconds
+  and/or distance_meters. Never put weight_kg/reps on a cardio (duration/distance) exercise.
 - The routine should target 4-6 exercises and address identified weaknesses.
 - Set weights should reflect the athlete's current strength level.
 - Every exercise MUST have a notes field with execution instructions and attention points.
@@ -372,7 +413,10 @@ def get_coaching(weeks: int = 8, generate_routine: bool = False) -> dict:
     include_routines_ctx = (get_pref("ai_include_routines") != "0") or generate_routine
     log("AI", "Coaching report started", provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL,
         weeks=weeks, generate_routine=generate_routine, routines_in_context=include_routines_ctx)
-    context = _build_context(weeks, include_routine=include_routines_ctx)
+    # The one-shot report cannot use tools, so when it must generate a routine it needs
+    # the full catalogue inline; plain analysis keeps the lean (previously-used) list.
+    context = _build_context(weeks, include_routine=include_routines_ctx,
+                             full_library=generate_routine)
     lang = get_pref("ai_language") or "English"
     lang_line = f"\nAlways respond entirely in {_ai_lang_instruction(lang)}.\n" if lang != "English" else ""
     ask_line = (
@@ -446,7 +490,13 @@ _CHAT_SYSTEM_BASE = (
     "- When the athlete explicitly asks to change, add, or remove a goal, you MUST call the "
     "manage_goals tool — always describe the exact change in changes_summary so the user can confirm.\n"
     "- Never simulate tool actions in text. If an action requires a tool, call the tool.\n"
-    "Only use exercise_template_ids from the exercise library provided.\n"
+    "The inline exercise library lists only exercises the athlete has performed before. "
+    "For ANY other exercise (a cardio machine like bike/elliptical/treadmill, or a new "
+    "variation), call the find_exercises tool to obtain its exercise_template_id before "
+    "using it in a routine. Never invent an exercise_template_id.\n"
+    "Match the set metric to the exercise type: weight_reps/reps_only use weight_kg/reps; "
+    "'duration' uses duration_seconds; 'distance_duration' uses duration_seconds and/or "
+    "distance_meters. Never put weight_kg/reps on a cardio (duration/distance) exercise.\n"
     "Address the athlete by their name when appropriate.\n"
     "EXERCISE NOTES RULES — for every exercise in any routine you create or update:\n"
     "- notes field MUST contain: step-by-step execution instructions followed by key attention points "
@@ -469,7 +519,10 @@ _PUSH_ROUTINE_TOOL: dict = {
                     "{exercise_template_id: string (from library), title: string, "
                     "rest_seconds: integer, "
                     "notes: string (REQUIRED: step-by-step execution instructions + key attention points for form/safety), "
-                    "sets: [{type: 'warmup'|'normal'|'failure'|'dropset', weight_kg: number, reps: integer}]}"
+                    "sets: [{type: 'warmup'|'normal'|'failure'|'dropset', weight_kg: number, reps: integer}]}. "
+                    "For cardio exercises (library type 'duration' or 'distance_duration', e.g. bike, "
+                    "elliptical, treadmill) use sets with duration_seconds (and distance_meters when "
+                    "the type is 'distance_duration') instead of weight_kg/reps."
                 ),
                 "items": {"type": "object"},
             },
@@ -497,7 +550,10 @@ _UPDATE_ROUTINE_TOOL: dict = {
                     "{exercise_template_id: string (from library), title: string, "
                     "rest_seconds: integer, "
                     "notes: string (REQUIRED: step-by-step execution instructions + key attention points for form/safety), "
-                    "sets: [{type: 'warmup'|'normal'|'failure'|'dropset', weight_kg: number, reps: integer}]}"
+                    "sets: [{type: 'warmup'|'normal'|'failure'|'dropset', weight_kg: number, reps: integer}]}. "
+                    "For cardio exercises (library type 'duration' or 'distance_duration', e.g. bike, "
+                    "elliptical, treadmill) use sets with duration_seconds (and distance_meters when "
+                    "the type is 'distance_duration') instead of weight_kg/reps."
                 ),
                 "items": {"type": "object"},
             },
@@ -537,6 +593,34 @@ _MANAGE_GOALS_TOOL: dict = {
             "exercise_template_id": {"type": "string"},
             "exercise_name": {"type": "string"},
             "muscle_group": {"type": "string"},
+        },
+    },
+}
+
+_FIND_EXERCISES_TOOL: dict = {
+    "name": "find_exercises",
+    "description": (
+        "Search the full exercise catalogue for exercise_template_ids. The inline "
+        "'Exercise library' only lists exercises the athlete has performed before; use this "
+        "tool to find the id of ANY other exercise (e.g. a cardio machine like bike, "
+        "elliptical, treadmill, rowing, or a new variation) before putting it in a routine. "
+        "Returns matching exercises with their id, title, type, and muscle group."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Substring to match against the exercise title (case-insensitive), e.g. 'bike', 'elliptical', 'curl'.",
+            },
+            "muscle_group": {
+                "type": "string",
+                "description": "Filter by primary muscle group, e.g. 'cardio', 'chest', 'quadriceps'.",
+            },
+            "type": {
+                "type": "string",
+                "description": "Filter by exercise type, e.g. 'weight_reps', 'reps_only', 'duration', 'distance_duration'.",
+            },
         },
     },
 }
@@ -598,8 +682,15 @@ def _show_exercise_benefits(exercises: list) -> None:
     ]
     generated: dict = {}
     if missing:
-        with console.status(_("coach.generating_benefits"), spinner="dots"):
-            generated = _generate_benefits(missing)
+        # Benefits are purely cosmetic — the routine is already saved. Let Ctrl+C skip
+        # the generation gracefully instead of crashing the app (KeyboardInterrupt is a
+        # BaseException, so _generate_benefits' own `except Exception` does not catch it).
+        try:
+            with console.status(_("coach.generating_benefits"), spinner="dots"):
+                generated = _generate_benefits(missing)
+        except KeyboardInterrupt:
+            console.print(_("coach.benefits_skipped"))
+            generated = {}
 
     benefit_lines = []
     for ex in exercises:
@@ -744,6 +835,42 @@ def _show_and_confirm_routine_update(fc_args: dict) -> dict:
         return {"success": False, "error": str(e)}
 
 
+def _handle_find_exercises(fc_args: dict) -> dict:
+    """Search the full exercise catalogue. Read-only, returns matching templates."""
+    where: list[str] = []
+    params: list = []
+    q = (fc_args.get("query") or "").strip()
+    if q:
+        where.append("title LIKE ?")
+        params.append(f"%{q}%")
+    mg = (fc_args.get("muscle_group") or "").strip()
+    if mg:
+        where.append("primary_muscle_group LIKE ?")
+        params.append(f"%{mg}%")
+    ty = (fc_args.get("type") or "").strip()
+    if ty:
+        where.append("type LIKE ?")
+        params.append(f"%{ty}%")
+
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    rows = query(
+        f"""SELECT id, title, type, primary_muscle_group
+            FROM exercise_templates{clause}
+            ORDER BY primary_muscle_group, title
+            LIMIT 50""",
+        tuple(params),
+    )
+    matches = [
+        {"exercise_template_id": r["id"], "title": r["title"],
+         "type": r["type"], "muscle_group": r["primary_muscle_group"]}
+        for r in rows
+    ]
+    from debug_log import log
+    log("AI", "find_exercises", query=q, muscle_group=mg, type=ty, matches=len(matches))
+    return {"count": len(matches), "exercises": matches,
+            "note": "Truncated to 50 results — refine the search if needed." if len(matches) == 50 else None}
+
+
 def _handle_manage_goals(fc_args: dict) -> dict:
     """Handle a goal add/update/remove request. Returns tool result."""
     from db.goals import save_goal, delete_goal, update_goal_fields, get_goals
@@ -773,14 +900,30 @@ def _handle_manage_goals(fc_args: dict) -> dict:
     try:
         with console.status(_("chat.applying_change"), spinner="dots"):
             if action == "add":
+                goal_type = fc_args.get("goal_type", "custom")
+                # Capture the current body metric as the baseline so progress tracks from
+                # today (mirrors the CLI wizard). Without this, start_value stays NULL and
+                # progress is stuck at 0%.
+                start_value = None
+                if goal_type in ("weight_loss", "weight_gain"):
+                    _rows = query(
+                        "SELECT weight_kg FROM body_measurements WHERE weight_kg IS NOT NULL ORDER BY date DESC LIMIT 1"
+                    )
+                    start_value = float(_rows[0]["weight_kg"]) if _rows else None
+                elif goal_type == "body_fat":
+                    _rows = query(
+                        "SELECT fat_percent FROM body_measurements WHERE fat_percent IS NOT NULL ORDER BY date DESC LIMIT 1"
+                    )
+                    start_value = float(_rows[0]["fat_percent"]) if _rows else None
                 save_goal(
-                    type=fc_args.get("goal_type", "custom"),
+                    type=goal_type,
                     description=fc_args.get("description", ""),
                     target=fc_args.get("target"),
                     unit=fc_args.get("unit"),
                     exercise_template_id=fc_args.get("exercise_template_id"),
                     exercise_name=fc_args.get("exercise_name"),
                     muscle_group=fc_args.get("muscle_group"),
+                    start_value=start_value,
                 )
                 label = _("chat.goal_added")
                 result: dict = {"success": True, "action": "added"}
@@ -948,7 +1091,10 @@ def start_enhanced_chat(weeks: int = 8) -> None:
         "</training_data>"
     )
 
-    session = create_chat_session(system=system, tools=[_PUSH_ROUTINE_TOOL, _UPDATE_ROUTINE_TOOL, _MANAGE_GOALS_TOOL])
+    session = create_chat_session(
+        system=system,
+        tools=[_PUSH_ROUTINE_TOOL, _UPDATE_ROUTINE_TOOL, _MANAGE_GOALS_TOOL, _FIND_EXERCISES_TOOL],
+    )
 
     console.rule(_("chat.rule_title"))
     console.print(_("chat.hint", provider=provider_label(), weeks=weeks))
@@ -1009,7 +1155,11 @@ def start_enhanced_chat(weeks: int = 8) -> None:
                     continue
 
         # ── tool call handling ───────────────────────────────────────────────
-        if response.tool_calls:
+        # Loop so the model can chain tools — e.g. find_exercises to look up an id,
+        # then push_routine with it. A small cap guards against a runaway loop.
+        _tool_rounds = 0
+        while response.tool_calls and _tool_rounds < 8:
+            _tool_rounds += 1
             tool_results: list[tuple] = []
             for tc in response.tool_calls:
                 _log("AI", f"Tool call: {tc.name}")
@@ -1019,25 +1169,27 @@ def start_enhanced_chat(weeks: int = 8) -> None:
                     result = _show_and_confirm_routine_update(dict(tc.args))
                 elif tc.name == "manage_goals":
                     result = _handle_manage_goals(dict(tc.args))
+                elif tc.name == "find_exercises":
+                    result = _handle_find_exercises(dict(tc.args))
                 else:
                     result = {"error": f"Unknown tool: {tc.name}"}
                 tool_results.append((tc, result))
 
             try:
                 with console.status(_("chat.thinking_short"), spinner="dots"):
-                    follow = session.submit_tool_results(tool_results)
+                    response = session.submit_tool_results(tool_results)
             except KeyboardInterrupt:
                 console.print(_("chat.cancelled"))
-                continue
+                break
             except Exception as e:
                 console.print(f"[red]{_friendly_error(e)}[/red]\n")
-                continue
+                break
 
-            if follow.text:
+            if response.text:
                 console.print(_("chat.coach_label"))
-                console.print(Markdown(follow.text))
+                console.print(Markdown(response.text))
                 console.print()
-                conversation_log.append({"role": "assistant", "content": follow.text})
+                conversation_log.append({"role": "assistant", "content": response.text})
 
     try:
         readline.write_history_file(_CHAT_HISTORY_FILE)

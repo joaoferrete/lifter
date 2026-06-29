@@ -144,3 +144,42 @@ def body_measurement_trend(weeks: int = 12) -> dict:
             result["fat_change_pct"] = round(latest["fat_percent"] - old["fat_percent"], 1)
 
     return result
+
+
+# ── height & BMI ────────────────────────────────────────────────────────────
+
+def get_height_cm() -> float | None:
+    """The athlete's height in cm, stored per-profile in preferences."""
+    from db.goals import get_pref
+    raw = get_pref("height_cm")
+    try:
+        return float(raw) if raw else None
+    except (TypeError, ValueError):
+        return None
+
+
+def compute_bmi(weight_kg, height_cm) -> float | None:
+    """Body Mass Index (kg/m²) rounded to 1 decimal, or None if inputs missing."""
+    try:
+        w = float(weight_kg)
+        h = float(height_cm)
+    except (TypeError, ValueError):
+        return None
+    if w <= 0 or h <= 0:
+        return None
+    return round(w / (h / 100) ** 2, 1)
+
+
+def bmi_category(bmi) -> str | None:
+    """WHO BMI category key (underweight/normal/overweight/obese)."""
+    try:
+        b = float(bmi)
+    except (TypeError, ValueError):
+        return None
+    if b < 18.5:
+        return "underweight"
+    if b < 25:
+        return "normal"
+    if b < 30:
+        return "overweight"
+    return "obese"
