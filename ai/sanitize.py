@@ -20,7 +20,10 @@ _INJECTION_LINE = re.compile(
     r"|```"                 # code fences
     r"|---+"                # horizontal rules
     r"|<\w[\w\-]*>"        # XML/HTML tags (opening)
-    r"|(?:ignore|system|user|assistant|instruction|override|"
+    # Role declarations require the delimiter — plain prose like
+    # "User prefers dumbbells" is legitimate memory content, "user:" is not.
+    r"|(?:system|user|assistant)\s*[:：\[\(]"
+    r"|(?:ignore|instruction|override|"
     r"forget|disregard|jailbreak|new\s+prompt|act\s+as|pretend)"
     r"\s*[:：\[\(]?"
     r")",

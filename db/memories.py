@@ -2,6 +2,7 @@
 from db.store import connect as _conn
 
 _DEFAULT_MEMORIES_MAX = 200
+MEMORY_SUMMARY_MAX_LEN = 500
 
 
 def _memories_max() -> int:
@@ -86,6 +87,6 @@ def memories_as_context(limit: int = 15) -> str:
     lines = ["## Coach memory (from previous conversations)"]
     for m in memories:
         date = (m.get("created_at") or "")[:10]
-        safe_summary = sanitize_for_prompt(m["summary"], max_len=300)
+        safe_summary = sanitize_for_prompt(m["summary"], max_len=MEMORY_SUMMARY_MAX_LEN)
         lines.append(f"  - [{date}] {safe_summary}")
     return "\n".join(lines)
