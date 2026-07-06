@@ -6,6 +6,7 @@ fit_token.json
 profiles/
 profiles.json
 logs/
+exports/
 __pycache__/
 *.py[cod]
 *.pyo

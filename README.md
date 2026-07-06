@@ -39,9 +39,9 @@ Personal Hevy workout client with analytics, goal tracking, Google Fit integrati
 | **Memory** | After every chat the AI extracts key insights (injuries, preferences, feedback) and saves them. Future sessions start with that context already loaded. |
 | **Google Fit** | Syncs sleep, steps, calories, and resting HR. Recovery score shown in the header and used in AI suggestions. |
 | **Profiles** | Multiple independent profiles on the same machine — each with its own workout history, goals, memories, Hevy account, and Google Fit connection. |
-| **Settings** | Weight units (kg / lbs), height, goal check-in frequency, auto-sync on startup, default stats window, display name, Hevy API key, AI provider settings, debug logging — all configurable through the menu. |
-| **Multi-model** | Works with Gemini (default), Claude, OpenRouter, Groq, GitHub Models, or Amazon Bedrock — swap with one env variable. |
-| **Debug logs** | Toggleable structured logging to `logs/debug-YYYY-MM-DD.log` covering sync, AI, goals, settings, profile, and error events. |
+| **Settings** | Weight units (kg / lbs), height, goal check-in frequency, auto-sync on startup, staleness threshold, default stats window, display name, Hevy API key, AI provider/model, privacy toggles, token budget, coach memories — all configurable through the menu. |
+| **Multi-model** | Works with Gemini (default), Claude, OpenRouter, Groq, GitHub Models, or Amazon Bedrock — swap in the app (Settings → AI Coach) or via env variable. |
+| **Developer tools** | Export/import your data as JSON, preview the exact AI context, database row counts, last sync status, debug logging with automatic rotation (newest 14 files kept). |
 
 ---
 
@@ -357,7 +357,11 @@ Interactive conversation with the AI. The coach has full access to:
 
 All goal changes and routine pushes require your explicit confirmation before anything is saved. Pushed routines include a `✦ Powered by Lifter` note in the routine description.
 
-**After the conversation ends**, the AI analyses the full transcript and extracts memorable facts (injuries mentioned, exercise preferences, feedback on suggestions, lifestyle context). These are saved and automatically included in all future sessions.
+Type `quit` (or the localized exit words — `sair` in pt-BR) or press Ctrl+C to return to the menu. If a monthly token budget is set, the chat shows a warning at start when you're above 80% (yellow) or 100% (red) of it.
+
+**After the conversation ends**, the AI analyses the full transcript and extracts memorable facts (injuries mentioned, exercise preferences, feedback on suggestions, lifestyle context). These are saved and automatically included in all future sessions — you can review, delete, or cap them under **Settings → AI Coach → Manage memories**, and export them under **Settings → Developer → Export data**.
+
+**Privacy:** what the coach receives is aggregated analytics, recent workouts, goals, and memories — you can exclude your name and body-composition data via the privacy toggles in **Settings → AI Coach**, and inspect the exact payload with **Settings → Developer → Preview AI context** (fully local, no API call).
 
 ### My goals
 
@@ -466,10 +470,10 @@ When connected, the Google Fit menu item shows a ✓ status chip.
 | **Weight units** | kg / lbs | kg |
 | **Goal check-in frequency** | Every 7 / 14 / 30 days | 7 days |
 | **Auto-sync on startup** | on / off | off |
+| **Sync staleness threshold** | 6 / 12 / 24 / 48 hours | 24h |
 | **Default stats window** | 4 / 8 / 12 / 24 weeks | 8 weeks |
-| **Debug logging** | on / off | off |
 
-When **auto-sync** is on, stale Hevy and Google Fit data syncs silently on launch without prompting. When off, you get a confirmation prompt.
+When **auto-sync** is on, stale Hevy and Google Fit data syncs silently on launch without prompting. When off, you get a confirmation prompt. The **staleness threshold** controls how old data must be before the prompt/auto-sync (and the header ⚠ badge) kicks in.
 
 Weight units apply everywhere: goal wizard input, dashboard stats, exercise progression, personal records, and the AI routine preview.
 
@@ -477,13 +481,33 @@ Weight units apply everywhere: goal wizard input, dashboard stats, exercise prog
 
 | Setting | Description |
 |---|---|
+| **AI provider** | Switch between providers in-app (only those with an API key in `.env` are listed); stored per profile, overriding `.env` |
+| **Model** | Provider default or any custom model name; stored per profile |
 | **Context mode** | Full (all analytics) or Slim (fewer tokens, faster) |
+| **Report window** | Weeks of history for coaching reports (4 / 8 / 12, default 8) — also drives the automatic 7-day report |
+| **Send your name to the AI** | When off, the coach sees "the athlete" instead of your display name |
+| **Send body data to the AI** | When off, weight / body-fat / height / BMI are excluded from the AI context |
+| **Manage memories** | List and delete individual coach memories; set the automatic storage limit (default 200, oldest pruned) |
+| **Monthly token budget** | Optional input+output token budget; warnings at 80% (yellow) and 100% (red) in the panel and at chat start — informational, never blocks |
 | **Token counter** | Cumulative input / output / cache-read tokens with cache hit % |
 | **Reset token counter** | Zero out the cumulative counters |
 
-#### Reset data
+#### Developer
 
-Nothing on Hevy or Google Fit is ever touched — only the local cache on your machine.
+Everything here operates on the local per-profile data — nothing on Hevy or Google Fit is ever touched.
+
+| Option | Description |
+|---|---|
+| **Export data** | JSON dumps to `profiles/{slug}/exports/` — coach insights, goals + token usage, body measurements, or a full database dump (all tables) |
+| **Import data** | Restore a previous export: pick a file from `exports/` or type a path, review the preview (rows per table), confirm. Replaces the dumped tables atomically — any error rolls everything back |
+| **Preview AI context** | Writes the exact `<training_data>` block the chat sends to the AI provider to a `.md` file — fully local, no API call. Respects the privacy toggles |
+| **Database info** | Row counts per table, DB path and size |
+| **Debug logging** | on / off. Logs rotate automatically — the newest 14 daily files are kept |
+| **Clear debug logs** | Deletes all `logs/debug-*.log` files at once |
+| **Last sync status** | The panel shows the outcome (✓/✗ + detail) of the last Hevy and Google Fit sync attempts |
+| **Reset data** | See below |
+
+#### Reset data (under Developer)
 
 | Option | What it clears |
 |---|---|
@@ -491,6 +515,8 @@ Nothing on Hevy or Google Fit is ever touched — only the local cache on your m
 | **Clear all goals** | Removes all active goals; the wizard runs again on next launch |
 | **Clear sync state** | Resets the sync timestamp so the next incremental sync re-downloads all workouts (existing local data is kept) |
 | **Wipe everything** | Double-confirmed — deletes `hevy.db` and disconnects Google Fit (`fit_token.json`). Run **Sync → Full** afterwards to restore |
+
+Tip: run **Export data → Full database dump** before a reset — you can bring everything back later with **Import data**.
 
 You can also reset individual pieces manually (replace `{slug}` with your profile slug, e.g. `default`):
 
@@ -533,7 +559,9 @@ The panel at the top of every screen shows:
 ### `.env` (global, AI provider keys only)
 
 ```bash
-# AI provider — pick one value for AI_PROVIDER, set the matching key
+# AI provider — pick one value for AI_PROVIDER, set the matching key.
+# AI_PROVIDER and AI_MODEL are the defaults; each profile can override them
+# in-app via Settings → AI Coach (the .env value becomes the fallback).
 AI_PROVIDER=gemini        # gemini | claude | openrouter | groq | github | bedrock
 GEMINI_API_KEY=
 ANTHROPIC_API_KEY=
@@ -565,7 +593,7 @@ Each profile stores its own settings that are set through the in-app menus:
 
 Profile databases live at `profiles/{slug}/hevy.db` and Google Fit tokens at `profiles/{slug}/fit_token.json`.
 
-All in-app preferences (units, auto-sync, check-in frequency, etc.) are stored in the `user_preferences` table in each profile's database, not in `.env`.
+All in-app preferences are stored in the `user_preferences` table in each profile's database, not in `.env`. Notable keys: `units`, `auto_sync`, `sync_stale_hours`, `goals_checkin_days`, `default_stats_weeks`, `report_weeks`, `ui_language`, `ai_provider` / `ai_model` (per-profile override of `.env`), `ai_send_name` / `ai_send_body` (privacy), `ai_tokens_month_budget`, `memories_max`, `debug_logging`.
 
 ---
 
@@ -575,9 +603,13 @@ Lifter can write structured logs to `logs/debug-YYYY-MM-DD.log` (one file per da
 
 ### Enabling
 
-**Settings → Preferences → Debug logging → on**
+**Settings → Developer → Debug logging → on**
 
 The setting takes effect immediately — no restart needed. The log path is printed to the terminal when you enable it.
+
+### Rotation
+
+Logs rotate by file count: at every startup the newest **14** daily files are kept and older ones are deleted (count-based, so sporadic usage still keeps your last 14 days of activity). **Settings → Developer → Clear debug logs** wipes them all at once.
 
 ### What is logged
 
@@ -590,6 +622,8 @@ The setting takes effect immediately — no restart needed. The log path is prin
 | `[AI]` | Chat session started (provider, model, weeks, slim mode, language) and ended (turn count); coaching report start and complete (token delta); every tool call (push\_routine / update\_routine / manage\_goals); routine and goal-change confirmed or declined by user; memories extracted count; token usage per request |
 | `[SETTING]` | Every user-initiated settings change — units, check-in frequency, auto-sync, stats window, debug toggle, display name, Hevy API key, AI context mode, language, token counter reset, Google Fit connect / disconnect |
 | `[PROFILE]` | Profile created, activated, renamed, deleted, switched; startup selection; first-run setup; data migration |
+| `[EXPORT]` | Data exports (kind, row count) and AI-context previews written |
+| `[IMPORT]` | Data imports (kind, row count, source file) |
 | `[RESET]` | Memories cleared; goals cleared; sync state reset; full data wipe |
 | `[ERROR]` | AI API errors (provider, model, HTTP status, traceback line); Google Fit auth and sync failures; routine push / update failures; goal-change failures; coaching report failures |
 

@@ -13,6 +13,7 @@ from db.store import (
     delete_stale_routines,
     get_sync_state,
     set_sync_state,
+    record_sync_result,
 )
 
 
@@ -40,36 +41,41 @@ def full_sync(client: HevyClient) -> dict:
 
     counts = {"workouts": 0, "templates": 0, "body_measurements": 0, "routines": 0, "updated_ids": [], "since": None}
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        transient=True,
-    ) as progress:
-        total_workouts = client.get_workout_count()
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            transient=True,
+        ) as progress:
+            total_workouts = client.get_workout_count()
 
-        task_w = progress.add_task("Syncing workouts...", total=total_workouts)
-        for workout in client.get_workouts(page_size=10):
-            upsert_workout(workout)
-            counts["workouts"] += 1
-            progress.advance(task_w)
+            task_w = progress.add_task("Syncing workouts...", total=total_workouts)
+            for workout in client.get_workouts(page_size=10):
+                upsert_workout(workout)
+                counts["workouts"] += 1
+                progress.advance(task_w)
 
-        task_t = progress.add_task("Syncing exercise templates...", total=None)
-        for template in client.get_exercise_templates():
-            upsert_exercise_template(template)
-            counts["templates"] += 1
-            progress.advance(task_t)
+            task_t = progress.add_task("Syncing exercise templates...", total=None)
+            for template in client.get_exercise_templates():
+                upsert_exercise_template(template)
+                counts["templates"] += 1
+                progress.advance(task_t)
 
-        task_b = progress.add_task("Syncing body measurements...", total=None)
-        for measurement in client.get_body_measurements():
-            upsert_body_measurement(measurement)
-            counts["body_measurements"] += 1
-            progress.advance(task_b)
+            task_b = progress.add_task("Syncing body measurements...", total=None)
+            for measurement in client.get_body_measurements():
+                upsert_body_measurement(measurement)
+                counts["body_measurements"] += 1
+                progress.advance(task_b)
 
-        _sync_routines(client, progress, counts)
+            _sync_routines(client, progress, counts)
+    except Exception as e:
+        record_sync_result("last_sync_result", False, f"{type(e).__name__}: {e}")
+        raise
 
     set_sync_state("last_sync", _now_iso())
+    record_sync_result("last_sync_result", True, f"full: {counts['workouts']} workouts")
     from render_cache import invalidate
     invalidate()
     log("SYNC", "Hevy full sync complete",
@@ -88,33 +94,39 @@ def incremental_sync(client: HevyClient) -> dict:
     log("SYNC", "Hevy incremental sync started", since=since)
     counts = {"updated": 0, "deleted": 0, "templates": 0, "body_measurements": 0, "routines": 0, "updated_ids": [], "since": since}
 
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
-        task = progress.add_task(f"Fetching events since {last_sync}...", total=None)
-        for event in client.get_workout_events(since=last_sync):
-            if event.get("type") == "updated":
-                upsert_workout(event["workout"])
-                counts["updated"] += 1
-                counts["updated_ids"].append(event["workout"]["id"])
-            elif event.get("type") == "deleted":
-                delete_workout(event["id"])
-                counts["deleted"] += 1
-            progress.advance(task)
+    try:
+        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
+            task = progress.add_task(f"Fetching events since {last_sync}...", total=None)
+            for event in client.get_workout_events(since=last_sync):
+                if event.get("type") == "updated":
+                    upsert_workout(event["workout"])
+                    counts["updated"] += 1
+                    counts["updated_ids"].append(event["workout"]["id"])
+                elif event.get("type") == "deleted":
+                    delete_workout(event["id"])
+                    counts["deleted"] += 1
+                progress.advance(task)
 
-        task_t = progress.add_task("Refreshing exercise templates...", total=None)
-        for template in client.get_exercise_templates():
-            upsert_exercise_template(template)
-            counts["templates"] += 1
-            progress.advance(task_t)
+            task_t = progress.add_task("Refreshing exercise templates...", total=None)
+            for template in client.get_exercise_templates():
+                upsert_exercise_template(template)
+                counts["templates"] += 1
+                progress.advance(task_t)
 
-        task_b = progress.add_task("Refreshing body measurements...", total=None)
-        for measurement in client.get_body_measurements():
-            upsert_body_measurement(measurement)
-            counts["body_measurements"] += 1
-            progress.advance(task_b)
+            task_b = progress.add_task("Refreshing body measurements...", total=None)
+            for measurement in client.get_body_measurements():
+                upsert_body_measurement(measurement)
+                counts["body_measurements"] += 1
+                progress.advance(task_b)
 
-        _sync_routines(client, progress, counts)
+            _sync_routines(client, progress, counts)
+    except Exception as e:
+        record_sync_result("last_sync_result", False, f"{type(e).__name__}: {e}")
+        raise
 
     set_sync_state("last_sync", _now_iso())
+    record_sync_result("last_sync_result", True,
+                       f"incremental: {counts['updated']} updated · {counts['deleted']} deleted")
     from render_cache import invalidate
     invalidate()
     log("SYNC", "Hevy incremental sync complete",

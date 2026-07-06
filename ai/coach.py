@@ -108,7 +108,8 @@ def _ai_lang_instruction(lang: str) -> str:
 
 def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = True,
                    full_library: bool = False) -> str:
-    name = get_pref("display_name") or "the athlete"
+    send_name = get_pref("ai_send_name") != "0"
+    name = (get_pref("display_name") if send_name else None) or "the athlete"
     freq = workout_frequency(weeks)
     muscle_vol = muscle_group_summary(weeks)
     muscle_freq = muscle_group_frequency(weeks)
@@ -177,7 +178,7 @@ def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = T
         sets_wk = sets_per_week.get(muscle, 0)
         lines.append(f"  - {muscle}: {vol} kg/week ({sessions:.1f} sessions/wk, {sets_wk:.1f} sets/wk)")
 
-    if body:
+    if body and get_pref("ai_send_body") != "0":
         lines += [
             "",
             "## Body measurements",
@@ -1100,6 +1101,18 @@ def start_enhanced_chat(weeks: int = 8) -> None:
     console.print(_("chat.hint", provider=provider_label(), weeks=weeks))
 
     try:
+        from db.goals import token_budget_status
+        budget_status = token_budget_status()
+        if budget_status and budget_status["pct"] >= 100:
+            console.print(_("chat.budget_exceeded",
+                            used=f"{budget_status['used']:,}", budget=f"{budget_status['budget']:,}"))
+        elif budget_status and budget_status["pct"] >= 80:
+            console.print(_("chat.budget_warning", pct=int(budget_status["pct"]),
+                            used=f"{budget_status['used']:,}", budget=f"{budget_status['budget']:,}"))
+    except Exception:
+        pass
+
+    try:
         readline.read_history_file(_CHAT_HISTORY_FILE)
         readline.set_history_length(200)
     except OSError:
@@ -1116,7 +1129,8 @@ def start_enhanced_chat(weeks: int = 8) -> None:
 
         if not user_input:
             continue
-        if user_input.lower() in ("quit", "exit", "q", "bye", "sair", "voltar", "menu"):
+        quit_words = {w.strip().lower() for w in _("chat.quit_words").split(",") if w.strip()}
+        if user_input.lower() in ("quit", "exit", "q", "bye") or user_input.lower() in quit_words:
             break
 
         conversation_log.append({"role": "user", "content": user_input})

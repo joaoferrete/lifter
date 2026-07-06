@@ -26,6 +26,35 @@ def test_build_context_includes_athlete_name(tmp_db):
     assert "João" in ctx
 
 
+def test_build_context_omits_name_when_pref_off(tmp_db):
+    from db.goals import set_pref
+    from ai.coach import _build_context
+    set_pref("display_name", "João")
+    set_pref("ai_send_name", "0")
+    ctx = _build_context(weeks=4)
+    assert "João" not in ctx
+    assert "the athlete" in ctx
+
+
+def test_build_context_includes_body_by_default(tmp_db):
+    from db.store import upsert_body_measurement
+    from ai.coach import _build_context
+    upsert_body_measurement({"date": "2024-01-01", "weight_kg": 80.0, "fat_percent": 18.0}, db_path=tmp_db)
+    ctx = _build_context(weeks=4)
+    assert "## Body measurements" in ctx
+
+
+def test_build_context_omits_body_when_pref_off(tmp_db):
+    from db.goals import set_pref
+    from db.store import upsert_body_measurement
+    from ai.coach import _build_context
+    upsert_body_measurement({"date": "2024-01-01", "weight_kg": 80.0, "fat_percent": 18.0}, db_path=tmp_db)
+    set_pref("ai_send_body", "0")
+    ctx = _build_context(weeks=4)
+    assert "## Body measurements" not in ctx
+    assert "80.0" not in ctx
+
+
 def test_build_context_includes_workout_count(tmp_db):
     from ai.coach import _build_context
     seed_exercise_template(tmp_db)

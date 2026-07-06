@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -309,6 +310,26 @@ def set_sync_state(key: str, value: str, db_path: Path | None = None) -> None:
             "INSERT INTO sync_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (key, value),
         )
+
+
+def record_sync_result(key: str, ok: bool, detail: str = "", db_path: Path | None = None) -> None:
+    """Persist the outcome of a sync attempt as JSON in sync_state."""
+    set_sync_state(key, json.dumps({
+        "ok": ok,
+        "when": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "detail": (detail or "")[:200],
+    }), db_path=db_path)
+
+
+def get_sync_result(key: str, db_path: Path | None = None) -> dict | None:
+    raw = get_sync_state(key, db_path=db_path)
+    if not raw:
+        return None
+    try:
+        result = json.loads(raw)
+        return result if isinstance(result, dict) else None
+    except (ValueError, TypeError):
+        return None
 
 
 def query(sql: str, params: tuple = (), db_path: Path | None = None) -> list[dict]:

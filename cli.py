@@ -1,6 +1,8 @@
 """hevy — interactive personal Hevy workout client."""
 import json
+import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import questionary
@@ -13,7 +15,9 @@ from rich import box
 from rich.markup import escape as _esc
 import config
 from i18n import _
-from config import AI_PROVIDER, get_provider_api_key
+# AI_PROVIDER/AI_MODEL are read as config.X — apply_ai_overrides() mutates them
+# at runtime, so an import-by-name here would go stale.
+from config import get_provider_api_key
 from db.store import init_db, query
 from db.goals import (
     get_pref, set_pref, get_goals, clear_goals, save_goal,
@@ -67,6 +71,19 @@ def _time_ago(iso_str: str) -> str:
         return "unknown"
 
 
+def _sync_status_str(key: str) -> str:
+    """One-line summary of the last recorded sync outcome for the dev panel."""
+    from db.store import get_sync_result
+    result = get_sync_result(key)
+    if not result:
+        return _("settings.dev.sync_never")
+    ago = _time_ago(result.get("when", ""))
+    detail = _esc(result.get("detail", ""))
+    if result.get("ok"):
+        return _("settings.dev.sync_ok", ago=ago, detail=detail)
+    return _("settings.dev.sync_failed", ago=ago, detail=detail)
+
+
 def _fmt_duration(start_iso: str, end_iso: str) -> str:
     try:
         s = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
@@ -88,28 +105,29 @@ def _is_placeholder_key(value: str) -> bool:
     return "your-" in value.lower()
 
 
-def _ai_configured() -> bool:
-    """Silent check: is the current AI provider usable? (prints nothing)."""
-    if AI_PROVIDER not in config.KNOWN_PROVIDERS:
-        return False
-    if AI_PROVIDER == "bedrock":
+def _provider_key_ok(provider: str) -> bool:
+    """Does this provider have a usable credential configured in .env?"""
+    if provider == "bedrock":
         return bool(config.AWS_BEARER_TOKEN_BEDROCK or (
             config.AWS_ACCESS_KEY_ID and config.AWS_SECRET_ACCESS_KEY
         ))
-    key = get_provider_api_key()
+    key = get_provider_api_key(provider)
     return bool(key) and not _is_placeholder_key(key)
 
 
+def _ai_configured() -> bool:
+    """Silent check: is the current AI provider usable? (prints nothing)."""
+    return config.AI_PROVIDER in config.KNOWN_PROVIDERS and _provider_key_ok(config.AI_PROVIDER)
+
+
 def _require_ai() -> bool:
-    if AI_PROVIDER not in config.KNOWN_PROVIDERS:
+    if config.AI_PROVIDER not in config.KNOWN_PROVIDERS:
         valid = ", ".join(sorted(config.KNOWN_PROVIDERS))
-        console.print(_("error.ai_provider_unknown", provider=AI_PROVIDER, valid=valid))
+        console.print(_("error.ai_provider_unknown", provider=config.AI_PROVIDER, valid=valid))
         return False
-    if AI_PROVIDER == "bedrock":
+    if config.AI_PROVIDER == "bedrock":
         # Either a bearer token (no boto3 needed) or AWS access keys.
-        if config.AWS_BEARER_TOKEN_BEDROCK or (
-            config.AWS_ACCESS_KEY_ID and config.AWS_SECRET_ACCESS_KEY
-        ):
+        if _provider_key_ok("bedrock"):
             return True
         console.print(_("error.ai_bedrock_no_creds"))
         return False
@@ -122,8 +140,8 @@ def _require_ai() -> bool:
             "groq":       "GROQ_API_KEY",
             "github":     "GITHUB_TOKEN",
         }
-        var = key_names.get(AI_PROVIDER, "the relevant API key")
-        console.print(_("error.ai_key_not_set", var=var, provider=AI_PROVIDER))
+        var = key_names.get(config.AI_PROVIDER, "the relevant API key")
+        console.print(_("error.ai_key_not_set", var=var, provider=config.AI_PROVIDER))
         return False
     return True
 
@@ -137,6 +155,23 @@ def _pause():
 
 def _get_units() -> str:
     return get_pref("units") or "kg"
+
+
+def _report_weeks() -> int:
+    """Weeks of history for coaching reports (pref `report_weeks`)."""
+    try:
+        weeks = int(get_pref("report_weeks") or 8)
+    except (TypeError, ValueError):
+        return 8
+    return weeks if weeks in (4, 8, 12) else 8
+
+
+def _stale_seconds() -> int:
+    """Age after which synced data counts as stale (pref `sync_stale_hours`)."""
+    try:
+        return max(1, int(get_pref("sync_stale_hours") or 24)) * 3600
+    except (TypeError, ValueError):
+        return 86400
 
 
 def _kg_to_lbs(kg: float) -> float:
@@ -805,7 +840,7 @@ def _show_header() -> None:
     if last_sync:
         try:
             secs = int((datetime.now(timezone.utc) - datetime.fromisoformat(last_sync.replace("Z", "+00:00"))).total_seconds())
-            sync_str = _("header.sync_ok", ago=_time_ago(last_sync)) if secs < 86400 else _("header.sync_stale", ago=_time_ago(last_sync))
+            sync_str = _("header.sync_ok", ago=_time_ago(last_sync)) if secs < _stale_seconds() else _("header.sync_stale", ago=_time_ago(last_sync))
         except Exception:
             sync_str = _("header.sync_unknown")
     else:
@@ -1252,7 +1287,7 @@ def _do_coach():
     weeks_str = questionary.select(
         _("coach.weeks_prompt"),
         choices=_week_choices([4, 8, 12, 16]),
-        default="8 weeks",
+        default=f"{_report_weeks()} weeks",
         style=STYLE,
     ).ask()
     if not weeks_str:
@@ -1442,7 +1477,9 @@ def _do_ai_settings():
     from db.goals import (
         get_pref, set_pref, get_token_usage, get_token_usage_month,
         reset_token_usage, get_token_reset_day, set_token_reset_day,
+        get_token_budget, set_token_budget, token_budget_status,
     )
+    from db.memories import count_memories
 
     def _token_block(title, usage):
         total = usage["input"] + usage["output"]
@@ -1473,27 +1510,47 @@ def _do_ai_settings():
         slim_on = get_pref("ai_chat_slim") != "0"
         routines_on = get_pref("ai_include_routines") != "0"
         auto_report_on = get_pref("auto_report") != "0"
+        send_name_on = get_pref("ai_send_name") != "0"
+        send_body_on = get_pref("ai_send_body") != "0"
+        report_weeks = _report_weeks()
+        budget_status = token_budget_status()
+        mem_count = count_memories()
         lang = get_pref("ai_language") or "English"
         if lang == "Portuguese":
             lang = "Portuguese (BR)"
             set_pref("ai_language", lang)
 
-        from config import AI_MODEL
         slim_label = _("settings.ai.context_slim") if slim_on else _("settings.ai.context_full")
 
         def on_off(b):
             return _("settings.ai.on") if b else _("settings.ai.off")
 
+        budget_label = (
+            _("settings.ai.budget_off") if budget_status is None
+            else _("settings.ai.budget_usage",
+                   budget=f"{budget_status['budget']:,}", pct=int(budget_status["pct"]))
+        )
+
         lines = [
-            _("settings.ai.provider_line", provider=AI_PROVIDER, model=AI_MODEL),
+            _("settings.ai.provider_line", provider=config.AI_PROVIDER, model=config.AI_MODEL),
             _("settings.ai.context_line", mode=slim_label),
             _("settings.ai.routines_line", state=on_off(routines_on)),
             _("settings.ai.auto_report_line", state=on_off(auto_report_on)),
+            _("settings.ai.report_weeks_line", weeks=report_weeks),
+            _("settings.ai.privacy_name_line", state=on_off(send_name_on)),
+            _("settings.ai.privacy_body_line", state=on_off(send_body_on)),
             _("settings.ai.language_line", lang=lang),
             _("settings.ai.history_turns_line", turns=history_label),
             _("settings.ai.reset_day_line", day=reset_day),
-            "",
+            _("settings.ai.budget_line", budget=budget_label),
         ]
+        if budget_status and budget_status["pct"] >= 100:
+            lines.append(_("settings.ai.budget_exceeded",
+                           used=f"{budget_status['used']:,}", budget=f"{budget_status['budget']:,}"))
+        elif budget_status and budget_status["pct"] >= 80:
+            lines.append(_("settings.ai.budget_warning", pct=int(budget_status["pct"]),
+                           used=f"{budget_status['used']:,}", budget=f"{budget_status['budget']:,}"))
+        lines.append("")
         lines += _token_block(_("settings.ai.token_usage_month_title"), usage_month)
         lines.append("")
         lines += _token_block(_("settings.ai.token_usage_total_title"), usage_total)
@@ -1503,6 +1560,8 @@ def _do_ai_settings():
         action = questionary.select(
             _("settings.ai.prompt"),
             choices=[
+                questionary.Choice(_("settings.ai.provider_choice", provider=config.AI_PROVIDER), value="provider"),
+                questionary.Choice(_("settings.ai.model_choice", model=config.AI_MODEL), value="model"),
                 questionary.Choice(
                     _("settings.ai.toggle_context_choice", mode="Slim" if slim_on else "Full"),
                     value="toggle_slim",
@@ -1515,8 +1574,13 @@ def _do_ai_settings():
                     _("settings.ai.toggle_auto_report_choice", state=on_off(auto_report_on)),
                     value="toggle_auto_report",
                 ),
+                questionary.Choice(_("settings.ai.report_weeks_choice", weeks=report_weeks), value="report_weeks"),
+                questionary.Choice(_("settings.ai.toggle_name_choice", state=on_off(send_name_on)), value="toggle_name"),
+                questionary.Choice(_("settings.ai.toggle_body_choice", state=on_off(send_body_on)), value="toggle_body"),
                 questionary.Choice(_("settings.ai.language_choice", lang=lang), value="language"),
                 questionary.Choice(_("settings.ai.history_turns_choice", turns=history_label), value="history_turns"),
+                questionary.Choice(_("settings.ai.memories_choice", count=mem_count), value="memories"),
+                questionary.Choice(_("settings.ai.budget_choice", budget=budget_label), value="budget"),
                 questionary.Choice(_("settings.ai.reset_day_choice", day=reset_day), value="reset_day"),
                 questionary.Choice(_("settings.ai.reset_tokens_choice"),         value="reset_tokens"),
                 questionary.Separator("  ───"),
@@ -1527,6 +1591,58 @@ def _do_ai_settings():
 
         if not action or action == "back":
             return
+
+        if action == "provider":
+            configured = [p for p in sorted(config.KNOWN_PROVIDERS) if _provider_key_ok(p)]
+            if not configured:
+                console.print(_("settings.ai.provider_none"))
+                continue
+            choices = [
+                questionary.Choice(f"{p}  ·  {config.default_model_for(p)}", value=p)
+                for p in configured
+            ]
+            choices.append(questionary.Choice(
+                _("settings.ai.provider_env_option", provider=config._ENV_AI_PROVIDER), value="_env"))
+            choices.append(questionary.Choice(_("nav.cancel"), value=None))
+            picked = questionary.select(_("settings.ai.provider_prompt"), choices=choices, style=STYLE).ask()
+            if picked == "_env":
+                set_pref("ai_provider", "")
+                set_pref("ai_model", "")
+            elif picked and picked != config.AI_PROVIDER:
+                set_pref("ai_provider", picked)
+                set_pref("ai_model", "")   # model names are provider-specific
+            if picked:
+                config.apply_ai_overrides()
+                _dlog("SETTING", "ai_provider changed", provider=config.AI_PROVIDER, model=config.AI_MODEL)
+                console.print(_("settings.ai.provider_saved",
+                                provider=config.AI_PROVIDER, model=config.AI_MODEL))
+            continue
+
+        if action == "model":
+            default_model = config.default_model_for(config.AI_PROVIDER)
+            picked = questionary.select(
+                _("settings.ai.model_prompt", provider=config.AI_PROVIDER),
+                choices=[
+                    questionary.Choice(_("settings.ai.model_default_option", model=default_model), value=default_model),
+                    questionary.Choice(_("settings.ai.model_custom_option"), value="_custom"),
+                    questionary.Choice(_("nav.cancel"), value=None),
+                ],
+                style=STYLE,
+            ).ask()
+            if picked == "_custom":
+                picked = questionary.text(
+                    _("settings.ai.model_custom_prompt"),
+                    default=config.AI_MODEL,
+                    validate=lambda v: bool(v.strip()) or _("settings.ai.model_invalid"),
+                    style=STYLE,
+                ).ask()
+                picked = picked.strip() if picked else None
+            if picked:
+                set_pref("ai_model", picked)
+                config.apply_ai_overrides()
+                _dlog("SETTING", "ai_model changed", model=config.AI_MODEL)
+                console.print(_("settings.ai.model_saved", model=config.AI_MODEL))
+            continue
 
         if action == "toggle_slim":
             new_val = "0" if slim_on else "1"
@@ -1546,6 +1662,46 @@ def _do_ai_settings():
             set_pref("auto_report", new_val)
             _dlog("SETTING", "auto_report changed", value=new_val)
             console.print(_("settings.ai.auto_report_saved", state=on_off(new_val != "0")))
+
+        elif action == "report_weeks":
+            answer = questionary.select(
+                _("settings.ai.report_weeks_prompt"),
+                choices=_week_choices([4, 8, 12]),
+                default=f"{report_weeks} weeks",
+                style=STYLE,
+            ).ask()
+            if answer:
+                new_weeks = int(answer.split()[0])
+                set_pref("report_weeks", str(new_weeks))
+                _dlog("SETTING", "report_weeks changed", value=new_weeks)
+                console.print(_("settings.ai.report_weeks_saved", weeks=new_weeks))
+
+        elif action == "toggle_name":
+            new_val = "0" if send_name_on else "1"
+            set_pref("ai_send_name", new_val)
+            _dlog("SETTING", "ai_send_name changed", value=new_val)
+            console.print(_("settings.ai.privacy_name_saved", state=on_off(new_val != "0")))
+
+        elif action == "toggle_body":
+            new_val = "0" if send_body_on else "1"
+            set_pref("ai_send_body", new_val)
+            _dlog("SETTING", "ai_send_body changed", value=new_val)
+            console.print(_("settings.ai.privacy_body_saved", state=on_off(new_val != "0")))
+
+        elif action == "memories":
+            _do_manage_memories()
+
+        elif action == "budget":
+            answer = questionary.text(
+                _("settings.ai.budget_prompt"),
+                default=str(get_token_budget()),
+                validate=lambda v: v.isdigit() or _("settings.ai.budget_invalid"),
+                style=STYLE,
+            ).ask()
+            if answer is not None and answer.isdigit():
+                set_token_budget(int(answer))
+                _dlog("SETTING", "ai_tokens_month_budget changed", value=int(answer))
+                console.print(_("settings.ai.budget_saved", budget=f"{int(answer):,}"))
 
         elif action == "language":
             choices = _AI_LANGUAGES + ([] if lang in _AI_LANGUAGES else [lang])
@@ -1594,6 +1750,75 @@ def _do_ai_settings():
                 reset_token_usage()
                 _dlog("SETTING", "token counters reset (month + lifetime)")
                 console.print(_("settings.ai.reset_tokens_done"))
+
+
+def _do_manage_memories() -> None:
+    from db.goals import get_pref, set_pref
+    from db.memories import get_all_memories, delete_memories, count_memories, enforce_memory_cap
+
+    while True:
+        console.clear()
+        try:
+            mem_max = max(0, int(get_pref("memories_max") or 200))
+        except (TypeError, ValueError):
+            mem_max = 200
+        max_label = _("settings.ai.memories_unlimited") if mem_max == 0 else str(mem_max)
+        console.print(Panel(
+            _("settings.ai.memories_panel", count=count_memories(), max=max_label),
+            title=_("settings.ai.memories_title"), border_style="cyan", padding=(0, 2),
+        ))
+
+        action = questionary.select(
+            _("settings.ai.memories_prompt"),
+            choices=[
+                questionary.Choice(_("settings.ai.memories_delete_choice"), value="delete"),
+                questionary.Choice(_("settings.ai.memories_limit_choice", max=max_label), value="limit"),
+                questionary.Separator("  ───"),
+                questionary.Choice(_("nav.back"), value="back"),
+            ],
+            style=STYLE,
+        ).ask()
+
+        if not action or action == "back":
+            return
+
+        if action == "delete":
+            memories = get_all_memories()
+            if not memories:
+                console.print(_("settings.ai.memories_none"))
+                questionary.press_any_key_to_continue(_("nav.press_any_key")).ask()
+                continue
+            choices = [
+                questionary.Choice(
+                    f"[{(m['created_at'] or '')[:10]}] {m['summary'][:70]}", value=m["id"]
+                )
+                for m in memories
+            ]
+            picked = questionary.checkbox(_("settings.ai.memories_select"), choices=choices, style=STYLE).ask()
+            if not picked:
+                continue
+            if questionary.confirm(
+                _("settings.ai.memories_delete_confirm", count=len(picked)), default=False, style=STYLE
+            ).ask():
+                deleted = delete_memories(picked)
+                _dlog("SETTING", "memories deleted", count=deleted)
+                console.print(_("settings.ai.memories_deleted", count=deleted))
+                questionary.press_any_key_to_continue(_("nav.press_any_key")).ask()
+
+        elif action == "limit":
+            answer = questionary.text(
+                _("settings.ai.memories_limit_prompt"),
+                default=str(mem_max),
+                validate=lambda v: (v.isdigit() and 0 <= int(v) <= 10000) or _("settings.ai.memories_limit_invalid"),
+                style=STYLE,
+            ).ask()
+            if answer is not None and answer.isdigit():
+                new_max = int(answer)
+                set_pref("memories_max", str(new_max))
+                enforce_memory_cap()
+                _dlog("SETTING", "memories_max changed", value=new_max)
+                saved_label = _("settings.ai.memories_unlimited") if new_max == 0 else str(new_max)
+                console.print(_("settings.ai.memories_limit_saved", max=saved_label))
 
 
 def _do_data_reset():
@@ -1878,7 +2103,6 @@ def _do_profile_settings() -> None:
 
 
 def _do_preferences_settings() -> None:
-    import debug_log
     import i18n as _i18n
     while True:
         console.clear()
@@ -1886,7 +2110,7 @@ def _do_preferences_settings() -> None:
         checkin_days = int(get_pref("goals_checkin_days") or 7)
         auto_sync = get_pref("auto_sync") == "1"
         default_weeks = get_pref("default_stats_weeks") or "8 weeks"
-        debug_on = get_pref("debug_logging") == "1"
+        stale_hours = _stale_seconds() // 3600
         ui_lang_code = get_pref("ui_language") or config.DEFAULT_LANGUAGE
         ui_lang_name = dict(_UI_LANGUAGES).get(ui_lang_code, ui_lang_code)
         on_str = _("settings.on")
@@ -1896,8 +2120,8 @@ def _do_preferences_settings() -> None:
             _("settings.prefs.units_label", units=units),
             _("settings.prefs.checkin_label", days=checkin_days),
             _("settings.prefs.autosync_label", state=on_str if auto_sync else off_str),
+            _("settings.prefs.stale_hours_label", hours=stale_hours),
             _("settings.prefs.stats_window_label", window=default_weeks),
-            _("settings.prefs.debug_label", state=on_str if debug_on else off_str),
             _("settings.prefs.ui_language_label", lang=ui_lang_name),
         ]
         console.print(Panel("\n".join(lines), title=_("settings.prefs.title"), border_style="cyan", padding=(0, 2)))
@@ -1908,8 +2132,8 @@ def _do_preferences_settings() -> None:
                 questionary.Choice(_("settings.prefs.units_choice", units=units),                            value="units"),
                 questionary.Choice(_("settings.prefs.checkin_choice", days=checkin_days),                    value="checkin"),
                 questionary.Choice(_("settings.prefs.autosync_choice", state=on_str if auto_sync else off_str), value="autosync"),
+                questionary.Choice(_("settings.prefs.stale_hours_choice", hours=stale_hours),                value="stale_hours"),
                 questionary.Choice(_("settings.prefs.stats_window_choice", window=default_weeks),            value="stats_window"),
-                questionary.Choice(_("settings.prefs.debug_choice", state=on_str if debug_on else off_str),  value="debug"),
                 questionary.Choice(_("settings.prefs.ui_language_choice", lang=ui_lang_name),                value="ui_language"),
                 questionary.Separator("  ───"),
                 questionary.Choice(_("nav.back"), value="back"),
@@ -1957,6 +2181,18 @@ def _do_preferences_settings() -> None:
             _dlog("SETTING", "auto_sync changed", value=new_auto)
             console.print(_("settings.prefs.autosync_disabled" if auto_sync else "settings.prefs.autosync_enabled"))
 
+        elif action == "stale_hours":
+            answer = questionary.select(
+                _("settings.prefs.stale_hours_prompt"),
+                choices=[questionary.Choice(_("time.hours", n=h), value=str(h)) for h in (6, 12, 24, 48)],
+                default=str(stale_hours) if stale_hours in (6, 12, 24, 48) else "24",
+                style=STYLE,
+            ).ask()
+            if answer:
+                set_pref("sync_stale_hours", answer)
+                _dlog("SETTING", "sync_stale_hours changed", value=answer)
+                console.print(_("settings.prefs.stale_hours_saved", hours=answer))
+
         elif action == "stats_window":
             new_window = questionary.select(
                 _("settings.prefs.stats_window_prompt"),
@@ -1968,17 +2204,6 @@ def _do_preferences_settings() -> None:
                 set_pref("default_stats_weeks", new_window)
                 _dlog("SETTING", "default_stats_weeks changed", value=new_window)
                 console.print(_("settings.prefs.stats_window_saved", window=new_window))
-
-        elif action == "debug":
-            new_val = not debug_on
-            set_pref("debug_logging", "1" if new_val else "0")
-            debug_log.enable(new_val)
-            _dlog("SETTING", "debug_logging changed", value="on" if new_val else "off")
-            if new_val:
-                from debug_log import LOGS_DIR
-                console.print(_("settings.prefs.debug_enabled", logs_dir=LOGS_DIR))
-            else:
-                console.print(_("settings.prefs.debug_disabled"))
 
         elif action == "ui_language":
             lang_choices = [questionary.Choice(name, value=code) for code, name in _UI_LANGUAGES]
@@ -1995,6 +2220,359 @@ def _do_preferences_settings() -> None:
                 console.print(_("settings.prefs.ui_language_saved", lang=new_name))
 
 
+_EXPORT_KINDS = {
+    "memories":     ["chat_memories"],
+    "goals":        ["user_goals"],
+    "measurements": ["body_measurements"],
+    "full":         None,  # every table in the active DB
+}
+
+
+def _export_data(kind: str, dest_dir: Optional[Path] = None) -> tuple[Path, int]:
+    """Dump the requested tables to a timestamped JSON file. Returns (path, total_rows)."""
+    from db.store import query as _query
+    from db.goals import get_token_usage, get_token_usage_month
+
+    tables = _EXPORT_KINDS[kind]
+    if tables is None:
+        tables = [r["name"] for r in _query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        )]
+
+    dumped: dict = {}
+    total = 0
+    for t in tables:
+        try:
+            rows = _query(f'SELECT * FROM "{t}"')
+        except sqlite3.OperationalError:
+            rows = []
+        dumped[t] = rows
+        total += len(rows)
+
+    payload = {
+        "app": "lifter",
+        "kind": kind,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "tables": dumped,
+    }
+    # user_preferences holds only UI settings and ai_tokens_* counters — API keys
+    # live in profile.json / .env, so a full dump needs no redaction.
+    if kind in ("goals", "full"):
+        payload["token_usage"] = {
+            "lifetime": get_token_usage(),
+            "month": get_token_usage_month(),
+        }
+
+    out_dir = dest_dir or (config.DB_PATH.parent / "exports")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"lifter-export-{kind}-{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.json"
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    return path, total
+
+
+def _read_import_payload(path: Path) -> dict:
+    """Load and structurally validate an export file. Raises ValueError if not importable."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ValueError(str(e)[:120])
+    if not isinstance(payload, dict) or payload.get("app") != "lifter":
+        raise ValueError("missing app == 'lifter' marker")
+    tables = payload.get("tables")
+    if not isinstance(tables, dict) or not all(isinstance(v, list) for v in tables.values()):
+        raise ValueError("missing/invalid 'tables' object")
+    return payload
+
+
+def _import_data(path: Path, payload: Optional[dict] = None) -> dict:
+    """Restore tables from an export file (replace semantics, single transaction).
+
+    For every dumped table that exists in the current schema: delete all rows,
+    then insert the dumped rows. Tables absent from the schema are skipped;
+    columns unknown to the schema are dropped per row.
+    """
+    import db.store as store_mod   # module attrs → honors the tmp_db monkeypatch
+    payload = payload or _read_import_payload(path)
+    store_mod.init_db()            # the profile may have just been reset
+
+    imported: dict = {}
+    skipped_tables: list = []
+    skipped_columns: dict = {}
+    conn = store_mod._conn()
+    try:
+        with conn:
+            live = {}
+            for table in payload["tables"]:
+                cols = [r[1] for r in conn.execute(f'PRAGMA table_info("{table}")').fetchall()]
+                if not cols:
+                    skipped_tables.append(table)
+                    continue
+                live[table] = set(cols)
+
+            # FK checks deferred to commit — dumped tables can be inserted in
+            # any order and a violation rolls the whole transaction back.
+            # Must be set AFTER the table_info reads: in sqlite3's legacy
+            # autocommit handling, a later PRAGMA read silently resets it.
+            conn.execute("PRAGMA defer_foreign_keys = ON")
+
+            # Wipe every target table before ANY insert — a cascade delete of an
+            # old parent row must never eat freshly inserted children.
+            for table in live:
+                conn.execute(f'DELETE FROM "{table}"')
+
+            for table, colset in live.items():
+                inserted = 0
+                for row in payload["tables"][table]:
+                    keep = [c for c in row if c in colset]
+                    dropped = [c for c in row if c not in colset]
+                    if dropped:
+                        skipped_columns[table] = sorted(set(skipped_columns.get(table, [])) | set(dropped))
+                    if not keep:
+                        continue
+                    col_sql = ", ".join(f'"{c}"' for c in keep)
+                    conn.execute(
+                        f'INSERT INTO "{table}" ({col_sql}) VALUES ({", ".join("?" * len(keep))})',
+                        [row[c] for c in keep],
+                    )
+                    inserted += 1
+                imported[table] = inserted
+    finally:
+        conn.close()
+
+    from render_cache import invalidate
+    invalidate()
+    return {
+        "kind": payload.get("kind", "?"),
+        "exported_at": payload.get("exported_at", "?"),
+        "imported": imported,
+        "total": sum(imported.values()),
+        "skipped_tables": skipped_tables,
+        "skipped_columns": skipped_columns,
+    }
+
+
+def _do_import_data() -> None:
+    exports_dir = config.DB_PATH.parent / "exports"
+    candidates = sorted(
+        exports_dir.glob("lifter-export-*.json"),
+        key=lambda p: p.stat().st_mtime, reverse=True,
+    )[:15] if exports_dir.is_dir() else []
+
+    if candidates:
+        choices = [
+            questionary.Choice(f"  {p.name}  ({p.stat().st_size / 1024:,.0f} KB)", value=p)
+            for p in candidates
+        ]
+        choices += [
+            questionary.Separator("  ───"),
+            questionary.Choice(_("settings.dev.import.manual_choice"), value="_manual"),
+            questionary.Choice(_("nav.back"), value=None),
+        ]
+        picked = questionary.select(_("settings.dev.import.pick_prompt"), choices=choices, style=STYLE).ask()
+        if picked is None:
+            return
+    else:
+        console.print(_("settings.dev.import.no_files", dir=_esc(str(exports_dir))))
+        picked = "_manual"
+
+    if picked == "_manual":
+        raw = questionary.path(_("settings.dev.import.path_prompt"), style=STYLE).ask()
+        if not raw or not raw.strip():
+            return
+        picked = Path(raw.strip()).expanduser()
+        if not picked.is_file():
+            console.print(_("settings.dev.import.not_found", path=_esc(str(picked))))
+            questionary.press_any_key_to_continue(_("nav.press_any_key")).ask()
+            return
+
+    try:
+        payload = _read_import_payload(picked)
+    except ValueError as e:
+        console.print(_("settings.dev.import.invalid", error=_esc(str(e))))
+        questionary.press_any_key_to_continue(_("nav.press_any_key")).ask()
+        return
+
+    lines = [
+        _("settings.dev.import.summary_meta",
+          kind=payload.get("kind", "?"), when=_esc(str(payload.get("exported_at", "?")))),
+        "",
+    ]
+    for table, rows in payload["tables"].items():
+        try:
+            existing = query(f'SELECT COUNT(*) AS n FROM "{table}"')[0]["n"]
+            lines.append(_("settings.dev.import.summary_row",
+                           table=table, count=len(rows), existing=existing))
+        except sqlite3.OperationalError:
+            lines.append(_("settings.dev.import.summary_unknown", table=table))
+    lines += ["", _("settings.dev.import.warning")]
+    console.print(Panel("\n".join(lines), title=_("settings.dev.import.summary_title"),
+                        border_style="red", padding=(0, 2)))
+
+    if not questionary.confirm(_("settings.dev.import.confirm1"), default=False, style=STYLE).ask():
+        return
+    if payload.get("kind") == "full" and not questionary.confirm(
+        _("settings.dev.import.confirm2"), default=False, style=STYLE
+    ).ask():
+        return
+
+    try:
+        summary = _import_data(picked, payload)
+    except Exception as e:
+        console.print(_("settings.dev.import.failed", error=_esc(str(e))))
+        questionary.press_any_key_to_continue(_("nav.press_any_key")).ask()
+        return
+
+    _dlog("IMPORT", "data imported", kind=summary["kind"], rows=summary["total"], path=str(picked))
+    console.print(_("settings.dev.import.done", rows=summary["total"], path=_esc(str(picked))))
+    if summary["skipped_columns"]:
+        n_cols = sum(len(v) for v in summary["skipped_columns"].values())
+        console.print(_("settings.dev.import.skipped_cols_note", count=n_cols))
+
+    if summary["kind"] == "full":
+        # restored prefs carry process-level state — re-apply them
+        import i18n as _i18n
+        import debug_log
+        _i18n.init(get_pref("ui_language") or config.DEFAULT_LANGUAGE)
+        debug_log.enable(get_pref("debug_logging") == "1")
+        config.apply_ai_overrides()
+    questionary.press_any_key_to_continue(_("nav.press_any_key")).ask()
+
+
+def _do_export_data() -> None:
+    while True:
+        console.clear()
+        action = questionary.select(
+            _("settings.dev.export.prompt"),
+            choices=[
+                questionary.Choice(_("settings.dev.export.memories_choice"),     value="memories"),
+                questionary.Choice(_("settings.dev.export.goals_choice"),        value="goals"),
+                questionary.Choice(_("settings.dev.export.measurements_choice"), value="measurements"),
+                questionary.Choice(_("settings.dev.export.full_choice"),         value="full"),
+                questionary.Separator("  ───"),
+                questionary.Choice(_("nav.back"), value="back"),
+            ],
+            style=STYLE,
+        ).ask()
+
+        if not action or action == "back":
+            return
+
+        try:
+            path, rows = _export_data(action)
+        except Exception as e:
+            console.print(_("settings.dev.export.failed", error=_esc(str(e))))
+            questionary.press_any_key_to_continue(_("nav.press_any_key")).ask()
+            continue
+        _dlog("EXPORT", "data exported", kind=action, rows=rows)
+        console.print(_("settings.dev.export.done", rows=rows, path=_esc(str(path))))
+        if rows == 0:
+            console.print(_("settings.dev.export.empty_note"))
+        questionary.press_any_key_to_continue(_("nav.press_any_key")).ask()
+
+
+def _do_developer_settings() -> None:
+    import debug_log
+
+    while True:
+        console.clear()
+        debug_on = get_pref("debug_logging") == "1"
+        on_str = _("settings.on")
+        off_str = _("settings.off")
+        try:
+            db_desc = f"{config.DB_PATH} ({config.DB_PATH.stat().st_size / 1024:,.0f} KB)"
+        except OSError:
+            db_desc = str(config.DB_PATH)
+
+        lines = [
+            _("settings.dev.debug_label", state=on_str if debug_on else off_str),
+            _("settings.dev.logs_dir_label", path=_esc(str(debug_log.LOGS_DIR))),
+            _("settings.dev.db_label", path=_esc(db_desc)),
+            _("settings.dev.hevy_sync_label", status=_sync_status_str("last_sync_result")),
+            _("settings.dev.fit_sync_label", status=_sync_status_str("fit_last_sync_result")),
+        ]
+        console.print(Panel("\n".join(lines), title=_("settings.dev.title"), border_style="cyan", padding=(0, 2)))
+
+        action = questionary.select(
+            _("settings.dev.prompt"),
+            choices=[
+                questionary.Choice(_("settings.dev.export_choice"),     value="export"),
+                questionary.Choice(_("settings.dev.import_choice"),     value="import"),
+                questionary.Choice(_("settings.dev.ai_context_choice"), value="ai_context"),
+                questionary.Choice(_("settings.dev.db_info_choice"),    value="db_info"),
+                questionary.Choice(_("settings.dev.debug_choice", state=on_str if debug_on else off_str), value="debug"),
+                questionary.Choice(_("settings.dev.clear_logs_choice"), value="clear_logs"),
+                questionary.Separator("  ───"),
+                questionary.Choice(_("settings.dev.reset_choice"),      value="reset"),
+                questionary.Separator("  ───"),
+                questionary.Choice(_("nav.back"), value="back"),
+            ],
+            style=STYLE,
+        ).ask()
+
+        if not action or action == "back":
+            return
+
+        if action == "export":
+            _do_export_data()
+
+        elif action == "import":
+            _do_import_data()
+
+        elif action == "ai_context":
+            # Builds the exact <training_data> block the chat sends to the AI
+            # provider — entirely local, no API call.
+            from ai.coach import _build_context
+            slim = get_pref("ai_chat_slim") != "0"
+            include_routines = get_pref("ai_include_routines") != "0"
+            ctx = _build_context(8, slim=slim, include_routine=include_routines)
+            out_dir = config.DB_PATH.parent / "exports"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            path = out_dir / f"lifter-ai-context-{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.md"
+            path.write_text(ctx, encoding="utf-8")
+            _dlog("EXPORT", "AI context preview written", chars=len(ctx))
+            console.print(_("settings.dev.ai_context_done",
+                            path=_esc(str(path)), chars=f"{len(ctx):,}", tokens=f"{len(ctx) // 4:,}"))
+            questionary.press_any_key_to_continue(_("nav.press_any_key")).ask()
+
+        elif action == "db_info":
+            table_names = [r["name"] for r in query(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )]
+            info_lines = [
+                _("settings.dev.db_info_row",
+                  table=t, count=query(f'SELECT COUNT(*) AS n FROM "{t}"')[0]["n"])
+                for t in table_names
+            ]
+            console.print(Panel("\n".join(info_lines), title=_("settings.dev.db_info_title"),
+                                border_style="cyan", padding=(0, 2)))
+            questionary.press_any_key_to_continue(_("nav.press_any_key")).ask()
+
+        elif action == "debug":
+            new_val = not debug_on
+            set_pref("debug_logging", "1" if new_val else "0")
+            debug_log.enable(new_val)
+            _dlog("SETTING", "debug_logging changed", value="on" if new_val else "off")
+            if new_val:
+                console.print(_("settings.dev.debug_enabled", logs_dir=debug_log.LOGS_DIR))
+            else:
+                console.print(_("settings.dev.debug_disabled"))
+            questionary.press_any_key_to_continue(_("nav.press_any_key")).ask()
+
+        elif action == "clear_logs":
+            log_files = sorted(debug_log.LOGS_DIR.glob("debug-*.log"))
+            if questionary.confirm(
+                _("settings.dev.clear_logs_confirm", count=len(log_files)), default=False, style=STYLE
+            ).ask():
+                for f in log_files:
+                    f.unlink(missing_ok=True)
+                _dlog("SETTING", "debug logs cleared", count=len(log_files))
+                console.print(_("settings.dev.clear_logs_done", count=len(log_files)))
+                questionary.press_any_key_to_continue(_("nav.press_any_key")).ask()
+
+        elif action == "reset":
+            _do_data_reset()
+
+
 def _do_settings() -> None:
     while True:
         console.clear()
@@ -2005,8 +2583,7 @@ def _do_settings() -> None:
                 questionary.Choice(_("settings.profile_choice"),  value="profile"),
                 questionary.Choice(_("settings.prefs_choice"),    value="prefs"),
                 questionary.Choice(_("settings.ai_choice"),       value="ai"),
-                questionary.Separator("  ───────────────────────────────────────"),
-                questionary.Choice(_("settings.reset_choice"),    value="reset"),
+                questionary.Choice(_("settings.dev_choice"),      value="dev"),
                 questionary.Separator("  ───────────────────────────────────────"),
                 questionary.Choice(_("nav.back"),                 value="back"),
             ],
@@ -2023,8 +2600,8 @@ def _do_settings() -> None:
             _do_preferences_settings()
         elif action == "ai":
             _do_ai_settings()
-        elif action == "reset":
-            _do_data_reset()
+        elif action == "dev":
+            _do_developer_settings()
 
 
 # ── google fit ────────────────────────────────────────────────────────────────
@@ -2188,7 +2765,7 @@ def _check_stale_sync() -> None:
             return False
         try:
             dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
-            return (datetime.now(timezone.utc) - dt).total_seconds() > 86400
+            return (datetime.now(timezone.utc) - dt).total_seconds() > _stale_seconds()
         except Exception:
             return False
 
@@ -2271,6 +2848,25 @@ def _check_goals_and_checkin() -> None:
             _weekly_checkin()
 
 
+def _check_goal_celebrations() -> None:
+    """One-time festive panel for goals achieved since the last celebration."""
+    from db.goals import get_uncelebrated_achievements, mark_achievements_celebrated
+    compute_goal_progress()   # freshly-synced data may mark newly-achieved goals
+    achieved = get_uncelebrated_achievements()
+    if not achieved:
+        return
+    lines = [_("goals.celebrate.intro"), ""]
+    for goal in achieved:
+        lines.append(_("goals.celebrate.item", description=_esc(goal["description"])))
+    lines += ["", _("goals.celebrate.outro")]
+    console.print()
+    console.print(Panel("\n".join(lines), title=_("goals.celebrate.panel_title"),
+                        border_style="green", padding=(1, 2)))
+    mark_achievements_celebrated()
+    _dlog("GOAL", "Goal celebration shown", count=len(achieved))
+    _pause()
+
+
 def _check_auto_report() -> None:
     """Generate a coaching report automatically once every 7 days at startup."""
     if not should_auto_report():
@@ -2287,7 +2883,7 @@ def _check_auto_report() -> None:
     console.print(_("coach.auto_report_intro"))
     _dlog("AI", "Auto coaching report triggered (7-day)")
     # Analysis only — creating a routine stays an explicit user action.
-    if _run_report(weeks=8, generate_routine=False):
+    if _run_report(weeks=_report_weeks(), generate_routine=False):
         _pause()
 
 
@@ -2442,6 +3038,7 @@ def main():
     _i18n.init(config.DEFAULT_LANGUAGE)   # Phase 1: before profile selector
     _bootstrap_profiles()
     init_db()
+    config.apply_ai_overrides()           # per-profile provider/model prefs
     ui_lang = get_pref("ui_language") or config.DEFAULT_LANGUAGE
     _i18n.init(ui_lang)                   # Phase 2: after profile DB is open
     import debug_log
@@ -2456,6 +3053,7 @@ def main():
     _check_goals_and_checkin()
     _check_body_checkin()
     _check_stale_sync()
+    _check_goal_celebrations()
     _check_auto_report()
 
     while True:
