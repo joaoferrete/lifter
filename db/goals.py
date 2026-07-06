@@ -179,6 +179,36 @@ def reset_token_usage() -> None:
         )
 
 
+_BUDGET_KEY = "ai_tokens_month_budget"
+
+
+def get_token_budget() -> int:
+    """Monthly token budget (input + output). 0 = no budget set."""
+    raw = get_pref(_BUDGET_KEY)
+    try:
+        return max(0, int(raw)) if raw else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def set_token_budget(tokens: int) -> None:
+    set_pref(_BUDGET_KEY, str(max(0, int(tokens))))
+
+
+def token_budget_status() -> dict | None:
+    """None when no budget is set; else {'used', 'budget', 'pct'}.
+
+    used = month input + output. cache_read is excluded — it matches the
+    'Total' line shown in the AI settings panel.
+    """
+    budget = get_token_budget()
+    if not budget:
+        return None
+    usage = get_token_usage_month()
+    used = usage["input"] + usage["output"]
+    return {"used": used, "budget": budget, "pct": used / budget * 100}
+
+
 # ── goals CRUD ────────────────────────────────────────────────────────────────
 
 def save_goal(
@@ -228,6 +258,33 @@ def mark_goal_achieved(goal_id: int) -> None:
         conn.execute(
             "UPDATE user_goals SET achieved_at = datetime('now') WHERE id = ?", (goal_id,)
         )
+
+
+def get_uncelebrated_achievements() -> list[dict]:
+    """Achieved goals not yet shown in a startup celebration (watermark pref)."""
+    last = get_pref("goals_celebrated_at")
+    sql = "SELECT * FROM user_goals WHERE achieved_at IS NOT NULL"
+    params: tuple = ()
+    if last:
+        sql += " AND achieved_at > ?"
+        params = (last,)
+    with _conn() as conn:
+        rows = conn.execute(sql + " ORDER BY achieved_at", params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_achievements_celebrated() -> None:
+    """Advance the celebration watermark to the newest achieved_at.
+
+    The watermark is copied verbatim from the DB's own achieved_at value —
+    SQLite's datetime('now') format ("YYYY-MM-DD HH:MM:SS") differs from
+    Python's ISO "T" separator, and mixing them breaks the lexicographic
+    comparison in get_uncelebrated_achievements.
+    """
+    with _conn() as conn:
+        row = conn.execute("SELECT MAX(achieved_at) AS m FROM user_goals").fetchone()
+    if row and row["m"]:
+        set_pref("goals_celebrated_at", row["m"])
 
 
 def delete_goal(goal_id: int) -> None:

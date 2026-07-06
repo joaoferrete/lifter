@@ -48,3 +48,65 @@ def test_memories_as_context_formats_correctly(tmp_db):
     ctx = memories_as_context()
     assert "Coach memory" in ctx
     assert "Left knee pain" in ctx
+
+
+def test_memory_cap_enforced(tmp_db):
+    from db.goals import set_pref
+    from db.memories import save_memory, count_memories, get_all_memories
+    set_pref("memories_max", "5")
+    for i in range(8):
+        save_memory(f"Memory {i}")
+    assert count_memories() == 5
+    kept = {m["summary"] for m in get_all_memories()}
+    assert kept == {f"Memory {i}" for i in range(3, 8)}
+
+
+def test_memory_cap_zero_unlimited(tmp_db):
+    from db.goals import set_pref
+    from db.memories import save_memory, count_memories
+    set_pref("memories_max", "0")
+    for i in range(20):
+        save_memory(f"Memory {i}")
+    assert count_memories() == 20
+
+
+def test_memory_cap_default(tmp_db):
+    from db.memories import save_memory, count_memories, _DEFAULT_MEMORIES_MAX
+    for i in range(_DEFAULT_MEMORIES_MAX + 5):
+        save_memory(f"Memory {i}")
+    assert count_memories() == _DEFAULT_MEMORIES_MAX
+
+
+def test_enforce_memory_cap_after_lowering_limit(tmp_db):
+    from db.goals import set_pref
+    from db.memories import save_memory, count_memories, enforce_memory_cap
+    for i in range(10):
+        save_memory(f"Memory {i}")
+    set_pref("memories_max", "3")
+    enforce_memory_cap()
+    assert count_memories() == 3
+
+
+def test_delete_memories(tmp_db):
+    from db.memories import save_memory, get_all_memories, delete_memories, count_memories
+    for i in range(4):
+        save_memory(f"Memory {i}")
+    ids = [m["id"] for m in get_all_memories()[:2]]
+    assert delete_memories(ids) == 2
+    assert count_memories() == 2
+
+
+def test_delete_memories_ignores_unknown_ids(tmp_db):
+    from db.memories import save_memory, delete_memories, count_memories
+    save_memory("Only one")
+    assert delete_memories([9999]) == 0
+    assert delete_memories([]) == 0
+    assert count_memories() == 1
+
+
+def test_get_all_memories_newest_first(tmp_db):
+    from db.memories import get_all_memories, _conn
+    with _conn() as conn:
+        conn.execute("INSERT INTO chat_memories (created_at, summary) VALUES ('2024-01-01 10:00:00', 'Older')")
+        conn.execute("INSERT INTO chat_memories (created_at, summary) VALUES ('2024-01-02 10:00:00', 'Newer')")
+    assert [m["summary"] for m in get_all_memories()] == ["Newer", "Older"]

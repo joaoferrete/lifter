@@ -9,7 +9,7 @@ Good bug reports make issues faster to fix. Please include:
 1. **Steps to reproduce** — the exact sequence of menu choices or commands that trigger the issue
 2. **Expected vs actual behaviour** — what you expected to happen and what happened instead
 3. **Screenshot or terminal recording** — paste the console output or attach a screenshot so maintainers can see the exact error message and context
-4. **Debug log** — enable debug logging (**Settings → Preferences → Debug logging → on**), reproduce the issue, then attach the relevant lines from `logs/debug-YYYY-MM-DD.log`. This captures sync counts, AI errors (with status codes and provider details), and profile events that are not visible in the normal output
+4. **Debug log** — enable debug logging (**Settings → Developer → Debug logging → on**), reproduce the issue, then attach the relevant lines from `logs/debug-YYYY-MM-DD.log`. This captures sync counts, AI errors (with status codes and provider details), and profile events that are not visible in the normal output
 5. **Environment** — OS, Python version (`python --version`), and how lifter is installed (editable / pipx / direct)
 
 > **Tip:** You can copy just the lines around the error rather than the full log file — a few seconds of context before and after the failure is usually enough.
@@ -69,7 +69,7 @@ lifter/
 ├── cli.py               Interactive menu (questionary + Rich)
 ├── config.py            .env loader
 ├── profile_mgr.py       Multi-profile management (create, activate, switch, delete)
-├── debug_log.py         Structured debug logging (toggled via Settings → Preferences)
+├── debug_log.py         Structured debug logging (toggled via Settings → Developer)
 ├── i18n.py              Translation layer (reads locales/*.json)
 ├── profiles/            Per-profile data directories (gitignored)
 │   └── {slug}/
@@ -217,6 +217,7 @@ The UI translation layer lives in `i18n.py` and reads JSON files from `locales/`
    - **`{placeholders}`** — keep them verbatim; they are filled at runtime (e.g. `{retry_after}`, `{name}`).
    - **Rich markup** (`[bold]`, `[red]...[/red]`, `[dim]`) — preserve tags exactly; they control terminal formatting.
    - Empty string values fall back to English automatically.
+   - **`chat.quit_words`** — a comma-separated list of words that exit the coach chat. Translate it to natural exit words in your language (e.g. pt_BR uses `"sair, voltar, menu"`; French might use `"quitter, sortir, retour"`). The English words `quit`, `exit`, `q` and `bye` always work regardless of language. Also make sure the exit word you highlight in `chat.hint` matches one of them.
 
 2. **Register the language code** in `i18n.py`:
 

@@ -249,3 +249,32 @@ def test_get_routines_with_exercises_uses_template_title_as_fallback(tmp_db):
     routines = get_routines_with_exercises(db_path=tmp_db)
     ex = routines[0]["exercises"][0]
     assert ex["title"] == "Exercise T-FALLBACK"
+
+
+# ── sync result records ───────────────────────────────────────────────────────
+
+def test_record_and_get_sync_result(tmp_db):
+    from db.store import record_sync_result, get_sync_result
+    record_sync_result("last_sync_result", True, "full: 5 workouts", db_path=tmp_db)
+    res = get_sync_result("last_sync_result", db_path=tmp_db)
+    assert res["ok"] is True
+    assert res["detail"] == "full: 5 workouts"
+    assert "T" in res["when"]
+
+    record_sync_result("last_sync_result", False, "HevyAPIError: 401", db_path=tmp_db)
+    assert get_sync_result("last_sync_result", db_path=tmp_db)["ok"] is False
+
+
+def test_get_sync_result_missing_or_corrupt(tmp_db):
+    from db.store import get_sync_result, set_sync_state
+    assert get_sync_result("last_sync_result", db_path=tmp_db) is None
+    set_sync_state("last_sync_result", "not-json{", db_path=tmp_db)
+    assert get_sync_result("last_sync_result", db_path=tmp_db) is None
+    set_sync_state("last_sync_result", "[1,2]", db_path=tmp_db)
+    assert get_sync_result("last_sync_result", db_path=tmp_db) is None
+
+
+def test_sync_result_detail_truncated(tmp_db):
+    from db.store import record_sync_result, get_sync_result
+    record_sync_result("last_sync_result", False, "x" * 500, db_path=tmp_db)
+    assert len(get_sync_result("last_sync_result", db_path=tmp_db)["detail"]) == 200

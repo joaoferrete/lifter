@@ -101,11 +101,17 @@ def sync_fit(days: int = 30) -> dict:
     tz_id = _local_tz_id()
     counts = {"daily_days": 0, "sleep_sessions": 0}
 
-    _sync_daily(client, start_utc, end_utc, tz_id, counts)
-    _sync_sleep(client, start_utc, end_utc, counts)
+    from db.store import set_sync_state, record_sync_result
+    try:
+        _sync_daily(client, start_utc, end_utc, tz_id, counts)
+        _sync_sleep(client, start_utc, end_utc, counts)
+    except Exception as e:
+        record_sync_result("fit_last_sync_result", False, f"{type(e).__name__}: {e}")
+        raise
 
-    from db.store import set_sync_state
     set_sync_state("fit_last_sync", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    record_sync_result("fit_last_sync_result", True,
+                       f"{counts['daily_days']} days · {counts['sleep_sessions']} sleep")
     from render_cache import invalidate
     invalidate()
     log("SYNC", "Google Fit sync complete",

@@ -301,3 +301,41 @@ def test_auto_sync_fit_exception_does_not_crash():
         cli._check_stale_sync()   # must not raise
 
     mock_confirm.assert_not_called()
+
+
+# ── configurable staleness threshold ──────────────────────────────────────────
+
+def test_custom_stale_hours_prompts_earlier():
+    """With sync_stale_hours=6, a 7-hour-old sync is already stale."""
+    import cli
+
+    def _pref(key):
+        return "6" if key == "sync_stale_hours" else None
+
+    prompts = []
+
+    def _confirm(msg, **kwargs):
+        prompts.append(msg)
+        m = MagicMock()
+        m.ask.return_value = False
+        return m
+
+    with patch("db.store.get_sync_state", return_value=_ts(7)), \
+         patch("fit.auth.is_connected", return_value=False), \
+         patch("cli.get_pref", side_effect=_pref), \
+         patch("questionary.confirm", side_effect=_confirm), \
+         patch("cli.console"):
+        cli._check_stale_sync()
+    # 7h > 6h threshold → the prompt fired (default 24h would have stayed silent)
+    assert len(prompts) == 1
+
+
+def test_default_stale_hours_keeps_24h():
+    import cli
+    with patch("db.store.get_sync_state", return_value=_ts(7)), \
+         patch("fit.auth.is_connected", return_value=False), \
+         patch("cli.get_pref", return_value=None), \
+         patch("questionary.confirm") as mock_confirm, \
+         patch("cli.console"):
+        cli._check_stale_sync()
+    mock_confirm.assert_not_called()

@@ -4,8 +4,27 @@ from pathlib import Path
 
 _PROJECT_DIR = Path(__file__).resolve().parent
 LOGS_DIR = _PROJECT_DIR / "logs"
+RETENTION_MAX_FILES = 14
 
 _enabled: bool = False
+
+
+def prune_old_logs(max_files: int = RETENTION_MAX_FILES) -> int:
+    """Keep only the newest max_files daily log files; delete the rest.
+
+    Count-based (not age-based) so users who don't open the app every day
+    still keep their last max_files days of activity. Never raises.
+    """
+    removed = 0
+    try:
+        # filename dates are ISO, so lexicographic sort is chronological
+        files = sorted(LOGS_DIR.glob("debug-*.log"))
+        for f in files[:max(len(files) - max_files, 0)]:
+            f.unlink(missing_ok=True)
+            removed += 1
+    except Exception:
+        pass
+    return removed
 
 
 def init() -> None:
@@ -16,6 +35,7 @@ def init() -> None:
         _enabled = get_pref("debug_logging") == "1"
     except Exception:
         _enabled = False
+    prune_old_logs()
 
 
 def enable(on: bool) -> None:

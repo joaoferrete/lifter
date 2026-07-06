@@ -165,3 +165,61 @@ def test_missing_start_value_is_backfilled(tmp_db):
     assert p["pct"] == 0.0
     # baseline persisted to the row
     assert get_goals()[0]["start_value"] == 75.0
+
+
+# ── token budget ──────────────────────────────────────────────────────────────
+
+def test_token_budget_default_zero(tmp_db):
+    from db.goals import get_token_budget, token_budget_status
+    assert get_token_budget() == 0
+    assert token_budget_status() is None
+
+
+def test_token_budget_invalid_string_is_zero(tmp_db):
+    from db.goals import set_pref, get_token_budget
+    set_pref("ai_tokens_month_budget", "not-a-number")
+    assert get_token_budget() == 0
+
+
+def test_token_budget_status_pct_excludes_cache_read(tmp_db):
+    from db.goals import set_token_budget, add_token_usage, token_budget_status
+    set_token_budget(1000)
+    add_token_usage(600, 300, cache_read_tokens=500)
+    st = token_budget_status()
+    assert st["used"] == 900
+    assert st["budget"] == 1000
+    assert st["pct"] == 90.0
+
+
+# ── goal celebration watermark ────────────────────────────────────────────────
+
+def test_uncelebrated_achievements_flow(tmp_db):
+    from db.goals import (
+        save_goal, get_all_goals, mark_goal_achieved,
+        get_uncelebrated_achievements, mark_achievements_celebrated, get_pref, _conn,
+    )
+    save_goal(type="lift", description="Bench 100kg", target=100, unit="kg")
+    save_goal(type="lift", description="Squat 140kg", target=140, unit="kg")
+    ids = [g["id"] for g in get_all_goals()]
+    for gid in ids:
+        mark_goal_achieved(gid)
+
+    achieved = get_uncelebrated_achievements()
+    assert {g["description"] for g in achieved} == {"Bench 100kg", "Squat 140kg"}
+
+    mark_achievements_celebrated()
+    assert get_uncelebrated_achievements() == []
+
+    # watermark copied verbatim from the DB's own timestamp format
+    with _conn() as conn:
+        max_at = conn.execute("SELECT MAX(achieved_at) AS m FROM user_goals").fetchone()["m"]
+    assert get_pref("goals_celebrated_at") == max_at
+
+    # a goal achieved later shows up alone
+    save_goal(type="lift", description="Deadlift 180kg", target=180, unit="kg")
+    gid3 = get_all_goals()[0]["id"]
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE user_goals SET achieved_at = datetime('now', '+1 hour') WHERE id = ?", (gid3,)
+        )
+    assert [g["description"] for g in get_uncelebrated_achievements()] == ["Deadlift 180kg"]
