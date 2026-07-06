@@ -996,6 +996,11 @@ def _missed_tool_call_nudge(text: str) -> str | None:
 
 # ── memory extraction ─────────────────────────────────────────────────────────
 
+_EXTRACT_CHUNK_CHARS = 6000    # per-chunk transcript budget
+_EXTRACT_MAX_CHUNKS = 6        # hard cap → ~36k chars of transcript per session
+_MEMORY_BUDGET_SINGLE = 8      # single-chunk sessions behave like the classic path
+_MEMORY_BUDGET_MULTI = 12      # long sessions span more topics, allow more slots
+
 _MEMORY_SYSTEM = (
     "You extract memorable fitness coaching facts from conversations. "
     "Return ONLY a JSON array of strings, no markdown fences or extra text."
@@ -1010,59 +1015,199 @@ Extract ONLY:
 - Personal context affecting training (schedule, stress, sleep issues, job)
 - Explicit feedback on recommendations ("tried X, it didn't work because...")
 - Strong opinions about training style, intensity, or volume
+- Durable decisions enacted during the session — lines marked [action] (routine \
+created/updated, goal added/changed/removed) are worth remembering only when they \
+encode a lasting decision, not the mechanics of the action
 
-Do NOT extract: general Q&A, stats, routine details, or things obvious from the training data.
+Do NOT extract: general Q&A, stats, set-by-set routine minutiae, or things obvious from the training data.
 
-Return a JSON array of concise strings (max 2 sentences each). Return [] if nothing memorable.
+Return a JSON array of detailed strings (up to 3 sentences each). Preserve concrete
+specifics exactly as stated: numbers, weights, exercise names, constraints, and dates.
+Return [] if nothing memorable.
 
 Conversation:
 """
 
+_MEMORY_CONSOLIDATE_SYSTEM = (
+    "You consolidate fitness coaching memory notes. "
+    "Return ONLY a JSON array of strings, no markdown fences or extra text."
+)
+
+_MEMORY_CONSOLIDATE_PROMPT = """\
+Below are candidate memory items extracted from one coaching conversation. Some may be
+near-duplicates or fragments of the same fact.
+
+Merge items that describe the same fact into one item, keeping the most specific wording
+(preserve numbers, weights, exercise names, constraints, and dates). Drop redundant items.
+Do NOT invent facts that are not in the candidates.
+
+Return a JSON array with at most {budget} strings (up to 3 sentences each), ordered from
+most to least important for future coaching sessions.
+
+Candidates:
+{candidates}
+"""
+
+
+def _split_transcript(messages: list[dict], chunk_chars: int = _EXTRACT_CHUNK_CHARS) -> list[str]:
+    """Pack 'ROLE: content' lines into chunks without splitting a message.
+
+    A single message longer than chunk_chars becomes its own chunk, truncated.
+    """
+    chunks: list[str] = []
+    buffer = ""
+    for m in messages:
+        if not isinstance(m.get("content"), str):
+            continue
+        line = f"{m['role'].upper()}: {m['content']}"
+        if len(line) > chunk_chars:
+            if buffer:
+                chunks.append(buffer)
+                buffer = ""
+            chunks.append(line[:chunk_chars] + "…")
+        elif buffer and len(buffer) + 1 + len(line) > chunk_chars:
+            chunks.append(buffer)
+            buffer = line
+        else:
+            buffer = f"{buffer}\n{line}" if buffer else line
+    if buffer:
+        chunks.append(buffer)
+    return chunks
+
+
+def _parse_memory_json(raw: str) -> list[str]:
+    """Parse a model response into a list of usable memory strings."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+    items = json.loads(raw)
+    if not isinstance(items, list):
+        return []
+    return [m.strip() for m in items if isinstance(m, str) and len(m.strip()) > 15]
+
+
+def _extract_from_chunk(chunk_text: str) -> list[str]:
+    """One extraction call over one transcript chunk. Never raises."""
+    from debug_log import log
+    try:
+        full_text = "".join(stream_complete(_MEMORY_PROMPT + chunk_text,
+                                            system=_MEMORY_SYSTEM, max_tokens=1024))
+        return _parse_memory_json(full_text)
+    except Exception as e:
+        log("AI", "Memory chunk extraction failed", error=type(e).__name__)
+        return []
+
+
+def _consolidate_memories(items: list[str], budget: int) -> list[str]:
+    """One AI call merging near-duplicates and picking the top `budget` items.
+
+    Falls back to items[:budget] on any failure — a flaky consolidation call
+    must never cost the session its memories.
+    """
+    from debug_log import log
+    try:
+        prompt = _MEMORY_CONSOLIDATE_PROMPT.format(
+            budget=budget,
+            candidates="\n".join(f"- {item}" for item in items),
+        )
+        full_text = "".join(stream_complete(prompt, system=_MEMORY_CONSOLIDATE_SYSTEM,
+                                            max_tokens=1024))
+        merged = _parse_memory_json(full_text)
+        if merged:
+            return merged[:budget]
+    except Exception as e:
+        log("AI", "Memory consolidation failed", error=type(e).__name__)
+    return items[:budget]
+
 
 def _extract_and_save_memories(conversation_log: list[dict]) -> int:
-    """Extract key facts from the conversation and persist them."""
+    """Extract key facts from the full conversation (chunked) and persist them."""
+    from debug_log import log
+
     if len(conversation_log) < 2:
         return 0
-
-    text_messages = [
-        m for m in conversation_log if isinstance(m.get("content"), str)
-    ]
+    text_messages = [m for m in conversation_log if isinstance(m.get("content"), str)]
     if len(text_messages) < 2:
         return 0
 
-    conv_text = "\n".join(
-        f"{m['role'].upper()}: {m['content']}" for m in text_messages
-    )
-    if len(conv_text) < 150:
+    chunks = _split_transcript(text_messages)
+    if sum(len(c) for c in chunks) < 150:
         return 0
+    if len(chunks) > _EXTRACT_MAX_CHUNKS:
+        # keep the opening chunk (goals/injuries are stated up front) plus the
+        # most recent ones — the end is what the old head-slice used to lose
+        log("AI", "Transcript capped for extraction",
+            chunks=len(chunks), kept=_EXTRACT_MAX_CHUNKS)
+        chunks = chunks[:1] + chunks[-(_EXTRACT_MAX_CHUNKS - 1):]
 
+    items: list[str] = []
+    for i, chunk in enumerate(chunks):
+        got = _extract_from_chunk(chunk)
+        log("AI", "Memory chunk extracted", chunk=i + 1, of=len(chunks), items=len(got))
+        items += got
+
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for item in items:
+        key = " ".join(item.split()).lower()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(item)
+
+    if len(chunks) == 1:
+        # classic path: one extraction call, plain cap — no consolidation cost
+        deduped = deduped[:_MEMORY_BUDGET_SINGLE]
+    elif len(deduped) > _MEMORY_BUDGET_MULTI:
+        deduped = _consolidate_memories(deduped, _MEMORY_BUDGET_MULTI)
+
+    saved = 0
     try:
-        full_text = ""
-        for chunk in stream_complete(_MEMORY_PROMPT + conv_text[:5000], system=_MEMORY_SYSTEM,
-                                     max_tokens=1024):
-            full_text += chunk
-
-        raw = full_text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
-
-        memories = json.loads(raw)
-        if not isinstance(memories, list):
-            return 0
-
-        from db.memories import save_memory
-        saved = 0
-        for mem in memories[:8]:
-            if isinstance(mem, str) and len(mem.strip()) > 15:
-                # Sanitize before storing — prevents injected text from
-                # persisting as a "memory" across future sessions.
-                clean = sanitize_for_prompt(mem.strip(), max_len=300)
-                if clean:
-                    save_memory(clean)
+        from db.memories import save_memory, MEMORY_SUMMARY_MAX_LEN
+        for mem in deduped:
+            # Sanitize before storing — prevents injected text from
+            # persisting as a "memory" across future sessions.
+            clean = sanitize_for_prompt(mem.strip(), max_len=MEMORY_SUMMARY_MAX_LEN)
+            if clean:
+                save_memory(clean)
                 saved += 1
-        return saved
-    except Exception:
-        return 0
+    except Exception as e:
+        log("AI", "Memory save failed", error=type(e).__name__, saved=saved)
+    log("AI", "Memories saved", chunks=len(chunks), merged=len(deduped), saved=saved)
+    return saved
+
+
+def _tool_action_log_entry(name: str, args: dict, result: dict) -> str | None:
+    """Compact synthetic transcript line for a tool call, or None if not log-worthy.
+
+    Declines are logged deliberately — a rejected routine or goal change is a
+    strong preference signal for the memory extractor.
+    """
+    if not isinstance(result, dict) or "error" in result:
+        return None
+
+    declined = result.get("success") is False and result.get("message") == "User declined"
+
+    if name in ("push_routine", "update_routine"):
+        title = sanitize_for_prompt(str(args.get("title") or ""), max_len=100) or "untitled"
+        n = len(args.get("exercises") or [])
+        if declined:
+            verb = "routine" if name == "push_routine" else "update to routine"
+            return f"[action] User declined the proposed {verb} '{title}'."
+        if result.get("success"):
+            if name == "push_routine":
+                return f"[action] Pushed new routine '{title}' ({n} exercises) to Hevy."
+            return f"[action] Updated routine '{title}' ({n} exercises)."
+        return None
+
+    if name == "manage_goals":
+        summary = sanitize_for_prompt(str(args.get("changes_summary") or ""), max_len=200)
+        if declined:
+            return f"[action] User declined goal change: {summary}" if summary else None
+        if result.get("success") and summary:
+            return f"[action] Goal {result.get('action', 'changed')}: {summary}"
+        return None
+
+    return None   # find_exercises and anything else: read-only, not a decision
 
 
 # ── enhanced chat ─────────────────────────────────────────────────────────────
@@ -1188,6 +1333,12 @@ def start_enhanced_chat(weeks: int = 8) -> None:
                 else:
                     result = {"error": f"Unknown tool: {tc.name}"}
                 tool_results.append((tc, result))
+
+                # Durable decisions (routines, goals — including declines) feed
+                # the end-of-chat memory extraction.
+                entry = _tool_action_log_entry(tc.name, dict(tc.args), result)
+                if entry:
+                    conversation_log.append({"role": "assistant", "content": entry})
 
             try:
                 with console.status(_("chat.thinking_short"), spinner="dots"):

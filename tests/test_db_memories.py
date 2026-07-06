@@ -110,3 +110,17 @@ def test_get_all_memories_newest_first(tmp_db):
         conn.execute("INSERT INTO chat_memories (created_at, summary) VALUES ('2024-01-01 10:00:00', 'Older')")
         conn.execute("INSERT INTO chat_memories (created_at, summary) VALUES ('2024-01-02 10:00:00', 'Newer')")
     assert [m["summary"] for m in get_all_memories()] == ["Newer", "Older"]
+
+
+def test_memories_as_context_not_clipped_at_500(tmp_db):
+    from db.memories import save_memory, memories_as_context
+    detailed = ("User has left shoulder impingement since 2026-06-28 and must avoid overhead "
+                "pressing above 40kg. Prefers landmine press and cable lateral raises as "
+                "substitutes. Physiotherapist cleared incline dumbbell press up to 30 degrees "
+                "as long as reps stay above 8 and the last set stops two reps shy of failure. "
+                "Wants to re-test overhead work after the follow-up appointment in August "
+                "before adding any vertical pressing volume back into the program.")
+    assert 300 < len(detailed) <= 500
+    save_memory(detailed)
+    ctx = memories_as_context()
+    assert detailed in ctx
