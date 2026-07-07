@@ -38,3 +38,32 @@ def test_declared_py_modules_all_exist():
     """Every declared module must correspond to a real root .py file."""
     stale = [m for m in _declared_py_modules() if not (_ROOT / f"{m}.py").exists()]
     assert not stale, f"py-modules lists non-existent modules: {stale}"
+
+
+# ── locales must ship in the wheel ────────────────────────────────────────────
+# locales/ is a package (has __init__.py) with its JSON files declared as
+# package-data — that is what puts the translations inside the wheel. These
+# static checks catch config regressions; the release workflow additionally
+# inspects the built wheel itself.
+
+def test_locales_is_a_package():
+    assert (_ROOT / "locales" / "__init__.py").exists(), (
+        "locales/__init__.py missing — locales would be dropped from the wheel"
+    )
+
+
+def test_locales_package_data_declared():
+    data = tomllib.loads((_ROOT / "pyproject.toml").read_text())
+    globs = data["tool"]["setuptools"]["package-data"].get("locales", [])
+    import fnmatch
+    for json_file in (_ROOT / "locales").glob("*.json"):
+        assert any(fnmatch.fnmatch(json_file.name, g) for g in globs), (
+            f"{json_file.name} not covered by [tool.setuptools.package-data] locales = {globs}"
+        )
+
+
+def test_locale_files_valid_and_nonempty():
+    import json
+    for name in ("en.json", "pt_BR.json"):
+        data = json.loads((_ROOT / "locales" / name).read_text(encoding="utf-8"))
+        assert isinstance(data, dict) and len(data) > 100

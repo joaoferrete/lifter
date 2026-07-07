@@ -11,8 +11,10 @@ Personal Hevy workout client with analytics, goal tracking, Google Fit integrati
 
 - [What it does](#what-it-does)
 - [Requirements](#requirements)
+- [Install](#install)
+- [Where Lifter stores data](#where-lifter-stores-data)
 - [Setup](#setup)
-- [Install system-wide (optional)](#install-system-wide-optional)
+- [Install system-wide from source (optional)](#install-system-wide-from-source-optional)
 - [Profiles](#profiles)
 - [Google Fit setup (optional)](#google-fit-setup-optional)
 - [Menu reference](#menu-reference)
@@ -54,18 +56,50 @@ Personal Hevy workout client with analytics, goal tracking, Google Fit integrati
 
 ---
 
-## Setup
+## Install
 
-### 1. Install dependencies
-
-**Option A — directly (system Python):**
+The recommended install is via [pipx](https://pipx.pypa.io), straight from PyPI:
 
 ```bash
-cd lifter
-pip install -r requirements.txt
+pipx install lifter-cli
+lifter
 ```
 
-**Option B — inside a virtual environment (recommended to avoid conflicts with other Python projects):**
+> **Why pipx and not plain `pip`?** The package currently ships top-level modules;
+> pipx's isolated virtualenv keeps them from ever clashing with other packages.
+> Also note the PyPI name is **`lifter-cli`** — `pip install lifter` is an
+> unrelated, abandoned package.
+
+Upgrading from an old editable install? Run `pipx uninstall lifter` (the old
+distribution name) before `pipx install lifter-cli`. Your data is safe — it
+lives in your user folders, not in the package (see
+[Where Lifter stores data](#where-lifter-stores-data)).
+
+---
+
+## Where Lifter stores data
+
+Everything writable lives in standard user directories (XDG), so updates and
+reinstalls never touch your data:
+
+| Contents | Location | Override |
+|---|---|---|
+| Profiles, databases, exports | `~/.local/share/lifter/` | `$XDG_DATA_HOME` |
+| `.env` (API keys), `fit_credentials.json` | `~/.config/lifter/` | `$XDG_CONFIG_HOME` |
+| Debug logs, chat history | `~/.local/state/lifter/` | `$XDG_STATE_HOME` |
+
+Setting `LIFTER_HOME=/some/dir` forces all three into a single directory
+(portable installs, tests). On the first run after upgrading from an older
+version, Lifter automatically moves data from the project folder to these
+locations — once — and tells you what moved.
+
+---
+
+## Setup
+
+### 1. Install dependencies (from source only)
+
+If you installed via pipx you can skip this. From a checkout:
 
 ```bash
 cd lifter
@@ -76,13 +110,14 @@ pip install -r requirements.txt
 
 Activate the venv with `source .venv/bin/activate` each time you open a new terminal before running `python3 cli.py`. To deactivate, run `deactivate`.
 
-### 2. Create your `.env` file
+### 2. Configure your AI provider key
 
-```bash
-cp .env.example .env
-```
+The easiest way is **in-app**: run `lifter`, then **Settings → AI Coach → API keys** —
+values are stored in `~/.config/lifter/.env` (created with mode 600).
 
-Open `.env` and fill in your AI provider key (see sections below). Your Hevy API key is **not** set here — it is entered when you first run Lifter and stored per-profile.
+Prefer a file? Edit `~/.config/lifter/.env` directly (use `.env.example` in this
+repo as a reference). Your Hevy API key is **not** set here — it is entered when
+you first run Lifter and stored per-profile.
 
 ### 3. Get your Hevy API key
 
@@ -196,38 +231,28 @@ The interactive menu opens. Select **Sync new workouts → Full** to download yo
 
 ---
 
-## Install system-wide (optional)
+## Install system-wide from source (optional)
 
-After completing the setup above you can make `lifter` available as a global command so you can run it from any directory without typing `python3 cli.py`.
-
-This uses [pipx](https://pipx.pypa.io), which installs Python applications into isolated environments and exposes their commands on your `PATH`. The source code stays in this directory — the global command just points here.
-
-### Install
+If you work from a checkout (instead of `pipx install lifter-cli`), you can still expose `lifter` as a global command pointing at your working tree:
 
 ```bash
-make install
+make install          # pipx install --editable .
 ```
 
-`lifter` is now available everywhere. Profiles and databases are stored under the `profiles/` directory inside the project folder — no matter which directory you run `lifter` from, it always uses the same profiles.
+Data location is identical either way — user folders, not the project dir (see [Where Lifter stores data](#where-lifter-stores-data)).
 
 ### Update
 
 After pulling new changes:
 
 ```bash
-pipx reinstall lifter
-```
-
-Or equivalently:
-
-```bash
-make uninstall && make install
+pipx reinstall lifter-cli
 ```
 
 ### Uninstall
 
 ```bash
-make uninstall
+make uninstall        # pipx uninstall lifter-cli
 ```
 
 > **Note:** `pipx` installs commands to `~/.local/bin`. Make sure that directory is on your `PATH` (most modern shells include it by default). If `lifter` is not found after install, add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile and reload it.
@@ -244,7 +269,7 @@ Each profile has its own:
 - Hevy account (API key)
 - Google Fit connection
 
-Profile data lives in `profiles/{slug}/` inside the project folder. On first run Lifter asks for your name and Hevy API key to create your initial profile.
+Profile data lives in `~/.local/share/lifter/profiles/{slug}/`. On first run Lifter asks for your name and Hevy API key to create your initial profile.
 
 ### Managing profiles
 
@@ -260,7 +285,17 @@ All profile actions are in **Settings → Profiles**:
 
 ### Migrating from a previous version
 
-If you have an existing `hevy.db` file at the project root, Lifter will automatically migrate it to a named profile on the first run after upgrading.
+Both migrations happen automatically, once, on the first run after upgrading:
+
+| Old location (project folder) | New location |
+|---|---|
+| `profiles/`, `profiles.json` | `~/.local/share/lifter/` |
+| `.env` | `~/.config/lifter/.env` |
+| `fit_credentials.json` | `~/.config/lifter/` |
+| `logs/` | `~/.local/state/lifter/logs/` |
+| `~/.hevy_chat_history` | `~/.local/state/lifter/chat_history` |
+
+A legacy root `hevy.db` (pre-profiles era) is also migrated into a named profile.
 
 ---
 
@@ -282,14 +317,15 @@ Adds sleep, steps, calories, and heart rate data to your analytics and AI contex
    - Name: anything
    - Click Create
 6. **Download JSON** → Google will download a file named something like
-   `client_secret_123456789-abcdefg.apps.googleusercontent.com.json`  
-   **Rename it to `fit_credentials.json`** and place it in the `lifter/` project folder
+   `client_secret_123456789-abcdefg.apps.googleusercontent.com.json` — no need
+   to rename or move it; Lifter asks for its location in the next step and
+   copies it to `~/.config/lifter/fit_credentials.json`
 
 ### Step 2 — Authenticate
 
 In the menu: **Google Fit → Connect / re-authenticate**
 
-A browser window opens. Sign in with the Gmail you added as a test user and approve the fitness permissions. The token is saved as `fit_token.json` and reused automatically.
+Lifter asks for the path to the downloaded JSON (first time only), then a browser window opens. Sign in with the Gmail you added as a test user and approve the fitness permissions. The token is saved per profile as `fit_token.json` and reused automatically.
 
 ### Step 3 — Sync
 
@@ -481,8 +517,9 @@ Weight units apply everywhere: goal wizard input, dashboard stats, exercise prog
 
 | Setting | Description |
 |---|---|
-| **AI provider** | Switch between providers in-app (only those with an API key in `.env` are listed); stored per profile, overriding `.env` |
+| **AI provider** | Switch between providers in-app (only those with a configured API key are listed); stored per profile, overriding `.env` |
 | **Model** | Provider default or any custom model name; stored per profile |
+| **API keys** | Enter/clear provider credentials (Gemini, Claude, OpenRouter, Groq, GitHub, AWS/Bedrock) with hidden input; saved to `~/.config/lifter/.env` (mode 600) and applied immediately |
 | **Context mode** | Full (all analytics) or Slim (fewer tokens, faster) |
 | **Report window** | Weeks of history for coaching reports (4 / 8 / 12, default 8) — also drives the automatic 7-day report |
 | **Send your name to the AI** | When off, the coach sees "the athlete" instead of your display name |
@@ -558,6 +595,9 @@ The panel at the top of every screen shows:
 
 ### `.env` (global, AI provider keys only)
 
+Location: **`~/.config/lifter/.env`** (`$XDG_CONFIG_HOME/lifter/.env`). You rarely
+need to edit it by hand — **Settings → AI Coach → API keys** manages it in-app.
+
 ```bash
 # AI provider — pick one value for AI_PROVIDER, set the matching key.
 # AI_PROVIDER and AI_MODEL are the defaults; each profile can override them
@@ -599,7 +639,7 @@ All in-app preferences are stored in the `user_preferences` table in each profil
 
 ## Debug logs
 
-Lifter can write structured logs to `logs/debug-YYYY-MM-DD.log` (one file per day, inside the project folder). This is useful for diagnosing sync failures, AI errors, and profile events without having to instrument the code manually.
+Lifter can write structured logs to `~/.local/state/lifter/logs/debug-YYYY-MM-DD.log` (one file per day). This is useful for diagnosing sync failures, AI errors, and profile events without having to instrument the code manually.
 
 ### Enabling
 
@@ -657,7 +697,7 @@ Lifter supports multiple UI languages. The translation layer lives in `i18n.py` 
 
 **Per profile (recommended):** Go to **Settings → Preferences → UI language** and pick from the list. The change takes effect immediately for the rest of the session and persists across restarts.
 
-**Global bootstrap language** (shown before a profile is selected): set `DEFAULT_LANGUAGE=en` in your `.env` file. This controls the language of the profile-selector screen.
+**Global bootstrap language** (shown before a profile is selected): set `DEFAULT_LANGUAGE=en` in `~/.config/lifter/.env`. This controls the language of the profile-selector screen.
 
 ### Supported languages
 

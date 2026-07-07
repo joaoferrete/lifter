@@ -47,6 +47,14 @@ STYLE = questionary.Style([
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+def _app_version() -> str:
+    from importlib.metadata import version, PackageNotFoundError
+    try:
+        return version("lifter-cli")   # distribution name, not a module name
+    except PackageNotFoundError:
+        return "dev"
+
+
 def _dlog(category: str, msg: str, **kv) -> None:
     """Forward to debug_log.log without ever raising."""
     try:
@@ -1473,6 +1481,81 @@ _UI_LANGUAGES = [
 ]
 
 
+# (env var, i18n label key, hidden input)
+_ENV_KEY_FIELDS: list[tuple[str, str, bool]] = [
+    ("GEMINI_API_KEY",           "settings.keys.gemini",        True),
+    ("ANTHROPIC_API_KEY",        "settings.keys.claude",        True),
+    ("OPENROUTER_API_KEY",       "settings.keys.openrouter",    True),
+    ("GROQ_API_KEY",             "settings.keys.groq",          True),
+    ("GITHUB_TOKEN",             "settings.keys.github",        True),
+    ("AWS_BEARER_TOKEN_BEDROCK", "settings.keys.bedrock_token", True),
+    ("AWS_REGION",               "settings.keys.aws_region",    False),
+    ("AWS_ACCESS_KEY_ID",        "settings.keys.aws_access",    True),
+    ("AWS_SECRET_ACCESS_KEY",    "settings.keys.aws_secret",    True),
+    ("AWS_SESSION_TOKEN",        "settings.keys.aws_session",   True),
+]
+
+
+def _mask_secret(value: str) -> str:
+    if not value or _is_placeholder_key(value):
+        return _("settings.keys.not_set")
+    return f"…{value[-4:]}" if len(value) > 4 else "…"
+
+
+def _do_api_keys_settings() -> None:
+    """Edit provider credentials in-app — persisted to the global .env file."""
+    import paths
+
+    while True:
+        console.clear()
+        lines = [_("settings.keys.env_file_line", path=_esc(str(paths.ENV_FILE))), ""]
+        for var, label_key, _hidden in _ENV_KEY_FIELDS:
+            lines.append(f"{_(label_key)}: [bold]{_esc(_mask_secret(getattr(config, var, '')))}[/bold]")
+        console.print(Panel("\n".join(lines), title=_("settings.keys.title"),
+                            border_style="cyan", padding=(0, 2)))
+
+        choices = [
+            questionary.Choice(f"  {_(label_key)}  ({_mask_secret(getattr(config, var, ''))})", value=var)
+            for var, label_key, _hidden in _ENV_KEY_FIELDS
+        ]
+        choices += [questionary.Separator("  ───"), questionary.Choice(_("nav.back"), value="back")]
+        picked = questionary.select(_("settings.keys.prompt"), choices=choices, style=STYLE).ask()
+        if not picked or picked == "back":
+            return
+
+        hidden = next(h for var, _k, h in _ENV_KEY_FIELDS if var == picked)
+        action = questionary.select(
+            _("settings.keys.action_prompt", field=picked,
+              current=_mask_secret(getattr(config, picked, ""))),
+            choices=[
+                questionary.Choice(_("settings.keys.set_option"),   value="set"),
+                questionary.Choice(_("settings.keys.clear_option"), value="clear"),
+                questionary.Choice(_("nav.cancel"),                 value=None),
+            ],
+            style=STYLE,
+        ).ask()
+        if not action:
+            continue
+
+        if action == "set":
+            asker = questionary.password if hidden else questionary.text
+            value = asker(_("settings.keys.value_prompt"), style=STYLE).ask()
+            if not value or not value.strip():
+                continue
+            new_value = value.strip()
+        else:
+            new_value = ""   # written as KEY= so reload_env(override=True) clears it
+
+        config.set_env_values({picked: new_value})
+        config.reload_env()
+        config.apply_ai_overrides()   # profile prefs keep winning over fresh env
+        _dlog("SETTING", "env key updated", var=picked, cleared=not new_value)
+        if new_value:
+            console.print(_("settings.keys.saved", var=picked))
+        else:
+            console.print(_("settings.keys.cleared", var=picked))
+
+
 def _do_ai_settings():
     from db.goals import (
         get_pref, set_pref, get_token_usage, get_token_usage_month,
@@ -1562,6 +1645,7 @@ def _do_ai_settings():
             choices=[
                 questionary.Choice(_("settings.ai.provider_choice", provider=config.AI_PROVIDER), value="provider"),
                 questionary.Choice(_("settings.ai.model_choice", model=config.AI_MODEL), value="model"),
+                questionary.Choice(_("settings.ai.api_keys_choice"), value="api_keys"),
                 questionary.Choice(
                     _("settings.ai.toggle_context_choice", mode="Slim" if slim_on else "Full"),
                     value="toggle_slim",
@@ -1642,6 +1726,10 @@ def _do_ai_settings():
                 config.apply_ai_overrides()
                 _dlog("SETTING", "ai_model changed", model=config.AI_MODEL)
                 console.print(_("settings.ai.model_saved", model=config.AI_MODEL))
+            continue
+
+        if action == "api_keys":
+            _do_api_keys_settings()
             continue
 
         if action == "toggle_slim":
@@ -1894,7 +1982,7 @@ def _do_data_reset():
             import os
             from config import DB_PATH
             try:
-                from fit.auth import TOKEN_FILE, disconnect as fit_disconnect
+                from fit.auth import disconnect as fit_disconnect
                 fit_disconnect()
             except Exception:
                 pass
@@ -2484,6 +2572,7 @@ def _do_developer_settings() -> None:
             db_desc = str(config.DB_PATH)
 
         lines = [
+            _("settings.dev.version_label", version=_app_version()),
             _("settings.dev.debug_label", state=on_str if debug_on else off_str),
             _("settings.dev.logs_dir_label", path=_esc(str(debug_log.LOGS_DIR))),
             _("settings.dev.db_label", path=_esc(db_desc)),
@@ -2695,14 +2784,34 @@ def _do_fit():
 
 
 def _fit_setup() -> None:
+    from fit.auth import credentials_file
+
     console.rule(_("fit.connect_rule"))
     console.print(_("fit.setup_instructions"))
+
+    if not credentials_file().exists():
+        raw = questionary.path(_("fit.credentials_path_prompt"), style=STYLE).ask()
+        if not raw or not raw.strip():
+            return
+        source = Path(raw.strip()).expanduser()
+        try:
+            payload = json.loads(source.read_text(encoding="utf-8"))
+            assert isinstance(payload, dict) and ("installed" in payload or "web" in payload)
+        except Exception:
+            console.print(_("fit.credentials_invalid"))
+            return
+        import paths as _paths
+        import shutil as _shutil
+        _paths.ensure_dirs()
+        _shutil.copy2(source, _paths.FIT_CREDENTIALS_FILE)
+        _paths.FIT_CREDENTIALS_FILE.chmod(0o600)
+        console.print(_("fit.credentials_saved", path=_esc(str(_paths.FIT_CREDENTIALS_FILE))))
 
     if not questionary.confirm(_("fit.ready_to_auth"), default=True, style=STYLE).ask():
         return
 
     try:
-        from fit.auth import get_credentials, CREDENTIALS_FILE
+        from fit.auth import get_credentials
         get_credentials()
         _dlog("SETTING", "Google Fit connected")
         console.print(_("fit.connected_ok"))
@@ -3034,8 +3143,28 @@ def _bootstrap_profiles() -> None:
 
 
 def main():
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] in ("--version", "-V"):
+        print(f"lifter {_app_version()}")
+        return
+
+    import paths
+    paths.ensure_dirs()
+    moved = paths.migrate_legacy_layout()
+    if moved:
+        config.reload_env()               # the .env file may have just moved
+
     import i18n as _i18n
     _i18n.init(config.DEFAULT_LANGUAGE)   # Phase 1: before profile selector
+
+    if moved:
+        console.print(Panel(
+            "\n".join(_esc(m) for m in moved),
+            title=_("migration.xdg_title"), border_style="cyan", padding=(0, 2),
+        ))
+        console.print(_("migration.xdg_done",
+                        config_dir=_esc(str(paths.CONFIG_DIR)),
+                        data_dir=_esc(str(paths.DATA_DIR))))
     _bootstrap_profiles()
     init_db()
     config.apply_ai_overrides()           # per-profile provider/model prefs

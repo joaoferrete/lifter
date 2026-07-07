@@ -4,6 +4,8 @@ import re
 import readline
 from pathlib import Path
 
+import paths
+
 import questionary
 from rich.console import Console
 from rich.markdown import Markdown
@@ -23,7 +25,7 @@ from i18n import _
 
 console = Console()
 
-_CHAT_HISTORY_FILE = Path.home() / ".hevy_chat_history"
+_CHAT_HISTORY_FILE = paths.CHAT_HISTORY_FILE
 
 _ANSI_RE = re.compile(r"(\x1b\[[0-9;]*m)")
 

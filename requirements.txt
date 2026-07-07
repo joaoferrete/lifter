@@ -5,6 +5,7 @@ google-auth-oauthlib>=1.0
 google-auth>=2.0
 anthropic>=0.40
 openai>=1.30          # OpenRouter, Groq, GitHub Models (OpenAI-compatible)
+requests>=2.31        # used directly by fit/auth.py (token refresh session)
 rich>=13.0
 python-dotenv>=1.0
 questionary>=2.0
