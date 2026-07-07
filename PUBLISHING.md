@@ -43,7 +43,10 @@ publishes to PyPI via [Trusted Publishing](https://docs.pypi.org/trusted-publish
    - fail on purpose if the tag doesn't match the `pyproject.toml` version,
    - build sdist + wheel, verify the wheel contains `locales/*.json`, verify the
      sdist has no sensitive files, run `twine check`,
-   - publish to PyPI through the `pypi` environment.
+   - publish to PyPI through the `pypi` environment,
+   - create the GitHub Release automatically (auto-generated notes from the
+     merged PRs since the last tag, with the published wheel/sdist attached).
+     Skipped if a release for the tag already exists.
 6. **Verify the release** on a clean machine or venv:
    ```bash
    pipx install lifter-cli
