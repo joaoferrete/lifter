@@ -885,7 +885,8 @@ def _show_header() -> None:
 
     line3 = f"[dim]{ai_str}  ·  {sync_str}{recovery_str}[/dim]"
 
-    title = f"[bold cyan]LIFTER  [dim]·[/dim]  {_esc(name)}[/bold cyan]" if name else "[bold cyan]LIFTER[/bold cyan]"
+    brand = f"LIFTER [dim]v{_app_version()}[/dim]"
+    title = f"[bold cyan]{brand}  [dim]·[/dim]  {_esc(name)}[/bold cyan]" if name else f"[bold cyan]{brand}[/bold cyan]"
     console.print(Panel(
         f"{line1}\n{line2}\n{line3}",
         title=title,
@@ -2662,6 +2663,15 @@ def _do_developer_settings() -> None:
             _do_data_reset()
 
 
+def _do_about() -> None:
+    console.clear()
+    console.print(Panel(
+        _("about.body", version=_app_version()),
+        title=_("about.title"), border_style="cyan", padding=(1, 3),
+    ))
+    questionary.press_any_key_to_continue(_("nav.press_any_key")).ask()
+
+
 def _do_settings() -> None:
     while True:
         console.clear()
@@ -2673,6 +2683,8 @@ def _do_settings() -> None:
                 questionary.Choice(_("settings.prefs_choice"),    value="prefs"),
                 questionary.Choice(_("settings.ai_choice"),       value="ai"),
                 questionary.Choice(_("settings.dev_choice"),      value="dev"),
+                questionary.Separator("  ───────────────────────────────────────"),
+                questionary.Choice(_("settings.about_choice"),    value="about"),
                 questionary.Separator("  ───────────────────────────────────────"),
                 questionary.Choice(_("nav.back"),                 value="back"),
             ],
@@ -2691,6 +2703,8 @@ def _do_settings() -> None:
             _do_ai_settings()
         elif action == "dev":
             _do_developer_settings()
+        elif action == "about":
+            _do_about()
 
 
 # ── google fit ────────────────────────────────────────────────────────────────
