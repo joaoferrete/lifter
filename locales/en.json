@@ -282,6 +282,9 @@
   "settings.prefs_choice": "  Preferences  (units, sync, check-in)",
   "settings.ai_choice": "  AI Coach     (context mode, language)",
   "settings.dev_choice": "  Developer    (export data, debug, reset)",
+  "settings.about_choice": "  About        (version, links)",
+  "about.title": "[bold cyan]Lifter[/bold cyan]",
+  "about.body": "Personal Hevy workout client with analytics, goals and an AI coach.\n\nVersion:  [bold]{version}[/bold]\nAuthor:   João Ferrete\nLicense:  AGPL-3.0-or-later\n\nGitHub:   [link=https://github.com/joaoferrete/lifter]github.com/joaoferrete/lifter[/link]\nPyPI:     [link=https://pypi.org/project/lifter-cli/]pypi.org/project/lifter-cli[/link]\nIssues:   [link=https://github.com/joaoferrete/lifter/issues]github.com/joaoferrete/lifter/issues[/link]\n\n[dim]If Lifter helps your training, a star on GitHub helps the project.[/dim]",
 
   "settings.prefs.title": "[bold]Preferences[/bold]",
   "settings.prefs.units_label": "Weight units:          [bold]{units}[/bold]",
