@@ -10,7 +10,7 @@ help:
 	@echo "clean-dist    Remove build artifacts"
 
 install:
-	pipx install --editable .
+	pipx install --force --editable .
 
 uninstall:
 	pipx uninstall lifter-cli

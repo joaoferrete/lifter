@@ -65,6 +65,12 @@ pipx install lifter-cli
 lifter
 ```
 
+Updates are **not** automatic — when a new version comes out, upgrade with:
+
+```bash
+pipx upgrade lifter-cli
+```
+
 > **Why pipx and not plain `pip`?** The package currently ships top-level modules;
 > pipx's isolated virtualenv keeps them from ever clashing with other packages.
 > Also note the PyPI name is **`lifter-cli`** — `pip install lifter` is an
