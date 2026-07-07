@@ -82,3 +82,46 @@ def test_get_provider_api_key_explicit_arg(monkeypatch):
     assert config.get_provider_api_key("claude") == "sk-ant-test"
     assert config.get_provider_api_key() == "gm-test"
     assert config.get_provider_api_key("bedrock") == ""
+
+
+def test_set_env_values_plus_reload_env_updates_keys(tmp_db, monkeypatch, tmp_path):
+    import paths
+    env = tmp_path / ".env"
+    monkeypatch.setattr(paths, "ENV_FILE", env)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+
+    config.set_env_values({"GROQ_API_KEY": "gsk_fresh"})
+    config.reload_env()
+
+    assert config.GROQ_API_KEY == "gsk_fresh"
+    assert config.get_provider_api_key("groq") == "gsk_fresh"
+
+
+def test_reload_env_syncs_provider_module(tmp_db, monkeypatch, tmp_path):
+    import paths
+    import ai.provider as provider_mod
+    env = tmp_path / ".env"
+    monkeypatch.setattr(paths, "ENV_FILE", env)
+    monkeypatch.setattr(provider_mod, "GEMINI_API_KEY", "stale", raising=False)
+
+    config.set_env_values({"GEMINI_API_KEY": "gm_new"})
+    config.reload_env()
+
+    assert provider_mod.GEMINI_API_KEY == "gm_new"
+
+
+def test_profile_prefs_still_win_after_reload(tmp_db, monkeypatch, tmp_path):
+    import paths
+    from db.goals import set_pref
+    env = tmp_path / ".env"
+    monkeypatch.setattr(paths, "ENV_FILE", env)
+    # snapshot env + config attrs so reload_env's os.environ writes are undone
+    monkeypatch.delenv("AI_PROVIDER", raising=False)
+    _snapshot_env(monkeypatch)
+    set_pref("ai_provider", "claude")
+
+    config.set_env_values({"AI_PROVIDER": "groq"})
+    config.reload_env()
+    config.apply_ai_overrides()
+
+    assert config.AI_PROVIDER == "claude"   # profile pref beats fresh env

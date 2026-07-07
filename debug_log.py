@@ -2,8 +2,9 @@
 from datetime import datetime
 from pathlib import Path
 
-_PROJECT_DIR = Path(__file__).resolve().parent
-LOGS_DIR = _PROJECT_DIR / "logs"
+import paths
+
+LOGS_DIR = paths.LOGS_DIR
 RETENTION_MAX_FILES = 14
 
 _enabled: bool = False
@@ -49,7 +50,7 @@ def log(category: str, msg: str, **kv) -> None:
     if not _enabled:
         return
     try:
-        LOGS_DIR.mkdir(exist_ok=True)
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         extras = "  " + "  ".join(f"{k}={v}" for k, v in kv.items()) if kv else ""
         line = f"{timestamp} [{category:<7}] {msg}{extras}\n"

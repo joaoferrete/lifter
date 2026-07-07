@@ -67,17 +67,22 @@ lifter/
 │   ├── coach.py         Coaching report (with scores + distribution), chat loop, goal tools, memory extraction
 │   └── sanitize.py      Input sanitization and prompt-injection defence
 ├── cli.py               Interactive menu (questionary + Rich)
-├── config.py            .env loader
+├── config.py            .env loader, runtime overrides, .env writer
+├── paths.py             XDG path resolution + legacy-layout migration
 ├── profile_mgr.py       Multi-profile management (create, activate, switch, delete)
 ├── debug_log.py         Structured debug logging (toggled via Settings → Developer)
 ├── i18n.py              Translation layer (reads locales/*.json)
-├── profiles/            Per-profile data directories (gitignored)
-│   └── {slug}/
-│       ├── hevy.db          Local SQLite database
-│       ├── fit_token.json   Google OAuth token (created automatically)
-│       └── profile.json     Profile name and Hevy API key
-└── fit_credentials.json Google OAuth credentials (you create this)
+└── locales/             UI translations (shipped in the wheel as package data)
 ```
+
+User data does NOT live in the repo — it resolves via `paths.py` (XDG dirs, or
+`LIFTER_HOME` to force a single directory):
+
+| Location | Contents |
+|---|---|
+| `~/.local/share/lifter/` | `profiles.json` + `profiles/{slug}/` (hevy.db, profile.json, fit_token.json, exports/) |
+| `~/.config/lifter/` | `.env` (API keys), `fit_credentials.json` |
+| `~/.local/state/lifter/` | `logs/`, chat history |
 
 ## Database tables
 
@@ -185,6 +190,12 @@ When you open a PR on GitHub, the description is pre-filled with this template:
 ```
 
 The template is stored at [`.github/pull_request_template.md`](.github/pull_request_template.md) — GitHub loads it automatically for every new PR.
+
+## Releases
+
+Publishing to PyPI (distribution name `lifter-cli`) is automated via GitHub
+Actions and Trusted Publishing — see [PUBLISHING.md](PUBLISHING.md) for the
+one-time setup and the tag-based release flow.
 
 ## What we accept
 

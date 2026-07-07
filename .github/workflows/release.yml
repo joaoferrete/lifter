@@ -1,0 +1,101 @@
+name: Release
+
+# Tag push (v*) publishes to PyPI; manual dispatch publishes to TestPyPI.
+# Both use PyPI Trusted Publishing (OIDC) — no API tokens are stored in CI.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: Run tests
+        env:
+          HEVY_API_KEY: "test-key"
+          GEMINI_API_KEY: "test-key"
+          ANTHROPIC_API_KEY: "test-key"
+          AI_PROVIDER: "gemini"
+          DB_PATH: "/tmp/test-lifter.db"
+        run: pytest tests/ -v
+
+  build:
+    name: Build distributions
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build twine
+      - name: Check tag matches pyproject version
+        if: github.ref_type == 'tag'
+        run: |
+          PKG_VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "Tag $TAG_VERSION does not match pyproject version $PKG_VERSION"
+            exit 1
+          fi
+      - run: python -m build
+      - name: Verify wheel contains locales
+        run: |
+          unzip -l dist/*.whl | grep -q "locales/en.json"
+          unzip -l dist/*.whl | grep -q "locales/pt_BR.json"
+      - name: Verify sdist has no sensitive files
+        run: |
+          if tar tzf dist/*.tar.gz | grep -E "\.env$|\.db$|fit_credentials|fit_token"; then
+            echo "Sensitive files leaked into the sdist"
+            exit 1
+          fi
+      - run: twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-pypi:
+    name: Publish to PyPI
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # OIDC Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/

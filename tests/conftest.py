@@ -1,9 +1,15 @@
 """Shared test fixtures — isolate every test to its own in-memory SQLite database."""
 import importlib
+import os
 import sqlite3
+import tempfile
 from pathlib import Path
 
 import pytest
+
+# Sandbox all writable paths (paths.py module constants) before any project
+# module is imported — keeps the suite away from the user's real XDG dirs.
+os.environ.setdefault("LIFTER_HOME", tempfile.mkdtemp(prefix="lifter-tests-"))
 
 
 @pytest.fixture

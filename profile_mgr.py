@@ -5,10 +5,10 @@ import shutil
 from pathlib import Path
 
 import config
+import paths
 
-_PROJECT_DIR = Path(__file__).resolve().parent
-PROFILES_DIR  = _PROJECT_DIR / "profiles"
-PROFILES_FILE = _PROJECT_DIR / "profiles.json"
+PROFILES_DIR  = paths.PROFILES_DIR
+PROFILES_FILE = paths.PROFILES_FILE
 
 
 def _slug(name: str) -> str:
@@ -26,6 +26,7 @@ def _read() -> dict:
 
 
 def _write(data: dict) -> None:
+    PROFILES_FILE.parent.mkdir(parents=True, exist_ok=True)
     PROFILES_FILE.write_text(json.dumps(data, indent=2))
 
 

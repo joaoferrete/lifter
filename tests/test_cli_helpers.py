@@ -199,3 +199,21 @@ def test_sets_by_group_no_other_when_all_muscles_known(tmp_db):
     seed_workout(tmp_db, "sg-noother")
     groups = _sets_by_group(4)
     assert "Other" not in groups
+
+
+# ── --version flag ────────────────────────────────────────────────────────────
+
+def test_version_flag_prints_and_exits_early(monkeypatch, capsys):
+    import re
+    import cli
+    monkeypatch.setattr("sys.argv", ["lifter", "--version"])
+    # init_db raising proves main() returned before any real startup work
+    monkeypatch.setattr(cli, "init_db", lambda: (_ for _ in ()).throw(AssertionError("should not init")))
+    cli.main()
+    out = capsys.readouterr().out
+    assert re.match(r"lifter (\d+\.\d+\.\d+.*|dev)\n$", out)
+
+
+def test_app_version_nonempty():
+    import cli
+    assert cli._app_version()

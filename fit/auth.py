@@ -4,6 +4,7 @@ import stat
 from pathlib import Path
 
 import config
+import paths
 
 SCOPES = [
     "https://www.googleapis.com/auth/fitness.activity.read",
@@ -12,7 +13,15 @@ SCOPES = [
     "https://www.googleapis.com/auth/fitness.body.read",
 ]
 
-CREDENTIALS_FILE = Path(os.environ.get("GOOGLE_CREDENTIALS_FILE", Path(__file__).resolve().parent.parent / "fit_credentials.json"))
+
+def credentials_file() -> Path:
+    """OAuth client-secrets location, resolved at call time so a file copied
+    in via the in-app setup is picked up without restarting."""
+    raw = os.environ.get("GOOGLE_CREDENTIALS_FILE", "")
+    if raw:
+        p = Path(raw).expanduser()
+        return p if p.is_absolute() else paths.CONFIG_DIR / p
+    return paths.FIT_CREDENTIALS_FILE
 
 
 def _token_file() -> Path:
@@ -42,13 +51,14 @@ def get_credentials():
             _session.timeout = 20
             creds.refresh(Request(session=_session))
         else:
-            if not CREDENTIALS_FILE.exists():
+            creds_file = credentials_file()
+            if not creds_file.exists():
                 raise FileNotFoundError(
-                    f"Google OAuth credentials file not found at '{CREDENTIALS_FILE}'.\n"
+                    f"Google OAuth credentials file not found at '{creds_file}'.\n"
                     "Follow the setup instructions in the menu to create one."
                 )
             from google_auth_oauthlib.flow import InstalledAppFlow
-            flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_FILE), SCOPES)
+            flow = InstalledAppFlow.from_client_secrets_file(str(creds_file), SCOPES)
             creds = flow.run_local_server(port=0, open_browser=True)
 
         _write_token(creds)
