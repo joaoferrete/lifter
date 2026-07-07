@@ -194,7 +194,7 @@ The template is stored at [`.github/pull_request_template.md`](.github/pull_requ
 ## Releases
 
 Publishing to PyPI (distribution name `lifter-cli`) is automated via GitHub
-Actions and Trusted Publishing — see [PUBLISHING.md](PUBLISHING.md) for the
+Actions and Trusted Publishing — see [docs/PUBLISHING.md](docs/PUBLISHING.md) for the
 one-time setup and the tag-based release flow.
 
 ## What we accept
