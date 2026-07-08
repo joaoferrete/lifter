@@ -42,6 +42,11 @@ _PROVIDER_SYNC_NAMES: tuple[str, ...] = (
 )
 
 
+# Set by profile_mgr.activate_profile(). Wins over the env-derived DB_PATH so
+# reload_env() can't repoint the app at the default database mid-session.
+PROFILE_DB_PATH: Path | None = None
+
+
 def _resolve_db_path(raw: str | None) -> Path:
     if raw and Path(raw).is_absolute():
         return Path(raw)
@@ -57,7 +62,7 @@ def _load_globals() -> None:
 
     HEVY_API_KEY = os.environ.get("HEVY_API_KEY", "")
     DEFAULT_LANGUAGE = os.environ.get("DEFAULT_LANGUAGE", "en")
-    DB_PATH = _resolve_db_path(os.environ.get("DB_PATH"))
+    DB_PATH = PROFILE_DB_PATH or _resolve_db_path(os.environ.get("DB_PATH"))
 
     AI_PROVIDER = os.environ.get("AI_PROVIDER", "gemini").lower()
     # gemini | claude | openrouter | groq | github | bedrock

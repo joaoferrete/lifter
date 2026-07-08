@@ -1987,10 +1987,14 @@ def _do_data_reset():
                 fit_disconnect()
             except Exception:
                 pass
-            try:
-                os.remove(DB_PATH)
-            except FileNotFoundError:
-                pass
+            # Remove the WAL/SHM sidecars too — leftover WAL pages still hold
+            # wiped data and could be replayed into the recreated database.
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.remove(f"{DB_PATH}{suffix}")
+                except FileNotFoundError:
+                    pass
+            init_db()   # callers up the menu chain read prefs immediately
 
             from render_cache import invalidate
             invalidate()
