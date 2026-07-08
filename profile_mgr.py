@@ -114,7 +114,8 @@ def activate_profile(slug: str) -> None:
     """Point config globals at this profile's paths and API key."""
     profile_dir = PROFILES_DIR / slug
     profile_dir.mkdir(parents=True, exist_ok=True)
-    config.DB_PATH = profile_dir / "hevy.db"
+    config.PROFILE_DB_PATH = profile_dir / "hevy.db"
+    config.DB_PATH = config.PROFILE_DB_PATH
 
     cfg_file = profile_dir / "profile.json"
     if cfg_file.exists():
