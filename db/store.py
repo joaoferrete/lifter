@@ -1,5 +1,7 @@
+import contextlib
 import json
 import sqlite3
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -23,8 +25,30 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
 _conn = connect
 
 
+@contextlib.contextmanager
+def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+    """Commit/roll back AND close the connection on exit.
+
+    sqlite3's own context manager only commits or rolls back — it leaves the
+    connection open, leaking one handle per call. Wrap every connection in
+    this. Modules that own a monkeypatchable `_conn` factory use it as
+    `with transaction(_conn()) as conn:` so the factory stays patchable."""
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
+@contextlib.contextmanager
+def open_conn(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
+    """Open a connection via this module's `_conn` factory and always close it."""
+    with transaction(_conn(db_path)) as conn:
+        yield conn
+
+
 def init_db(db_path: Path | None = None) -> None:
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS workouts (
                 id          TEXT PRIMARY KEY,
@@ -181,7 +205,7 @@ def init_db(db_path: Path | None = None) -> None:
 
 
 def upsert_workout(workout: dict, db_path: Path | None = None) -> None:
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         conn.execute(
             """INSERT INTO workouts (id, title, description, routine_id, start_time, end_time, updated_at, created_at)
                VALUES (:id, :title, :description, :routine_id, :start_time, :end_time, :updated_at, :created_at)
@@ -240,12 +264,12 @@ def upsert_workout(workout: dict, db_path: Path | None = None) -> None:
 
 
 def delete_workout(workout_id: str, db_path: Path | None = None) -> None:
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         conn.execute("DELETE FROM workouts WHERE id=?", (workout_id,))
 
 
 def upsert_exercise_template(template: dict, db_path: Path | None = None) -> None:
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         conn.execute(
             """INSERT INTO exercise_templates
                (id, title, type, primary_muscle_group, secondary_muscle_groups, is_custom)
@@ -267,7 +291,7 @@ def upsert_exercise_template(template: dict, db_path: Path | None = None) -> Non
 
 
 def upsert_body_measurement(m: dict, db_path: Path | None = None) -> None:
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         conn.execute(
             """INSERT INTO body_measurements
                (date, weight_kg, lean_mass_kg, fat_percent,
@@ -315,13 +339,13 @@ def upsert_body_measurement(m: dict, db_path: Path | None = None) -> None:
 
 
 def get_sync_state(key: str, db_path: Path | None = None) -> str | None:
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         row = conn.execute("SELECT value FROM sync_state WHERE key=?", (key,)).fetchone()
         return row["value"] if row else None
 
 
 def set_sync_state(key: str, value: str, db_path: Path | None = None) -> None:
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         conn.execute(
             "INSERT INTO sync_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (key, value),
@@ -355,13 +379,13 @@ def get_sync_result(key: str, db_path: Path | None = None) -> dict | None:
 
 
 def query(sql: str, params: tuple = (), db_path: Path | None = None) -> list[dict]:
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
 
 def upsert_routine(routine: dict, db_path: Path | None = None) -> None:
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         conn.execute(
             """INSERT INTO routines (id, title, notes, folder_id, updated_at, created_at)
                VALUES (:id, :title, :notes, :folder_id, :updated_at, :created_at)
@@ -414,13 +438,13 @@ def upsert_routine(routine: dict, db_path: Path | None = None) -> None:
 
 
 def delete_routine(routine_id: str, db_path: Path | None = None) -> None:
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         conn.execute("DELETE FROM routines WHERE id=?", (routine_id,))
 
 
 def delete_stale_routines(keep_ids: set, db_path: Path | None = None) -> int:
     """Delete routines whose IDs are not in keep_ids. Returns count deleted."""
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         local_ids = {r[0] for r in conn.execute("SELECT id FROM routines").fetchall()}
         stale = local_ids - {str(i) for i in keep_ids}
         for sid in stale:
@@ -430,7 +454,7 @@ def delete_stale_routines(keep_ids: set, db_path: Path | None = None) -> int:
 
 def get_routines_with_exercises(db_path: Path | None = None) -> list[dict]:
     """Return all routines with their exercises and sets via a single JOIN query."""
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         rows = conn.execute(
             """SELECT r.id, r.title, r.notes,
                       re.id AS re_id, re.idx AS re_idx,

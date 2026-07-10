@@ -65,20 +65,20 @@ def enable(on: bool) -> None:
     _enabled = on
 
 
-def log(category: str, msg: str, **kv) -> None:
+def log(category: str, msg: str, **kv: object) -> None:
     """Append one structured line to today's log file if enabled. Never raises."""
     if not _enabled:
         return
-    _write_line(category, msg, **kv)
+    _write_line(category, msg, kv)
 
 
-def error(category: str, msg: str, exc: BaseException | None = None, **kv) -> None:
+def error(category: str, msg: str, exc: BaseException | None = None, **kv: object) -> None:
     """Append an error line (with full traceback when `exc` is given).
 
     Unlike log(), always writes regardless of the debug_logging pref — a crash
     record is the one thing worth having after the fact. Never raises.
     """
-    _write_line(category, msg, _traceback_of(exc), **kv)
+    _write_line(category, msg, kv, extra_block=_traceback_of(exc))
 
 
 def _traceback_of(exc: BaseException | None) -> str:
@@ -93,7 +93,7 @@ def _traceback_of(exc: BaseException | None) -> str:
         return ""
 
 
-def _write_line(category: str, msg: str, extra_block: str = "", **kv) -> None:
+def _write_line(category: str, msg: str, kv: dict[str, object] | None = None, extra_block: str = "") -> None:
     try:
         target_dir = logs_dir()
         target_dir.mkdir(parents=True, exist_ok=True)

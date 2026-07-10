@@ -149,7 +149,8 @@ def test_should_auto_report_disabled_by_pref(tmp_db):
 
 
 def test_compute_progress_frequency_goal(tmp_db):
-    from db.goals import compute_goal_progress, save_goal
+    from analytics.goal_progress import compute_goal_progress
+    from db.goals import save_goal
 
     seed_exercise_template(tmp_db)
     # Seed 3 workouts in the last 4 weeks (= 3 sessions)
@@ -165,7 +166,8 @@ def test_compute_progress_frequency_goal(tmp_db):
 
 
 def test_compute_progress_lift_pr_goal(tmp_db):
-    from db.goals import compute_goal_progress, save_goal
+    from analytics.goal_progress import compute_goal_progress
+    from db.goals import save_goal
 
     seed_exercise_template(tmp_db, template_id=TEMPLATE_ID)
     seed_workout(

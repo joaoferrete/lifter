@@ -15,6 +15,7 @@ from rich.table import Table
 
 import config
 from analytics.frequency import muscle_group_frequency, workout_frequency
+from analytics.goal_progress import compute_goal_progress
 from analytics.progression import detect_plateaus, exercise_progression, top_progressions
 from analytics.records import all_time_records, body_measurement_trend, recent_prs
 from analytics.volume import muscle_group_summary, sets_per_muscle_per_week, weekly_volume
@@ -24,7 +25,6 @@ from analytics.volume import muscle_group_summary, sets_per_muscle_per_week, wee
 from config import get_provider_api_key
 from db.goals import (
     clear_goals,
-    compute_goal_progress,
     get_goals,
     get_pref,
     mark_goals_asked,
@@ -357,7 +357,8 @@ def _render_snapshot_panel() -> None:
         lines.append("")
 
     # Body: latest weight + BMI (when height is known)
-    from analytics.records import compute_bmi, get_height_cm
+    from analytics.records import compute_bmi
+    from db.goals import get_height_cm
 
     body = body_measurement_trend(8)
     if body.get("weight_kg"):
@@ -372,7 +373,7 @@ def _render_snapshot_panel() -> None:
         lines.append("")
 
     # Compact goal progress
-    from db.goals import compute_goal_progress
+    from analytics.goal_progress import compute_goal_progress
 
     progress = compute_goal_progress()
     numeric = [g for g in progress if g.get("pct") is not None and not g["achieved"]]
@@ -1058,7 +1059,8 @@ def _do_stats():
             _fmt_weight(wt_change) if wt_change not in (None, "—") else "—",
         )
         bt.add_row(_("stats.row_body_fat"), f"{body.get('fat_percent')}%", f"{body.get('fat_change_pct', '—')}%")
-        from analytics.records import compute_bmi, get_height_cm
+        from analytics.records import compute_bmi
+        from db.goals import get_height_cm
 
         bmi = compute_bmi(body.get("weight_kg"), get_height_cm())
         if bmi is not None:
@@ -1150,7 +1152,8 @@ def _prompt_and_save_height() -> bool:
 
 def _do_body_entry() -> None:
     """Manually record current weight / body-fat and show BMI. Main-menu action."""
-    from analytics.records import compute_bmi, get_height_cm
+    from analytics.records import compute_bmi
+    from db.goals import get_height_cm
 
     console.clear()
 
@@ -1208,7 +1211,7 @@ def _onboard_body_metrics() -> None:
 
 def _check_body_checkin() -> None:
     """Ask for current weight when the latest reading is stale; ask height once if unset."""
-    from analytics.records import get_height_cm
+    from db.goals import get_height_cm
 
     try:
         cadence = int(get_pref("goals_checkin_days") or 7)
@@ -2317,7 +2320,7 @@ def _do_profile_settings() -> None:
                 hevy_key = _json.loads(cfg_file.read_text()).get("hevy_api_key", "")
     masked_key = (hevy_key[:4] + "…" + hevy_key[-4:]) if len(hevy_key) > 8 else ("set" if hevy_key else "not set")
 
-    from analytics.records import get_height_cm
+    from db.goals import get_height_cm
 
     height_cm = get_height_cm()
     height_line = _("profile.height_label", height=_fmt_height(height_cm)) if height_cm else _("profile.height_notset")

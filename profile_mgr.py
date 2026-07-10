@@ -161,8 +161,12 @@ def activate_profile(slug: str) -> None:
             key = json.loads(cfg_file.read_text()).get("hevy_api_key", "")
             if key:
                 config.HEVY_API_KEY = key
-        except Exception:
-            pass
+        except Exception as e:
+            # A corrupt profile.json silently falls back to the .env key,
+            # but leave a trail — otherwise "wrong account synced" is undebuggable.
+            from debug_log import error
+
+            error("PROFILE", f"could not read {cfg_file.name} for profile {slug}", exc=e)
     try:
         from debug_log import log
 

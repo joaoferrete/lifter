@@ -273,14 +273,17 @@ Dependencies point downward only:
 ```
 cli / ui / commands   →   ai, analytics, hevy, fit, db, config, i18n
 ai                    →   analytics, db, hevy, fit, config
-analytics             →   db (store only), config
+analytics             →   db, config
 hevy / fit            →   db (store only), config
-db                    →   config, paths, debug_log
+db                    →   config, paths
+(infra utils — usable from any layer: debug_log, render_cache)
 ```
 
-- `db/` must not import `ai/`, `analytics/`, or `render_cache` — prompt
-  formatting and progress math live above the storage layer.
-- `analytics/` must not import `db.goals` — pass preferences in as parameters.
+- `db/` must not import `ai/` or `analytics/` — prompt formatting lives in
+  `ai/context.py`, goal-progress math in `analytics/goal_progress.py`.
+- `analytics/` modules must not read user preferences directly (pass values in
+  as parameters); the exception is `analytics/goal_progress.py`, the goals
+  domain service, which uses the `db.goals` CRUD.
 - UI concerns (Rich markup, questionary prompts, i18n strings) belong in the
   CLI layer, never in `db/`, `analytics/`, `hevy/`, or `fit/`.
 

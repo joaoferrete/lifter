@@ -33,8 +33,7 @@ def test_bmi_category_boundaries():
 
 
 def test_get_height_cm_roundtrip(tmp_db):
-    from analytics.records import get_height_cm
-    from db.goals import set_pref
+    from db.goals import get_height_cm, set_pref
 
     assert get_height_cm() is None
     set_pref("height_cm", "178")

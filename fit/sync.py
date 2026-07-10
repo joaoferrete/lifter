@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 
 from db.store import connect as _conn
+from db.store import transaction as _tx
 from fit.client import FitClient
 
 
@@ -152,7 +153,7 @@ def _sync_daily(
         all_buckets.extend(chunk_data.get("bucket", []))
         chunk_start = chunk_end
 
-    with _conn() as conn:
+    with _tx(_conn()) as conn:
         for bucket in all_buckets:
             date = _date_of_ms(bucket["startTimeMillis"])
             row: dict = {
@@ -234,7 +235,7 @@ def _sync_sleep(
 ) -> None:
     sessions = client.get_sleep_sessions(_iso(start), _iso(end))
 
-    with _conn() as conn:
+    with _tx(_conn()) as conn:
         for s in sessions:
             start_ms = int(s["startTimeMillis"])
             end_ms = int(s["endTimeMillis"])

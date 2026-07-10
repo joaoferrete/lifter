@@ -136,3 +136,9 @@ module = [
     "botocore.*",
 ]
 ignore_missing_imports = true
+
+# Strictness ratchet: modules refactored to full typing stay fully typed.
+# New modules are born strict — add them here in the same PR.
+[[tool.mypy.overrides]]
+module = ["db.*", "paths", "config", "render_cache", "debug_log", "i18n"]
+disallow_untyped_defs = true

@@ -41,13 +41,14 @@ def test_clear_memories(tmp_db):
 
 
 def test_memories_as_context_empty(tmp_db):
-    from db.memories import memories_as_context
+    from ai.context import memories_as_context
 
     assert memories_as_context() == ""
 
 
 def test_memories_as_context_formats_correctly(tmp_db):
-    from db.memories import memories_as_context, save_memory
+    from ai.context import memories_as_context
+    from db.memories import save_memory
 
     save_memory("Left knee pain when squatting deep.", category="injury")
     ctx = memories_as_context()
@@ -125,7 +126,8 @@ def test_get_all_memories_newest_first(tmp_db):
 
 
 def test_memories_as_context_not_clipped_at_500(tmp_db):
-    from db.memories import memories_as_context, save_memory
+    from ai.context import memories_as_context
+    from db.memories import save_memory
 
     detailed = (
         "User has left shoulder impingement since 2026-06-28 and must avoid overhead "

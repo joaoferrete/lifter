@@ -12,13 +12,14 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 import paths
+from ai.context import goals_context_for_ai, memories_as_context
 from ai.provider import complete_json, create_chat_session, provider_label, stream_complete
 from ai.sanitize import ANTI_INJECTION_PREAMBLE, sanitize_for_prompt
 from analytics.frequency import muscle_group_frequency, workout_frequency
 from analytics.progression import detect_plateaus, top_progressions
 from analytics.records import body_measurement_trend, recent_prs
 from analytics.volume import muscle_group_summary, sets_per_muscle_per_week
-from db.goals import get_goals, get_pref, goals_context_for_ai
+from db.goals import get_goals, get_pref
 from db.store import get_routines_with_exercises, query
 from i18n import _
 
@@ -193,7 +194,8 @@ def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = T
             f"  - Weight: {body.get('weight_kg')} kg (change: {body.get('weight_change_kg', 'N/A')} kg)",
             f"  - Body fat: {body.get('fat_percent')}% (change: {body.get('fat_change_pct', 'N/A')}%)",
         ]
-        from analytics.records import compute_bmi, get_height_cm
+        from analytics.records import compute_bmi
+        from db.goals import get_height_cm
 
         _height_cm = get_height_cm()
         _bmi = compute_bmi(body.get("weight_kg"), _height_cm)
@@ -243,8 +245,6 @@ def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = T
 
     # Memories from past conversations
     try:
-        from db.memories import memories_as_context
-
         mem_ctx = memories_as_context()
         if mem_ctx:
             lines += ["", mem_ctx]

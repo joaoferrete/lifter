@@ -63,7 +63,7 @@ class _Translator:
         self._strings = _load(resolved)
         self._fallback = _load(_DEFAULT_LANG) if resolved != _DEFAULT_LANG else {}
 
-    def translate(self, _key: str, **kwargs) -> str:
+    def translate(self, _key: str, **kwargs: object) -> str:
         text = self._strings.get(_key) or self._fallback.get(_key)
         if text is None:
             return _key

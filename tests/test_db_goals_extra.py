@@ -6,7 +6,8 @@ from tests.conftest import seed_exercise_template, seed_workout
 
 
 def test_weight_loss_zero_progress_at_start(tmp_db):
-    from db.goals import compute_goal_progress, save_goal
+    from analytics.goal_progress import compute_goal_progress
+    from db.goals import save_goal
     from db.store import upsert_body_measurement
 
     upsert_body_measurement({"date": "2024-01-01", "weight_kg": 85.0, "fat_percent": None}, db_path=tmp_db)
@@ -19,7 +20,8 @@ def test_weight_loss_zero_progress_at_start(tmp_db):
 
 
 def test_weight_loss_partial_progress(tmp_db):
-    from db.goals import compute_goal_progress, save_goal
+    from analytics.goal_progress import compute_goal_progress
+    from db.goals import save_goal
     from db.store import upsert_body_measurement
 
     # start=90, target=80, current=85 → 50 %
@@ -29,7 +31,8 @@ def test_weight_loss_partial_progress(tmp_db):
 
 
 def test_weight_loss_achieved_removes_from_active(tmp_db):
-    from db.goals import compute_goal_progress, get_goals, save_goal
+    from analytics.goal_progress import compute_goal_progress
+    from db.goals import get_goals, save_goal
     from db.store import upsert_body_measurement
 
     upsert_body_measurement({"date": "2024-01-01", "weight_kg": 79.0, "fat_percent": None}, db_path=tmp_db)
@@ -43,7 +46,8 @@ def test_weight_loss_achieved_removes_from_active(tmp_db):
 
 
 def test_weight_gain_partial_progress(tmp_db):
-    from db.goals import compute_goal_progress, save_goal
+    from analytics.goal_progress import compute_goal_progress
+    from db.goals import save_goal
     from db.store import upsert_body_measurement
 
     # start=70, target=80, current=75 → 50 %
@@ -53,7 +57,8 @@ def test_weight_gain_partial_progress(tmp_db):
 
 
 def test_weight_gain_achieved(tmp_db):
-    from db.goals import compute_goal_progress, get_goals, save_goal
+    from analytics.goal_progress import compute_goal_progress
+    from db.goals import get_goals, save_goal
     from db.store import upsert_body_measurement
 
     upsert_body_measurement({"date": "2024-01-01", "weight_kg": 82.0, "fat_percent": None}, db_path=tmp_db)
@@ -66,7 +71,8 @@ def test_weight_gain_achieved(tmp_db):
 
 
 def test_body_fat_partial_progress(tmp_db):
-    from db.goals import compute_goal_progress, save_goal
+    from analytics.goal_progress import compute_goal_progress
+    from db.goals import save_goal
     from db.store import upsert_body_measurement
 
     # start=22, target=15, current=18.5 → 50 %
@@ -79,7 +85,8 @@ def test_body_fat_partial_progress(tmp_db):
 
 
 def test_body_fat_achieved(tmp_db):
-    from db.goals import compute_goal_progress, get_goals, save_goal
+    from analytics.goal_progress import compute_goal_progress
+    from db.goals import get_goals, save_goal
     from db.store import upsert_body_measurement
 
     upsert_body_measurement({"date": "2024-01-01", "weight_kg": 80.0, "fat_percent": 14.0}, db_path=tmp_db)
@@ -92,7 +99,8 @@ def test_body_fat_achieved(tmp_db):
 
 
 def test_volume_goal_tracks_sets_per_week(tmp_db):
-    from db.goals import compute_goal_progress, save_goal
+    from analytics.goal_progress import compute_goal_progress
+    from db.goals import save_goal
 
     seed_exercise_template(tmp_db, muscle="chest")
     for i in range(2):
@@ -116,7 +124,8 @@ def test_volume_goal_tracks_sets_per_week(tmp_db):
 
 
 def test_custom_goal_has_no_numeric_progress(tmp_db):
-    from db.goals import compute_goal_progress, save_goal
+    from analytics.goal_progress import compute_goal_progress
+    from db.goals import save_goal
 
     save_goal(type="custom", description="Sleep 8h every night")
     p = compute_goal_progress()[0]
@@ -153,7 +162,8 @@ def test_get_all_goals_ordered_by_id_desc(tmp_db):
 
 def test_weight_loss_negative_progress_when_worse(tmp_db):
     """Gaining weight on a weight-loss goal yields negative progress (not floored at 0)."""
-    from db.goals import compute_goal_progress, save_goal
+    from analytics.goal_progress import compute_goal_progress
+    from db.goals import save_goal
     from db.store import upsert_body_measurement
 
     # start=80, target=70, current=82 → (80-82)/(80-70) = -20 %
@@ -167,7 +177,8 @@ def test_weight_loss_negative_progress_when_worse(tmp_db):
 
 
 def test_body_fat_negative_progress_when_worse(tmp_db):
-    from db.goals import compute_goal_progress, save_goal
+    from analytics.goal_progress import compute_goal_progress
+    from db.goals import save_goal
     from db.store import upsert_body_measurement
 
     # start=20, target=15, current=22 → (20-22)/(20-15) = -40 %
@@ -181,7 +192,8 @@ def test_body_fat_negative_progress_when_worse(tmp_db):
 def test_missing_start_value_is_backfilled(tmp_db):
     """A goal created without start_value (e.g. via the AI tool) gets its baseline seeded
     from the current measurement so progress isn't stuck at 0 with start==current forever."""
-    from db.goals import compute_goal_progress, get_goals, save_goal
+    from analytics.goal_progress import compute_goal_progress
+    from db.goals import get_goals, save_goal
     from db.store import upsert_body_measurement
 
     upsert_body_measurement({"date": "2024-01-01", "weight_kg": 75.0}, db_path=tmp_db)

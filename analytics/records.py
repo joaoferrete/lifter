@@ -142,18 +142,7 @@ def body_measurement_trend(weeks: int = 12) -> dict:
     return result
 
 
-# ── height & BMI ────────────────────────────────────────────────────────────
-
-
-def get_height_cm() -> float | None:
-    """The athlete's height in cm, stored per-profile in preferences."""
-    from db.goals import get_pref
-
-    raw = get_pref("height_cm")
-    try:
-        return float(raw) if raw else None
-    except (TypeError, ValueError):
-        return None
+# ── BMI ─────────────────────────────────────────────────────────────────────
 
 
 def compute_bmi(weight_kg, height_cm) -> float | None:
