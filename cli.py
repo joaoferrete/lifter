@@ -8,7 +8,6 @@ from pathlib import Path
 
 import questionary
 from rich import box
-from rich.console import Console
 from rich.markup import escape as _esc
 from rich.panel import Panel
 from rich.table import Table
@@ -39,22 +38,46 @@ from db.store import init_db, query
 from hevy.client import HevyClient
 from hevy.sync import full_sync, incremental_sync
 from i18n import _
-
-console = Console()
-
-STYLE = questionary.Style(
-    [
-        ("qmark", "fg:#00d7ff bold"),
-        ("question", "bold"),
-        ("answer", "fg:#00d7ff bold"),
-        ("pointer", "fg:#00d7ff bold"),
-        ("highlighted", "fg:#00d7ff bold"),
-        ("selected", "fg:#00d7ff"),
-        ("separator", "fg:#555555"),
-        ("instruction", "fg:#555555 italic"),
-        ("checkbox", "fg:#00d7ff"),
-    ]
+from ui.console import STYLE, console
+from ui.console import score_color as _score_color
+from ui.format import (
+    fmt_duration as _fmt_duration,
 )
+from ui.format import (
+    fmt_height as _fmt_height,
+)
+from ui.format import (
+    fmt_weight as _fmt_weight,
+)
+from ui.format import (
+    get_int_pref,
+)
+from ui.format import (
+    get_units as _get_units,
+)
+from ui.format import (
+    lbs_to_kg as _lbs_to_kg,
+)
+from ui.format import (
+    parse_height_to_cm as _parse_height_to_cm,
+)
+from ui.format import (
+    time_ago as _time_ago,
+)
+from ui.prompts import (
+    confirm_destructive,
+    number_validator,
+)
+from ui.prompts import (
+    day_choices as _day_choices,
+)
+from ui.prompts import (
+    is_number as _is_number_str,
+)
+from ui.prompts import (
+    week_choices as _week_choices,
+)
+from ui.widgets import score_bar as _fmt_score_bar
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -78,21 +101,6 @@ def _dlog(category: str, msg: str, **kv) -> None:
         pass
 
 
-def _time_ago(iso_str: str) -> str:
-    try:
-        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
-        secs = int((datetime.now(UTC) - dt).total_seconds())
-        if secs < 60:
-            return "just now"
-        if secs < 3600:
-            return f"{secs // 60}m ago"
-        if secs < 86400:
-            return f"{secs // 3600}h ago"
-        return f"{secs // 86400}d ago"
-    except Exception:
-        return "unknown"
-
-
 def _sync_status_str(key: str) -> str:
     """One-line summary of the last recorded sync outcome for the dev panel."""
     from db.store import get_sync_result
@@ -105,15 +113,6 @@ def _sync_status_str(key: str) -> str:
     if result.get("ok"):
         return _("settings.dev.sync_ok", ago=ago, detail=detail)
     return _("settings.dev.sync_failed", ago=ago, detail=detail)
-
-
-def _fmt_duration(start_iso: str, end_iso: str) -> str:
-    try:
-        s = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
-        e = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
-        return f"{int((e - s).total_seconds() / 60)} min"
-    except Exception:
-        return ""
 
 
 def _require_hevy() -> HevyClient | None:
@@ -174,89 +173,22 @@ NO_PAUSE = object()
 
 
 def _pause():
-    console.print()
-    questionary.press_any_key_to_continue(_("nav.press_any_key")).ask()
+    from ui.prompts import pause
+
+    pause()
 
 
 # ── unit helpers ──────────────────────────────────────────────────────────────
 
 
-def _get_units() -> str:
-    return get_pref("units") or "kg"
-
-
 def _report_weeks() -> int:
     """Weeks of history for coaching reports (pref `report_weeks`)."""
-    try:
-        weeks = int(get_pref("report_weeks") or 8)
-    except (TypeError, ValueError):
-        return 8
-    return weeks if weeks in (4, 8, 12) else 8
+    return get_int_pref("report_weeks", 8, allowed=(4, 8, 12))
 
 
 def _stale_seconds() -> int:
     """Age after which synced data counts as stale (pref `sync_stale_hours`)."""
-    try:
-        return max(1, int(get_pref("sync_stale_hours") or 24)) * 3600
-    except (TypeError, ValueError):
-        return 86400
-
-
-def _kg_to_lbs(kg: float) -> float:
-    return round(float(kg) * 2.20462, 1)
-
-
-def _lbs_to_kg(lbs: float) -> float:
-    return round(float(lbs) / 2.20462, 2)
-
-
-def _fmt_weight(kg_val) -> str:
-    if kg_val is None:
-        return "—"
-    val = float(kg_val)
-    if _get_units() == "lbs":
-        lbs = _kg_to_lbs(val)
-        return f"{int(lbs) if lbs == int(lbs) else lbs} lbs"
-    return f"{int(val) if val == int(val) else val} kg"
-
-
-def _fmt_height(cm_val) -> str:
-    """Format a height (stored in cm) per the user's unit preference."""
-    if cm_val is None:
-        return "—"
-    cm = float(cm_val)
-    if _get_units() == "lbs":  # imperial → feet'inches"
-        total_in = cm / 2.54
-        feet = int(total_in // 12)
-        inches = round(total_in - feet * 12)
-        if inches == 12:  # rounding spill-over
-            feet += 1
-            inches = 0
-        return f"{feet}'{inches}\""
-    return f"{int(cm) if cm == int(cm) else round(cm, 1)} cm"
-
-
-def _parse_height_to_cm(raw: str) -> float | None:
-    """Parse a height entered as cm (metric) or feet/inches (imperial) into cm.
-
-    Imperial accepts: 5'11, 5'11", 5 11, or a plain number of inches (e.g. 71).
-    Metric accepts a plain number of cm.
-    """
-    s = (raw or "").strip().replace('"', "").replace("”", "").replace("’", "'")
-    if not s:
-        return None
-    try:
-        if _get_units() == "lbs":
-            if "'" in s or " " in s:
-                parts = s.replace("'", " ").split()
-                feet = float(parts[0])
-                inches = float(parts[1]) if len(parts) > 1 and parts[1] else 0.0
-                return round((feet * 12 + inches) * 2.54, 1)
-            # plain number → inches
-            return round(float(s) * 2.54, 1)
-        return round(float(s), 1)  # metric: cm
-    except (ValueError, IndexError):
-        return None
+    return get_int_pref("sync_stale_hours", 24, minimum=1) * 3600
 
 
 # ── score & muscle-distribution helpers ──────────────────────────────────────
@@ -270,16 +202,6 @@ _MUSCLE_GROUPS: dict = {
     "Core": ["abdominals", "core", "obliques"],
     "Cardio": ["cardio", "full_body"],
 }
-
-
-def _week_choices(weeks: list[int]) -> list:
-    """Localized '{n} weeks' choices whose values stay the canonical 'N weeks'
-    string (parsed elsewhere via .split() and stored as a pref)."""
-    return [questionary.Choice(_("time.weeks", n=n), value=f"{n} weeks") for n in weeks]
-
-
-def _day_choices(days: list[int]) -> list:
-    return [questionary.Choice(_("time.days", n=n), value=f"{n} days") for n in days]
 
 
 def _sets_by_group(weeks: int = 4) -> dict:
@@ -304,23 +226,6 @@ def _sets_by_group_uncached(weeks: int = 4) -> dict:
     if other > 0:
         groups["Other"] = other
     return groups
-
-
-def _score_color(score: int) -> str:
-    if score >= 80:
-        return "green"
-    if score >= 60:
-        return "cyan"
-    if score >= 40:
-        return "yellow"
-    return "red"
-
-
-def _fmt_score_bar(label: str, score: int, bar_width: int = 12) -> str:
-    color = _score_color(score)
-    filled = max(1, int(score / 100 * bar_width))
-    bar = f"[{color}]{'█' * filled}[/{color}][dim]{'░' * (bar_width - filled)}[/dim]"
-    return f"[bold]{label:<10}[/bold] {bar}  [{color}][bold]{score:>3}[/bold][/{color}]"
 
 
 def _render_snapshot_panel() -> None:
@@ -446,7 +351,7 @@ def _wizard_lift_prs() -> None:
         target_str = questionary.text(
             _("wizard.lift_target_prompt", units=units, current=current_display),
             style=STYLE,
-            validate=lambda v: (v == "" or v.replace(".", "").isdigit()) or _("validate.enter_number"),
+            validate=lambda v: (v == "" or _is_number_str(v)) or _("validate.enter_number"),
         ).ask()
         if not target_str:
             break
@@ -491,7 +396,7 @@ def _wizard_weight(goal_type: str) -> None:
     target_str = questionary.text(
         _("wizard.weight_target_prompt", units=units, hint=hint),
         style=STYLE,
-        validate=lambda v: v.replace(".", "").isdigit() or _("validate.enter_number"),
+        validate=number_validator(_("validate.enter_number")),
     ).ask()
     if not target_str:
         return
@@ -518,7 +423,7 @@ def _wizard_body_fat() -> None:
     target_str = questionary.text(
         _("wizard.body_fat_prompt", hint=hint),
         style=STYLE,
-        validate=lambda v: v.replace(".", "").isdigit() or _("validate.enter_number"),
+        validate=number_validator(_("validate.enter_number")),
     ).ask()
     if not target_str:
         return
@@ -593,6 +498,8 @@ def run_goals_wizard(is_update: bool = False) -> None:
         ).ask()
         if name:
             set_pref("display_name", name.strip())
+        else:
+            name = _("wizard.name_fallback")  # cancelled prompt must not greet 'None'
 
     greet = _("wizard.greeting_update", name=name) if is_update else _("wizard.greeting_new", name=name)
     console.print(f"\n  [bold cyan]{greet}[/bold cyan]\n")
@@ -697,9 +604,10 @@ def _render_goals_progress() -> None:
             continue
 
         pct = float(pct)
-        filled = max(0, min(22, int(pct / 100 * 22)))
-        bar_color = "green" if pct >= 80 else "yellow" if pct >= 50 else "red"
-        bar = f"[{bar_color}]{'█' * filled}[/{bar_color}][dim]{'░' * (22 - filled)}[/dim]"
+        bar_color = _score_color(max(0, int(pct)))
+        from ui.widgets import bar as _mk_bar
+
+        bar = _mk_bar(max(0.0, pct), 100, 22, bar_color)
 
         current = g.get("current")
         target = g.get("target")
@@ -1058,7 +966,13 @@ def _do_stats():
             _fmt_weight(body.get("weight_kg")),
             _fmt_weight(wt_change) if wt_change not in (None, "—") else "—",
         )
-        bt.add_row(_("stats.row_body_fat"), f"{body.get('fat_percent')}%", f"{body.get('fat_change_pct', '—')}%")
+        fat = body.get("fat_percent")
+        fat_chg = body.get("fat_change_pct")
+        bt.add_row(
+            _("stats.row_body_fat"),
+            f"{fat}%" if fat is not None else "—",
+            f"{fat_chg}%" if fat_chg is not None else "—",
+        )
         from analytics.records import compute_bmi
         from db.goals import get_height_cm
 
@@ -1380,7 +1294,7 @@ def _do_goals():
             _render_goals_progress()
     elif action == "update":
         run_goals_wizard(is_update=True)
-    elif action == "reset" and questionary.confirm(_("goals.clear_confirm"), default=False, style=STYLE).ask():
+    elif action == "reset" and confirm_destructive(_("goals.clear_confirm"), double=True):
         clear_goals()
         _dlog("GOAL", "Goals cleared and wizard restarted")
         run_goals_wizard()
@@ -2073,7 +1987,7 @@ def _do_data_reset():
             return
 
         if action == "memories":
-            if questionary.confirm(_("data_reset.memories_confirm"), default=False, style=STYLE).ask():
+            if confirm_destructive(_("data_reset.memories_confirm"), double=True):
                 from db.memories import clear_memories
 
                 clear_memories()
@@ -2081,7 +1995,7 @@ def _do_data_reset():
                 console.print(_("data_reset.memories_done"))
 
         elif action == "goals":
-            if questionary.confirm(_("data_reset.goals_confirm"), default=False, style=STYLE).ask():
+            if confirm_destructive(_("data_reset.goals_confirm"), double=True):
                 from db.goals import clear_goals
 
                 clear_goals()
@@ -2239,7 +2153,7 @@ def _do_profiles_menu() -> None:
         if action == "switch":
             if len(profiles) <= 1:
                 console.print(_("profiles.only_one"))
-                questionary.press_any_key_to_continue(style=STYLE).ask()
+                questionary.press_any_key_to_continue(_("nav.press_any_key"), style=STYLE).ask()
                 continue
             choices = [
                 questionary.Choice(
@@ -2287,7 +2201,7 @@ def _do_profiles_menu() -> None:
             others = [p for p in profiles if p["slug"] != active_slug]
             if not others:
                 console.print(_("profiles.cannot_delete_only"))
-                questionary.press_any_key_to_continue(style=STYLE).ask()
+                questionary.press_any_key_to_continue(_("nav.press_any_key"), style=STYLE).ask()
                 continue
             choices = [questionary.Choice(f"  {p['name']}", value=p["slug"]) for p in others]
             choices.append(questionary.Separator("  ──────────────────────────────────"))
@@ -2913,9 +2827,7 @@ def _do_developer_settings() -> None:
 
         elif action == "clear_logs":
             log_files = sorted(debug_log.logs_dir().glob("debug-*.log"))
-            if questionary.confirm(
-                _("settings.dev.clear_logs_confirm", count=len(log_files)), default=False, style=STYLE
-            ).ask():
+            if confirm_destructive(_("settings.dev.clear_logs_confirm", count=len(log_files))):
                 for f in log_files:
                     f.unlink(missing_ok=True)
                 _dlog("SETTING", "debug logs cleared", count=len(log_files))
@@ -3063,7 +2975,7 @@ def _do_fit():
             return
         _render_fit_dashboard()
 
-    elif action == "disconnect" and questionary.confirm(_("fit.disconnect_confirm"), default=False, style=STYLE).ask():
+    elif action == "disconnect" and confirm_destructive(_("fit.disconnect_confirm")):
         disconnect()
         _dlog("SETTING", "Google Fit disconnected")
         console.print(_("fit.disconnected"))

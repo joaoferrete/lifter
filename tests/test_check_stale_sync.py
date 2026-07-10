@@ -63,6 +63,7 @@ def _run(
         patch("cli.incremental_sync", side_effect=_fake_incremental),
         patch("fit.sync.sync_fit", side_effect=_fake_sync_fit),
         patch("cli.get_pref", return_value=None),
+        patch("ui.format.get_pref", return_value=None),
         patch("cli.console"),
     ):
         cli._check_stale_sync()
@@ -81,6 +82,7 @@ def test_fresh_hevy_no_prompt():
         patch("config.HEVY_API_KEY", "test-key"),
         patch("fit.auth.is_connected", return_value=False),
         patch("cli.get_pref", return_value=None),
+        patch("ui.format.get_pref", return_value=None),
         patch("questionary.confirm") as mock_confirm,
         patch("cli.console"),
     ):
@@ -131,6 +133,7 @@ def test_hevy_stale_prompts_user():
         patch("questionary.confirm", side_effect=_capture_confirm),
         patch("cli._require_hevy", return_value=None),
         patch("cli.get_pref", return_value=None),
+        patch("ui.format.get_pref", return_value=None),
         patch("cli.console"),
     ):
         cli._check_stale_sync()
@@ -184,6 +187,7 @@ def test_fit_stale_prompts_user():
         patch("questionary.confirm", side_effect=_capture_confirm),
         patch("fit.sync.sync_fit"),
         patch("cli.get_pref", return_value=None),
+        patch("ui.format.get_pref", return_value=None),
         patch("cli.console"),
     ):
         cli._check_stale_sync()
@@ -260,6 +264,7 @@ def test_auto_sync_hevy_syncs_without_prompt():
         patch("config.HEVY_API_KEY", "test-key"),
         patch("fit.auth.is_connected", return_value=False),
         patch("cli.get_pref", side_effect=_get_pref_auto),
+        patch("ui.format.get_pref", side_effect=_get_pref_auto),
         patch("cli._require_hevy", return_value=MagicMock()),
         patch("cli.incremental_sync", side_effect=_fake_incremental),
         patch("questionary.confirm") as mock_confirm,
@@ -289,6 +294,7 @@ def test_auto_sync_fit_syncs_without_prompt():
         patch("config.HEVY_API_KEY", "test-key"),
         patch("fit.auth.is_connected", return_value=True),
         patch("cli.get_pref", side_effect=_get_pref_auto),
+        patch("ui.format.get_pref", side_effect=_get_pref_auto),
         patch("fit.sync.sync_fit", side_effect=_fake_sync_fit),
         patch("questionary.confirm") as mock_confirm,
         patch("cli.console"),
@@ -322,6 +328,7 @@ def test_auto_sync_both_stale_syncs_both_silently():
         patch("config.HEVY_API_KEY", "test-key"),
         patch("fit.auth.is_connected", return_value=True),
         patch("cli.get_pref", side_effect=_get_pref_auto),
+        patch("ui.format.get_pref", side_effect=_get_pref_auto),
         patch("cli._require_hevy", return_value=MagicMock()),
         patch("cli.incremental_sync", side_effect=_fake_incremental),
         patch("fit.sync.sync_fit", side_effect=_fake_sync_fit),
@@ -347,6 +354,7 @@ def test_auto_sync_fit_exception_does_not_crash():
         patch("config.HEVY_API_KEY", "test-key"),
         patch("fit.auth.is_connected", return_value=True),
         patch("cli.get_pref", side_effect=_get_pref_auto),
+        patch("ui.format.get_pref", side_effect=_get_pref_auto),
         patch("fit.sync.sync_fit", side_effect=RuntimeError("token expired")),
         patch("questionary.confirm") as mock_confirm,
         patch("cli.console"),
@@ -379,6 +387,7 @@ def test_custom_stale_hours_prompts_earlier():
         patch("config.HEVY_API_KEY", "test-key"),
         patch("fit.auth.is_connected", return_value=False),
         patch("cli.get_pref", side_effect=_pref),
+        patch("ui.format.get_pref", side_effect=_pref),
         patch("questionary.confirm", side_effect=_confirm),
         patch("cli.console"),
     ):
@@ -395,6 +404,7 @@ def test_default_stale_hours_keeps_24h():
         patch("config.HEVY_API_KEY", "test-key"),
         patch("fit.auth.is_connected", return_value=False),
         patch("cli.get_pref", return_value=None),
+        patch("ui.format.get_pref", return_value=None),
         patch("questionary.confirm") as mock_confirm,
         patch("cli.console"),
     ):

@@ -6,20 +6,20 @@ from tests.conftest import seed_exercise_template, seed_workout
 
 
 def test_kg_to_lbs_100kg():
-    from cli import _kg_to_lbs
+    from ui.format import kg_to_lbs as _kg_to_lbs
 
     # 100 * 2.20462 = 220.462, rounded to 1 dp = 220.5
     assert _kg_to_lbs(100) == 220.5
 
 
 def test_kg_to_lbs_zero():
-    from cli import _kg_to_lbs
+    from ui.format import kg_to_lbs as _kg_to_lbs
 
     assert _kg_to_lbs(0) == 0.0
 
 
 def test_kg_to_lbs_fractional_kg():
-    from cli import _kg_to_lbs
+    from ui.format import kg_to_lbs as _kg_to_lbs
 
     result = _kg_to_lbs(80)
     assert isinstance(result, float)
@@ -30,22 +30,22 @@ def test_kg_to_lbs_fractional_kg():
 
 
 def test_get_units_defaults_to_kg(tmp_db):
-    from cli import _get_units
+    from ui.format import get_units as _get_units
 
     assert _get_units() == "kg"
 
 
 def test_get_units_returns_lbs_when_set(tmp_db):
-    from cli import _get_units
     from db.goals import set_pref
+    from ui.format import get_units as _get_units
 
     set_pref("units", "lbs")
     assert _get_units() == "lbs"
 
 
 def test_get_units_falls_back_to_kg_for_unknown_value(tmp_db):
-    from cli import _get_units
     from db.goals import set_pref
+    from ui.format import get_units as _get_units
 
     set_pref("units", "stones")  # not a valid value — fall back to "kg"
     # _get_units returns whatever is stored; callers check == "lbs"
@@ -57,33 +57,33 @@ def test_get_units_falls_back_to_kg_for_unknown_value(tmp_db):
 
 
 def test_fmt_weight_none_returns_dash(tmp_db):
-    from cli import _fmt_weight
+    from ui.format import fmt_weight as _fmt_weight
 
     assert _fmt_weight(None) == "—"
 
 
 def test_fmt_weight_whole_number_kg(tmp_db):
-    from cli import _fmt_weight
+    from ui.format import fmt_weight as _fmt_weight
 
     assert _fmt_weight(80) == "80 kg"
     assert _fmt_weight(80.0) == "80 kg"
 
 
 def test_fmt_weight_decimal_kg(tmp_db):
-    from cli import _fmt_weight
+    from ui.format import fmt_weight as _fmt_weight
 
     assert _fmt_weight(80.5) == "80.5 kg"
 
 
 def test_fmt_weight_zero_kg(tmp_db):
-    from cli import _fmt_weight
+    from ui.format import fmt_weight as _fmt_weight
 
     assert _fmt_weight(0) == "0 kg"
 
 
 def test_fmt_weight_lbs_mode_contains_lbs_suffix(tmp_db):
-    from cli import _fmt_weight
     from db.goals import set_pref
+    from ui.format import fmt_weight as _fmt_weight
 
     set_pref("units", "lbs")
     result = _fmt_weight(100)
@@ -91,8 +91,8 @@ def test_fmt_weight_lbs_mode_contains_lbs_suffix(tmp_db):
 
 
 def test_fmt_weight_lbs_mode_correct_value(tmp_db):
-    from cli import _fmt_weight
     from db.goals import set_pref
+    from ui.format import fmt_weight as _fmt_weight
 
     set_pref("units", "lbs")
     # 100 kg → 220.5 lbs
@@ -100,8 +100,8 @@ def test_fmt_weight_lbs_mode_correct_value(tmp_db):
 
 
 def test_fmt_weight_lbs_whole_number_omits_decimal(tmp_db):
-    from cli import _fmt_weight
     from db.goals import set_pref
+    from ui.format import fmt_weight as _fmt_weight
 
     set_pref("units", "lbs")
     # 0 kg → 0.0 lbs, int(0.0) == 0.0 → True → "0 lbs"
@@ -112,28 +112,28 @@ def test_fmt_weight_lbs_whole_number_omits_decimal(tmp_db):
 
 
 def test_score_color_green_at_boundary():
-    from cli import _score_color
+    from ui.console import score_color as _score_color
 
     assert _score_color(80) == "green"
     assert _score_color(100) == "green"
 
 
 def test_score_color_cyan_range():
-    from cli import _score_color
+    from ui.console import score_color as _score_color
 
     assert _score_color(60) == "cyan"
     assert _score_color(79) == "cyan"
 
 
 def test_score_color_yellow_range():
-    from cli import _score_color
+    from ui.console import score_color as _score_color
 
     assert _score_color(40) == "yellow"
     assert _score_color(59) == "yellow"
 
 
 def test_score_color_red_below_40():
-    from cli import _score_color
+    from ui.console import score_color as _score_color
 
     assert _score_color(39) == "red"
     assert _score_color(0) == "red"

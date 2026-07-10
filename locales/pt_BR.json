@@ -5,7 +5,6 @@
   "nav.press_any_key": "  Pressione qualquer tecla para voltar ao menu...",
   "migration.xdg_title": "Dados movidos para pastas padrão",
   "migration.xdg_done": "[green]✓[/green] Seus dados agora ficam nas pastas padrão do usuário (config: [dim]{config_dir}[/dim], dados: [dim]{data_dir}[/dim]). Isso acontece só uma vez.",
-
   "menu.sync": "  Sincronizar treinos",
   "menu.chat": "  Chat com o coach",
   "menu.goals": "  Meus objetivos",
@@ -20,7 +19,6 @@
   "menu.exit": "  Sair",
   "menu.prompt": "O que você quer fazer?",
   "menu.goodbye": "\n[dim]Até o próximo treino![/dim]\n",
-
   "header.last_workout": "Último treino: [bold]{ago}[/bold]",
   "header.no_workouts": "[dim]Nenhum treino ainda[/dim]",
   "header.streak": "{fires} [bold]sequência de {days}d[/bold]",
@@ -34,7 +32,6 @@
   "header.goals": "[yellow]{count} objetivo[/yellow]",
   "header.goals_plural": "[yellow]{count} objetivos[/yellow]",
   "header.recovery": "  ·  Recuperação [{color}]{score}/100[/{color}]",
-
   "snapshot.scores_title": "[bold dim]Pontuações do último relatório[/bold dim]",
   "snapshot.volume_title": "[bold dim]Distribuição de volume (4s)[/bold dim]",
   "snapshot.goals_title": "[bold dim]Objetivos[/bold dim]",
@@ -43,7 +40,6 @@
   "snapshot.bmi_short": "IMC",
   "snapshot.n_more_goals": "  [dim]...e mais {count}[/dim]",
   "snapshot.panel_title": "[bold dim]Visão rápida[/bold dim]",
-
   "error.hevy_api_key_not_set": "[red]Chave de API do Hevy não configurada. Vá em Configurações → Perfis.[/red]",
   "error.ai_key_not_set": "[red]{var} não definida no .env (AI_PROVIDER={provider})[/red]",
   "error.unexpected": "[bold]Erro inesperado ({exc_type}).[/bold]\nOs detalhes foram salvos no log em {log_dir}.\nO app vai voltar ao menu.",
@@ -67,7 +63,6 @@
   "error.not_enough_data": "[yellow]Dados insuficientes ainda.[/yellow]",
   "error.fit_sync_failed": "[red]{error}[/red]",
   "error.fit_auth_failed": "\n[red]Autenticação falhou. Verifique se o fit_credentials.json é válido.[/red]",
-
   "wizard.no_exercises": "[yellow]  Nenhum exercício encontrado. Execute Sincronizar primeiro.[/yellow]",
   "wizard.lift_hint": "\n  [dim]Adicione um ou mais alvos de carga. Deixe em branco para parar.[/dim]",
   "wizard.lift_exercise_prompt": "  Exercício (comece a digitar ou pressione Enter para parar):",
@@ -113,7 +108,6 @@
   "wizard.goal_volume": "Aumentar volume semanal para um músculo",
   "wizard.goal_custom": "Outro — objetivo em texto livre",
   "wizard.n_saved": "\n  [bold green]✓ {total} objetivo(s) salvo(s).[/bold green] O coach IA vai acompanhar seu progresso.\n",
-
   "validate.enter_number": "Digite um número",
   "validate.enter_whole_number": "Digite um número inteiro",
   "validate.pick_from_list": "Escolha da lista",
@@ -125,7 +119,6 @@
   "score.training": "Treino",
   "score.health": "Saúde",
   "score.overall": "Geral",
-
   "weekly.checkin_title": "\n  [bold cyan]Check-in semanal de objetivos, {name}![/bold cyan]\n",
   "weekly.current_goals": "  Seus objetivos atuais:\n",
   "weekly.still_same": "  Esses objetivos continuam os mesmos?",
@@ -133,7 +126,6 @@
   "weekly.update": "Atualizar meus objetivos",
   "weekly.skip": "Pular por agora",
   "weekly.confirmed": "  [dim]Objetivos confirmados. Até a próxima semana![/dim]\n",
-
   "goals.achieved": "  [bold green]✓ ALCANÇADO[/bold green]  [bold]{description}[/bold]  🎉",
   "goals.celebrate.panel_title": "[bold green]🎉 Parabéns![/bold green]",
   "goals.celebrate.intro": "Desde a sua última visita, você alcançou:",
@@ -149,7 +141,6 @@
   "goals.update_label": "Atualizar meus objetivos",
   "goals.reset_label": "Definir objetivos do zero",
   "goals.menu_prompt": "Objetivos:",
-
   "sync.type_prompt": "Tipo de sincronização:",
   "sync.incremental": "Incremental  (busca apenas o que é novo)",
   "sync.full": "Completa  (baixa tudo novamente)",
@@ -171,7 +162,6 @@
   "sync.auto_synced_fit": "[dim]Fit sincronizado: {daily_days} dias · {sleep_sessions} sessões de sono.[/dim]",
   "sync.auto_sync_fit_failed": "[dim]Sincronização automática do Fit falhou: {error}[/dim]",
   "sync.fit_sync_complete_title": "[bold green]Sincronização do Google Fit concluída[/bold green]",
-
   "stats.time_period": "Período:",
   "stats.rule_title": "[bold cyan]Estatísticas — últimas {weeks} semanas[/bold cyan]",
   "stats.col_metric": "Métrica",
@@ -204,7 +194,6 @@
   "stats.plateaus_rule": "[bold yellow]Platôs[/bold yellow]",
   "stats.goals_rule": "[bold yellow]Progresso dos Objetivos[/bold yellow]",
   "stats.volume_rule_this_week": "  [bold]Volume desta semana vs semana passada[/bold]",
-
   "progress.show_prompt": "O que mostrar?",
   "progress.top_gainers": "Maiores progressões",
   "progress.specific_exercise": "Exercício específico",
@@ -219,9 +208,7 @@
   "progress.col_best_weight": "Melhor carga",
   "progress.col_reps": "Reps",
   "progress.col_e1rm": "e1RM",
-
   "records.rule_title": "[bold]Recordes pessoais de todos os tempos[/bold]",
-
   "coach.rule_title": "[bold cyan]Relatório do Coach IA[/bold cyan]",
   "coach.weeks_prompt": "Semanas para analisar:",
   "coach.include_routine_prompt": "Criar também uma nova rotina de treino sugerida? (consome mais tokens)",
@@ -241,7 +228,6 @@
   "coach.generating_benefits": "[bold cyan]Gerando benefícios dos exercícios...[/bold cyan]",
   "coach.benefits_skipped": "[dim]Benefícios pulados.[/dim]\n",
   "coach.powered_by": "\n[dim]Gerado por {provider}[/dim]\n",
-
   "chat.rule_title": "[bold cyan]Chat com o Coach IA[/bold cyan]",
   "chat.hint": "  [dim]Provedor: {provider} · {weeks} semanas de contexto carregadas.[/dim]\n  [dim]O coach pode criar rotinas, modificar objetivos e lembra de conversas anteriores.[/dim]\n  [dim]Digite [bold]sair[/bold] ou pressione Ctrl+C para voltar ao menu.[/dim]\n",
   "chat.quit_words": "sair, voltar, menu",
@@ -280,7 +266,6 @@
   "chat.goal_removed": "[green]✓ Objetivo removido[/green]",
   "chat.goal_invalid_id": "[red]⚠ A IA referenciou um objetivo inexistente (id={gid}). Alteração bloqueada.[/red]\n",
   "chat.exercise_benefits_title": "[bold green]Benefícios dos Exercícios[/bold green]",
-
   "settings.menu_prompt": "Configurações:",
   "settings.profiles_choice": "  Gerenciar perfis  (trocar, criar, renomear, excluir)",
   "settings.profile_choice": "  Meus dados   (nome, altura, chave Hevy)",
@@ -290,7 +275,6 @@
   "settings.about_choice": "  Sobre        (versão, links)",
   "about.title": "[bold cyan]Lifter[/bold cyan]",
   "about.body": "Cliente pessoal de treinos do Hevy com análises, metas e coach de IA.\n\nVersão:   [bold]{version}[/bold]\nAutor:    João Ferrete\nLicença:  AGPL-3.0-or-later\n\nGitHub:   [link=https://github.com/joaoferrete/lifter]github.com/joaoferrete/lifter[/link]\nPyPI:     [link=https://pypi.org/project/lifter-cli/]pypi.org/project/lifter-cli[/link]\nIssues:   [link=https://github.com/joaoferrete/lifter/issues]github.com/joaoferrete/lifter/issues[/link]\n\n[dim]Se o Lifter ajuda no seu treino, uma estrela no GitHub ajuda o projeto.[/dim]",
-
   "settings.prefs.title": "[bold]Preferências[/bold]",
   "settings.prefs.units_label": "Unidade de peso:       [bold]{units}[/bold]",
   "settings.prefs.checkin_label": "Check-in de objetivos: [bold]a cada {days} dias[/bold]",
@@ -313,7 +297,7 @@
   "settings.prefs.checkin_30": "A cada 30 dias  (mensal)",
   "settings.prefs.checkin_saved": "[green]✓ Check-in de objetivos definido para a cada {days} dias[/green]",
   "settings.prefs.autosync_enabled": "[green]✓ Auto-sync ativado[/green]",
-  "settings.prefs.autosync_disabled": "[green]✓ Auto-sync desativado[/green]",
+  "settings.prefs.autosync_disabled": "[dim]— Auto-sync desativado[/dim]",
   "settings.prefs.stats_window_prompt": "  Janela padrão de stats:",
   "settings.prefs.stats_window_saved": "[green]✓ Janela padrão de stats definida para {window}[/green]",
   "settings.prefs.ui_language_prompt": "  Idioma da interface:",
@@ -334,7 +318,6 @@
   "settings.prefs.stale_hours_saved": "[green]✓ Limite definido para {hours}h[/green]",
   "settings.on": "ativado",
   "settings.off": "desativado",
-
   "settings.dev.title": "[bold]Configurações de Desenvolvedor[/bold]",
   "settings.dev.version_label": "Versão:         [bold]{version}[/bold]",
   "settings.dev.debug_label": "Log de debug:   [bold]{state}[/bold]",
@@ -384,7 +367,6 @@
   "settings.dev.sync_ok": "[green]✓ ok[/green] [dim]{ago} · {detail}[/dim]",
   "settings.dev.sync_failed": "[red]✗ falhou[/red] [dim]{ago}[/dim] — {detail}",
   "settings.dev.sync_never": "[dim]nunca[/dim]",
-
   "settings.ai.title": "[bold]Configurações do Coach IA[/bold]",
   "settings.ai.provider_line": "Provedor:      [bold]{provider}[/bold]  ·  Modelo: [bold]{model}[/bold]",
   "settings.ai.context_line": "Modo contexto: [bold]{mode}[/bold]",
@@ -492,7 +474,6 @@
   "settings.ai.memories_limit_invalid": "Digite um número entre 0 e 10000.",
   "settings.ai.memories_limit_saved": "[green]✓ Limite de memórias definido para {max}.[/green]",
   "settings.ai.memories_unlimited": "ilimitado",
-
   "profiles.panel_title": "[bold]Gerenciar perfis[/bold]",
   "profiles.panel_content": "Perfil ativo: [bold]{name}[/bold]  ({total} total)",
   "profiles.menu_prompt": "Perfis:",
@@ -518,7 +499,6 @@
   "profiles.api_key_prompt": "  Chave de API do Hevy (deixe em branco para configurar depois):",
   "profiles.language_prompt": "  Idioma preferido:",
   "profiles.created": "[green]✓ Perfil '{name}' criado.[/green]",
-
   "profile.panel_title": "[bold]Meus dados[/bold]",
   "profile.display_name_label": "Nome de exibição: [bold]{name}[/bold]",
   "profile.display_name_notset": "Nome de exibição: [bold][dim]não definido[/dim][/bold]",
@@ -533,7 +513,6 @@
   "profile.name_updated": "[green]✓ Nome atualizado para '{name}'[/green]",
   "profile.new_api_key_prompt": "  Nova chave de API do Hevy:",
   "profile.api_key_updated": "[green]✓ Chave de API do Hevy atualizada.[/green]",
-
   "migration.panel_title": "[bold cyan]Migração de Perfil[/bold cyan]",
   "migration.panel_body": "O Lifter agora suporta múltiplos perfis.\nSeus dados existentes serão migrados para um perfil nomeado.",
   "migration.name_prompt": "  Nome do perfil (ex: seu nome):",
@@ -542,7 +521,6 @@
   "welcome.name_prompt": "  Seu nome (para o coach IA):",
   "welcome.api_key_prompt": "  Chave de API do Hevy (hevy.com → Settings → Developer):",
   "welcome.language_prompt": "  Idioma preferido:",
-
   "data_reset.prompt": "O que você quer redefinir?",
   "data_reset.memories_choice": "Limpar memórias do coach  (esquecer conversas passadas)",
   "data_reset.goals_choice": "Limpar todos os objetivos",
@@ -565,7 +543,6 @@
   "data_reset.all_confirm1": "  Tem certeza?",
   "data_reset.all_confirm2": "  Mesmo assim? Esta ação não pode ser desfeita.",
   "data_reset.all_done": "\n[bold green]✓ Tudo apagado.[/bold green]\n  Execute [bold]Sync → Completa[/bold] para baixar seus treinos novamente.",
-
   "fit.menu_prompt": "Google Fit:",
   "fit.sync_choice": "Sincronizar dados de saúde  (sono, passos, calorias, FC)",
   "fit.connect_choice": "Conectar / re-autenticar",
@@ -604,5 +581,12 @@
   "fit.avg_calories": "Calorias médias / dia",
   "fit.resting_hr": "FC de repouso",
   "fit.avg_active_minutes": "Minutos ativos médios",
-  "fit.recovery_label": "[bold green]Recuperação[/bold green]"
+  "fit.recovery_label": "[bold green]Recuperação[/bold green]",
+  "time_ago.just_now": "agora mesmo",
+  "time_ago.minutes": "há {n}min",
+  "time_ago.hours": "há {n}h",
+  "time_ago.days": "há {n}d",
+  "time_ago.unknown": "desconhecido",
+  "confirm.really_sure": "Tem CERTEZA mesmo? Isso não pode ser desfeito.",
+  "wizard.name_fallback": "atleta"
 }
