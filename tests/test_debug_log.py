@@ -56,3 +56,68 @@ def test_custom_max_files(tmp_path, monkeypatch):
     assert debug_log.prune_old_logs(max_files=2) == 3
     assert files[0].exists() and files[1].exists()
     assert not any(p.exists() for p in files[2:])
+
+
+# ── error() — always-on error logging with tracebacks ─────────────────────────
+
+def _today_log(logs_dir):
+    date = datetime.now().strftime("%Y-%m-%d")
+    return logs_dir / f"debug-{date}.log"
+
+
+def test_error_writes_even_when_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(debug_log, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(debug_log, "_enabled", False)
+
+    debug_log.error("TEST", "something broke", code=42)
+
+    content = _today_log(tmp_path).read_text()
+    assert "something broke" in content
+    assert "code=42" in content
+
+
+def test_error_includes_traceback(tmp_path, monkeypatch):
+    monkeypatch.setattr(debug_log, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(debug_log, "_enabled", False)
+
+    try:
+        raise ValueError("boom")
+    except ValueError as e:
+        debug_log.error("TEST", "caught", exc=e)
+
+    content = _today_log(tmp_path).read_text()
+    assert "Traceback" in content
+    assert "ValueError: boom" in content
+
+
+def test_log_still_gated_by_enabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(debug_log, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(debug_log, "_enabled", False)
+
+    debug_log.log("TEST", "chatty line")
+
+    assert not _today_log(tmp_path).exists()
+
+
+def test_error_never_raises_on_unwritable_dir(tmp_path, monkeypatch):
+    target = tmp_path / "ro"
+    target.mkdir()
+    target.chmod(0o444)
+    monkeypatch.setattr(debug_log, "LOGS_DIR", target / "sub")
+    try:
+        debug_log.error("TEST", "should not raise", exc=ValueError("x"))
+    finally:
+        target.chmod(0o755)
+
+
+def test_logs_dir_env_override(tmp_path, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "LOGS_DIR", str(tmp_path / "custom"))
+    assert debug_log.logs_dir() == tmp_path / "custom"
+
+
+def test_logs_dir_relative_override_falls_back(tmp_path, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "LOGS_DIR", "relative/path")
+    monkeypatch.setattr(debug_log, "LOGS_DIR", tmp_path)
+    assert debug_log.logs_dir() == tmp_path

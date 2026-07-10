@@ -4,8 +4,24 @@ from pathlib import Path
 
 import paths
 
-LOGS_DIR = paths.LOGS_DIR
+LOGS_DIR = paths.LOGS_DIR   # default; the LOGS_DIR .env key (config) overrides
 RETENTION_MAX_FILES = 14
+
+
+def logs_dir() -> Path:
+    """Effective logs directory: the LOGS_DIR .env override when it's a usable
+    absolute path, else the XDG default. Resolved lazily so Settings changes
+    apply without a restart. Never raises."""
+    try:
+        import config
+        raw = getattr(config, "LOGS_DIR", "")
+        if raw:
+            p = Path(raw).expanduser()
+            if p.is_absolute():
+                return p
+    except Exception:
+        pass
+    return LOGS_DIR
 
 _enabled: bool = False
 
@@ -19,7 +35,7 @@ def prune_old_logs(max_files: int = RETENTION_MAX_FILES) -> int:
     removed = 0
     try:
         # filename dates are ISO, so lexicographic sort is chronological
-        files = sorted(LOGS_DIR.glob("debug-*.log"))
+        files = sorted(logs_dir().glob("debug-*.log"))
         for f in files[:max(len(files) - max_files, 0)]:
             f.unlink(missing_ok=True)
             removed += 1
@@ -49,12 +65,37 @@ def log(category: str, msg: str, **kv) -> None:
     """Append one structured line to today's log file if enabled. Never raises."""
     if not _enabled:
         return
+    _write_line(category, msg, **kv)
+
+
+def error(category: str, msg: str, exc: BaseException | None = None, **kv) -> None:
+    """Append an error line (with full traceback when `exc` is given).
+
+    Unlike log(), always writes regardless of the debug_logging pref — a crash
+    record is the one thing worth having after the fact. Never raises.
+    """
+    _write_line(category, msg, _traceback_of(exc), **kv)
+
+
+def _traceback_of(exc: BaseException | None) -> str:
+    if exc is None:
+        return ""
     try:
-        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        import traceback
+        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        return "".join(f"    | {line}\n" for line in tb.rstrip().splitlines())
+    except Exception:
+        return ""
+
+
+def _write_line(category: str, msg: str, extra_block: str = "", **kv) -> None:
+    try:
+        target_dir = logs_dir()
+        target_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         extras = "  " + "  ".join(f"{k}={v}" for k, v in kv.items()) if kv else ""
-        line = f"{timestamp} [{category:<7}] {msg}{extras}\n"
-        log_file = LOGS_DIR / f"debug-{datetime.now().strftime('%Y-%m-%d')}.log"
+        line = f"{timestamp} [{category:<7}] {msg}{extras}\n{extra_block}"
+        log_file = target_dir / f"debug-{datetime.now().strftime('%Y-%m-%d')}.log"
         with open(log_file, "a") as f:
             f.write(line)
     except Exception:

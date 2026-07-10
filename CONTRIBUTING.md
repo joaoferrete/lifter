@@ -260,3 +260,20 @@ The UI translation layer lives in `i18n.py` and reads JSON files from `locales/`
 - No type annotations required but encouraged for public functions
 - No comments that just restate what the code does
 - Tests required for any logic that touches the DB or analytics
+
+## Error handling conventions
+
+- **`RuntimeError` carries a user-facing message.** The Hevy/Fit clients and the
+  AI provider layer raise `RuntimeError` with a ready-to-display message; the
+  main-loop safety net (`_run_action` in `cli.py`) prints it in red. Don't
+  wrap these in custom exception classes.
+- **Anything else is a bug.** Unexpected exceptions are caught by the safety
+  net, shown as a generic panel, and logged with a full traceback.
+- **`debug_log.error()` always writes** (with traceback when given `exc=`),
+  regardless of the `debug_logging` pref. `debug_log.log()` stays gated behind
+  the pref — use it for chatty diagnostics only.
+- **Validate AI tool arguments at the boundary.** Routine tool calls go through
+  `ai/routine_schema.validate_routine_args()` before anything is rendered,
+  confirmed, or persisted; garbage args are rejected with an error the model
+  can act on. Truncated responses (`ChatResponse.stop_reason == "max_tokens"`)
+  must never be dispatched as tool calls.

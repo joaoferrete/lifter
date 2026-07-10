@@ -70,3 +70,23 @@ def test_export_filename_pattern(tmp_db, tmp_path):
 def test_export_unknown_kind_raises(tmp_db, tmp_path):
     with pytest.raises(KeyError):
         cli._export_data("nope", dest_dir=tmp_path)
+
+
+def test_export_honors_export_dir_override(tmp_db, tmp_path, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "EXPORT_DIR", str(tmp_path / "custom-exports"))
+
+    path, _rows = cli._export_data("full")
+
+    assert path.parent == tmp_path / "custom-exports"
+    assert path.exists()
+
+
+def test_export_defaults_next_to_db(tmp_db, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "EXPORT_DIR", "")
+
+    path, _rows = cli._export_data("full")
+
+    assert path.parent == config.DB_PATH.parent / "exports"
+    assert path.exists()

@@ -566,3 +566,131 @@ def test_tool_action_skips_lookups_and_errors():
         "manage_goals", {"changes_summary": "x"}, {"success": False, "error": "Goal ID 9 does not exist"}
     ) is None
     assert _tool_action_log_entry("push_routine", {"title": "T"}, {"error": "boom"}) is None
+
+
+# ── routine tool-arg validation gate ──────────────────────────────────────────
+
+def test_show_and_confirm_routine_rejects_garbage_args(tmp_db):
+    from ai.coach import _show_and_confirm_routine
+
+    def _fail_if_called(*a, **k):
+        raise AssertionError("confirm must not be reached for invalid args")
+
+    with patch("questionary.confirm", _fail_if_called):
+        result = _show_and_confirm_routine({
+            "title": "Push",
+            "exercises": [{
+                "exercise_template_id": "94B7239B",
+                "sets": [{"type": "normal,weight_kg:30},{reps:12,type: ", "reps": 12}],
+            }],
+        })
+
+    assert result["success"] is False
+    assert "Invalid routine data" in result["error"]
+
+
+def test_show_and_confirm_routine_rejects_empty_args(tmp_db):
+    # OpenAI-compat turns unparseable tool arguments into {}
+    from ai.coach import _show_and_confirm_routine
+    result = _show_and_confirm_routine({})
+    assert result["success"] is False
+
+
+def test_show_and_confirm_routine_update_rejects_and_preserves_db(tmp_db):
+    from ai.coach import _show_and_confirm_routine_update
+    from db.store import get_routines_with_exercises
+
+    seed_exercise_template(tmp_db)
+    seed_routine(tmp_db, "r-garbage", title="Untouched")
+
+    with patch("questionary.confirm") as mock_confirm:
+        mock_confirm.return_value.ask.return_value = True
+        result = _show_and_confirm_routine_update({
+            "routine_id": "r-garbage",
+            "title": {"nested": "junk"},
+            "exercises": [],
+        })
+
+    assert result["success"] is False
+    routines = get_routines_with_exercises(db_path=tmp_db)
+    kept = next(r for r in routines if r["id"] == "r-garbage")
+    assert kept["title"] == "Untouched"
+
+
+def test_show_and_confirm_routine_normalizes_before_push(tmp_db):
+    from ai.coach import _show_and_confirm_routine
+
+    seed_exercise_template(tmp_db)
+    mock_client = MagicMock()
+    mock_client.create_routine.return_value = {"routine": {"id": "new-1"}}
+
+    with patch("hevy.client.HevyClient", return_value=mock_client), \
+         patch("questionary.confirm") as mock_confirm:
+        mock_confirm.return_value.ask.return_value = True
+        result = _show_and_confirm_routine({
+            "title": "Leg Day",
+            "exercises": [{
+                "exercise_template_id": TEMPLATE_ID,
+                "sets": [{"type": "working", "weight_kg": "60kg", "reps": 10.0}],
+            }],
+        })
+
+    assert result["success"] is True
+    pushed = mock_client.create_routine.call_args[0][0]
+    s = pushed["exercises"][0]["sets"][0]
+    assert s["type"] == "normal"
+    assert s["weight_kg"] == 60.0
+    assert s["reps"] == 10
+
+
+# ── truncated tool calls (stop_reason == max_tokens) ──────────────────────────
+
+def test_chat_truncated_tool_call_not_dispatched(tmp_db, monkeypatch):
+    import ai.coach as coach_mod
+    from ai.provider import ChatResponse, ToolCall
+
+    submitted = []
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = 0
+
+        def send(self, msg):
+            return ChatResponse(
+                text=None,
+                tool_calls=[ToolCall(id="t1", name="push_routine", args={"title": "cut"})],
+                stop_reason="max_tokens",
+            )
+
+        def submit_tool_results(self, results):
+            submitted.extend(results)
+            return ChatResponse(text="ok, retrying", stop_reason="end")
+
+        def discard_pending_user(self):
+            pass
+
+    inputs = iter(["make me a routine"])
+
+    def fake_input(prompt=""):
+        try:
+            return next(inputs)
+        except StopIteration:
+            raise EOFError
+
+    monkeypatch.setattr(coach_mod, "create_chat_session", lambda **k: FakeSession())
+    monkeypatch.setattr("builtins.input", fake_input)
+    monkeypatch.setattr(coach_mod, "_extract_and_save_memories", lambda log: 0)
+    monkeypatch.setattr(coach_mod, "_missed_tool_call_nudge", lambda text: None)
+
+    def _fail_if_called(*a, **k):
+        raise AssertionError("truncated tool call must not reach the handler")
+
+    monkeypatch.setattr(coach_mod, "_show_and_confirm_routine", _fail_if_called)
+
+    coach_mod.start_enhanced_chat(weeks=4)
+
+    assert len(submitted) == 1
+    tc, result = submitted[0]
+    assert tc.name == "push_routine"
+    assert result["success"] is False
+    assert "cut off" in result["error"]
