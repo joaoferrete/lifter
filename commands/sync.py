@@ -53,7 +53,7 @@ def _render_workout_cards(workout_ids: list[str]) -> None:
 
         console.print(
             Panel(
-                "\n".join(lines) if lines else "  (no sets logged)",
+                "\n".join(lines) if lines else _("sync.no_sets_logged"),
                 title=f"[bold cyan]{w['title']}[/bold cyan]  [dim]{date_str} · {duration}[/dim]",
                 border_style="cyan",
                 padding=(0, 1),
@@ -94,9 +94,12 @@ def _render_sync_report(counts: dict, is_full: bool) -> None:
     if is_full:
         console.print(
             Panel(
-                f"[bold green]{counts.get('workouts', 0)}[/bold green] workouts  ·  "
-                f"[bold]{counts.get('templates', 0)}[/bold] exercise templates  ·  "
-                f"[bold]{counts.get('body_measurements', 0)}[/bold] body measurements",
+                _(
+                    "sync.full_body",
+                    workouts=counts.get("workouts", 0),
+                    templates=counts.get("templates", 0),
+                    body=counts.get("body_measurements", 0),
+                ),
                 title=_("sync.full_complete_title"),
                 border_style="green",
             )
@@ -124,9 +127,7 @@ def _render_sync_report(counts: dict, is_full: bool) -> None:
     streak = freq.get("longest_streak_days", 0)
     if streak >= 2:
         fires = "🔥" * min(streak, 5)
-        console.print(
-            f"\n  {fires}  [bold]{streak}-day streak![/bold]  [dim]({freq['total_workouts']} sessions in last 4w)[/dim]"
-        )
+        console.print("\n  " + _("sync.streak_line", fires=fires, streak=streak, sessions=freq["total_workouts"]))
 
     _render_volume_delta()
     console.print()

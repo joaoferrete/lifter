@@ -223,7 +223,10 @@ def _do_ai_settings() -> None:
                 questionary.Choice(_("settings.ai.model_choice", model=config.AI_MODEL), value="model"),
                 questionary.Choice(_("settings.ai.api_keys_choice"), value="api_keys"),
                 questionary.Choice(
-                    _("settings.ai.toggle_context_choice", mode="Slim" if slim_on else "Full"),
+                    _(
+                        "settings.ai.toggle_context_choice",
+                        mode=_("settings.ai.context_mode_slim") if slim_on else _("settings.ai.context_mode_full"),
+                    ),
                     value="toggle_slim",
                 ),
                 questionary.Choice(

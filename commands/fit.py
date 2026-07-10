@@ -177,15 +177,15 @@ def _render_fit_dashboard() -> None:
         t.add_column(_("fit.col_metric"), style="bold")
         t.add_column(_("fit.col_value"), justify="right")
         if sleep.get("avg_hours"):
-            t.add_row(_("fit.avg_sleep"), f"{sleep['avg_hours']}h/night")
-            t.add_row(_("fit.last_night"), f"{sleep.get('last_night_hours')}h")
+            t.add_row(_("fit.avg_sleep"), _("fit.value_sleep", hours=sleep["avg_hours"]))
+            t.add_row(_("fit.last_night"), _("fit.value_hours", hours=sleep.get("last_night_hours")))
             t.add_row(_("fit.nights_7plus"), f"{sleep['nights_7plus_hours']}/{sleep['nights_tracked']}")
         if activity.get("avg_steps"):
             t.add_row(_("fit.avg_steps"), f"{int(activity['avg_steps']):,}")
         if activity.get("avg_calories"):
-            t.add_row(_("fit.avg_calories"), f"{int(activity['avg_calories']):,} kcal")
+            t.add_row(_("fit.avg_calories"), _("fit.value_calories", calories=f"{int(activity['avg_calories']):,}"))
         if activity.get("resting_hr"):
-            t.add_row(_("fit.resting_hr"), f"{activity['resting_hr']} bpm")
+            t.add_row(_("fit.resting_hr"), _("fit.value_bpm", rhr=activity["resting_hr"]))
         if activity.get("avg_active_minutes"):
             t.add_row(_("fit.avg_active_minutes"), str(int(activity["avg_active_minutes"])))
         console.print(t)

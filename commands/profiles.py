@@ -74,7 +74,7 @@ def _do_profiles_menu() -> None:
     while True:
         console.clear()
         active_slug = get_active_slug()
-        active_name = get_profile_name(active_slug) if active_slug else "None"
+        active_name = get_profile_name(active_slug) if active_slug else _("common.none")
         profiles = list_profiles()
 
         console.print(
@@ -184,7 +184,11 @@ def _do_profile_settings() -> None:
         if cfg_file.exists():
             with contextlib.suppress(Exception):
                 hevy_key = _json.loads(cfg_file.read_text()).get("hevy_api_key", "")
-    masked_key = (hevy_key[:4] + "…" + hevy_key[-4:]) if len(hevy_key) > 8 else ("set" if hevy_key else "not set")
+    masked_key = (
+        (hevy_key[:4] + "…" + hevy_key[-4:])
+        if len(hevy_key) > 8
+        else (_("profiles.key_set") if hevy_key else _("profiles.key_not_set"))
+    )
 
     height_cm = get_height_cm()
     height_line = _("profile.height_label", height=_fmt_height(height_cm)) if height_cm else _("profile.height_notset")

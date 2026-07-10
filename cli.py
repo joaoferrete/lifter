@@ -228,6 +228,7 @@ def _render_snapshot_panel() -> None:
 
     # Compact goal progress
     from analytics.goal_progress import compute_goal_progress
+    from commands.goals import describe_goal as _describe_goal
 
     progress = compute_goal_progress()
     numeric = [g for g in progress if g.get("pct") is not None and not g["achieved"]]
@@ -239,15 +240,15 @@ def _render_snapshot_panel() -> None:
             color = _score_color(max(0, int(pct)))
             bw = max(0, min(8, int(pct / 100 * 8)))
             bar = f"[{color}]{'█' * bw}[/{color}][dim]{'░' * (8 - bw)}[/dim]"
-            desc = g["description"][:30]
+            desc = _describe_goal(g)[:30]
             lines.append(f"  {bar} [{color}]{pct:.0f}%[/{color}]  [dim]{desc}[/dim]")
         if len(numeric) > 4:
             lines.append(_("snapshot.n_more_goals", count=len(numeric) - 4))
         for g in achieved[:2]:
-            lines.append(f"  [bold green]✓[/bold green] [dim]{g['description'][:35]}[/dim]")
+            lines.append(f"  [bold green]✓[/bold green] [dim]{_describe_goal(g)[:35]}[/dim]")
         custom = [g for g in progress if g.get("pct") is None and not g["achieved"]]
         for g in custom[:2]:
-            lines.append(f"  [dim]◦ {g['description'][:35]} (custom)[/dim]")
+            lines.append(f"  [dim]◦ {_describe_goal(g)[:35]} {_('goals.custom_label')}[/dim]")
 
     if not lines:
         return
@@ -329,11 +330,7 @@ def _show_header() -> None:
     line1_parts = [lw_str, *streak_parts, routines_str]
     line1 = "  ·  ".join(line1_parts)
 
-    line2 = (
-        f"[bold]{total}[/bold] workouts  ·  "
-        f"[bold]{week_count}[/bold] this week  ·  "
-        f"[bold]{freq['avg_per_week']}[/bold]/wk avg"
-    )
+    line2 = _("header.line2", total=total, week=week_count, avg=freq["avg_per_week"])
     if goals:
         goals_str = _("header.goals_plural" if len(goals) != 1 else "header.goals", count=len(goals))
         line2 += f"  ·  {goals_str}"

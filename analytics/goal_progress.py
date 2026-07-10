@@ -39,6 +39,7 @@ def _compute_goal_progress() -> list[dict]:
             "pct": 0.0,
             "achieved": False,
             "exercise_name": goal.get("exercise_name"),
+            "muscle_group": goal.get("muscle_group"),
         }
 
         try:

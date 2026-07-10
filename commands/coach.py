@@ -94,19 +94,21 @@ def _run_report(weeks: int, generate_routine: bool = False) -> bool:
         if groups:
             total_g = sum(groups.values()) or 1
             max_g = max(groups.values())
-            dist_lines.append("[bold]By muscle group[/bold]")
+            dist_lines.append(_("coach.dist_by_group"))
             for grp, s in sorted(groups.items(), key=lambda x: -x[1]):
                 pct = s / total_g * 100
                 bw = max(1, int(s / max_g * 0.7 * BAR_G))
                 color = _score_color(int(min(pct * 2, 100)))
                 bar = f"[{color}]{'█' * bw}[/{color}][dim]{'░' * (BAR_G - bw)}[/dim]"
-                dist_lines.append(f"  {grp:<12} {bar}  {pct:.0f}%  [dim]({s:.0f} sets/wk avg)[/dim]")
+                dist_lines.append(
+                    f"  {grp:<12} {bar}  {pct:.0f}%  [dim]{_('coach.dist_sets_avg', sets=f'{s:.0f}')}[/dim]"
+                )
             dist_lines.append("")
 
         if spw:
             total_m = sum(spw.values()) or 1
             max_m = max(spw.values())
-            dist_lines.append("[bold]By muscle[/bold]")
+            dist_lines.append(_("coach.dist_by_muscle"))
             for muscle, s in sorted(spw.items(), key=lambda x: -x[1]):
                 pct = s / total_m * 100
                 bw = max(1, int(s / max_m * 0.7 * BAR_M))
@@ -159,11 +161,11 @@ def _run_report(weeks: int, generate_routine: bool = False) -> bool:
 
             def _fmt_set(s: dict) -> str:
                 w = s.get("weight_kg")
-                w_str = _fmt_weight(w) if w else "BW"
+                w_str = _fmt_weight(w) if w else _("common.bodyweight_short")
                 return f"[dim]{s.get('type', 'normal')}[/dim] {w_str}×{s.get('reps', '?')}"
 
             sets_str = "  ".join(_fmt_set(s) for s in ex.get("sets", []) if isinstance(s, dict))
-            ex_title = ex.get("title") or ex.get("exercise_template_id", "Exercise")
+            ex_title = ex.get("title") or ex.get("exercise_template_id") or _("common.exercise_fallback")
             console.print(f"  [bold]{ex_title}[/bold]")
             console.print(f"    {sets_str}")
             if ex.get("notes"):

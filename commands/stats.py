@@ -118,7 +118,7 @@ def _do_stats() -> None:
         console.rule(_("stats.plateaus_rule"))
         for p in plateaus:
             console.print(
-                f"  [yellow]•[/yellow] {p['exercise']} — stalled {p['sessions_stalled']} sessions (e1RM {p['current_e1rm']} kg)"
+                _("stats.plateau_line", exercise=p["exercise"], sessions=p["sessions_stalled"], e1rm=p["current_e1rm"])
             )
 
     console.rule(_("stats.goals_rule"))

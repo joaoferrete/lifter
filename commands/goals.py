@@ -27,6 +27,35 @@ from ui.prompts import confirm_destructive, number_validator
 from ui.prompts import is_number as _is_number_str
 from ui.widgets import bar as _mk_bar
 
+
+def describe_goal(goal: dict) -> str:
+    """Localized goal description rebuilt from the structured fields.
+
+    Goal rows persist a canonical English `description` (it feeds the AI
+    context and is the only text older rows carry) — every DISPLAY site goes
+    through this instead, so pt_BR users see localized goal text for old and
+    new rows alike. Falls back to the stored description when the structured
+    fields can't reconstruct one (custom goals, legacy rows).
+    """
+    gtype = goal.get("type")
+    target = goal.get("target")
+    if target is not None:
+        if gtype == "lift_pr" and goal.get("exercise_name"):
+            return _("goal.desc_lift_pr", exercise=goal["exercise_name"], target=_fmt_weight(target))
+        if gtype == "frequency":
+            return _("goal.desc_frequency", target=int(target))
+        if gtype == "weight_loss":
+            return _("goal.desc_weight_loss", target=_fmt_weight(target))
+        if gtype == "weight_gain":
+            return _("goal.desc_weight_gain", target=_fmt_weight(target))
+        if gtype == "body_fat":
+            return _("goal.desc_body_fat", target=int(target) if target == int(target) else target)
+        if gtype == "volume" and goal.get("muscle_group"):
+            muscle = str(goal["muscle_group"]).replace("_", " ").title()
+            return _("goal.desc_volume", muscle=muscle, target=int(target))
+    return str(goal.get("description") or "")
+
+
 # ── goals wizard ──────────────────────────────────────────────────────────────
 
 
@@ -258,11 +287,11 @@ def _weekly_checkin() -> None:
         run_goals_wizard()
         return
 
-    name = get_pref("display_name") or "there"
+    name = get_pref("display_name") or _("wizard.name_fallback")
     console.print(_("weekly.checkin_title", name=_esc(name)))
     console.print(_("weekly.current_goals"))
     for g in goals:
-        console.print(f"    [dim]•[/dim] {_esc(g['description'])}")
+        console.print(f"    [dim]•[/dim] {_esc(describe_goal(g))}")
     console.print()
 
     answer = questionary.select(
@@ -298,13 +327,13 @@ def _render_goals_progress() -> None:
     lines = []
     for g in progress:
         if g["achieved"]:
-            lines.append(_("goals.achieved", description=g["description"]))
+            lines.append(_("goals.achieved", description=describe_goal(g)))
             lines.append("")
             continue
 
         pct = g.get("pct")
         if pct is None:
-            lines.append(f"  [dim]◦[/dim] [bold]{g['description']}[/bold]  {_('goals.custom_label')}")
+            lines.append(f"  [dim]◦[/dim] [bold]{_esc(describe_goal(g))}[/bold]  {_('goals.custom_label')}")
             lines.append("")
             continue
 
@@ -330,7 +359,7 @@ def _render_goals_progress() -> None:
         else:
             detail = f"  {pct:.0f}%"
 
-        lines.append(f"  [bold]{g['description']}[/bold]")
+        lines.append(f"  [bold]{_esc(describe_goal(g))}[/bold]")
         lines.append(f"  {bar}{detail}")
         lines.append("")
 
