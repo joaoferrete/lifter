@@ -22,7 +22,7 @@ def _now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _sync_routines(client: HevyClient, progress, counts: dict) -> None:
+def _sync_routines(client: HevyClient, progress: Progress, counts: dict) -> None:
     """Fetch all routines from Hevy and upsert locally, removing deleted ones."""
     task_r = progress.add_task("Syncing routines...", total=None)
     fetched_ids: set[str] = set()
@@ -33,6 +33,32 @@ def _sync_routines(client: HevyClient, progress, counts: dict) -> None:
         progress.advance(task_r)
 
     delete_stale_routines(fetched_ids)
+
+
+def _sync_shared_entities(client: HevyClient, progress: Progress, counts: dict, verb: str) -> None:
+    """Templates, body measurements and routines — identical in both sync modes."""
+    task_t = progress.add_task(f"{verb} exercise templates...", total=None)
+    for template in client.get_exercise_templates():
+        upsert_exercise_template(template)
+        counts["templates"] += 1
+        progress.advance(task_t)
+
+    task_b = progress.add_task(f"{verb} body measurements...", total=None)
+    for measurement in client.get_body_measurements():
+        upsert_body_measurement(measurement)
+        counts["body_measurements"] += 1
+        progress.advance(task_b)
+
+    _sync_routines(client, progress, counts)
+
+
+def _finish_sync(detail: str) -> None:
+    """Common success tail: stamp the sync, record the result, drop caches."""
+    set_sync_state("last_sync", _now_iso())
+    record_sync_result("last_sync_result", True, detail)
+    from render_cache import invalidate
+
+    invalidate()
 
 
 def full_sync(client: HevyClient) -> dict:
@@ -66,28 +92,12 @@ def full_sync(client: HevyClient) -> dict:
                 counts["workouts"] += 1
                 progress.advance(task_w)
 
-            task_t = progress.add_task("Syncing exercise templates...", total=None)
-            for template in client.get_exercise_templates():
-                upsert_exercise_template(template)
-                counts["templates"] += 1
-                progress.advance(task_t)
-
-            task_b = progress.add_task("Syncing body measurements...", total=None)
-            for measurement in client.get_body_measurements():
-                upsert_body_measurement(measurement)
-                counts["body_measurements"] += 1
-                progress.advance(task_b)
-
-            _sync_routines(client, progress, counts)
+            _sync_shared_entities(client, progress, counts, "Syncing")
     except Exception as e:
         record_sync_result("last_sync_result", False, f"{type(e).__name__}: {e}")
         raise
 
-    set_sync_state("last_sync", _now_iso())
-    record_sync_result("last_sync_result", True, f"full: {counts['workouts']} workouts")
-    from render_cache import invalidate
-
-    invalidate()
+    _finish_sync(f"full: {counts['workouts']} workouts")
     log(
         "SYNC",
         "Hevy full sync complete",
@@ -133,30 +143,12 @@ def incremental_sync(client: HevyClient) -> dict:
                     counts["deleted"] += 1
                 progress.advance(task)
 
-            task_t = progress.add_task("Refreshing exercise templates...", total=None)
-            for template in client.get_exercise_templates():
-                upsert_exercise_template(template)
-                counts["templates"] += 1
-                progress.advance(task_t)
-
-            task_b = progress.add_task("Refreshing body measurements...", total=None)
-            for measurement in client.get_body_measurements():
-                upsert_body_measurement(measurement)
-                counts["body_measurements"] += 1
-                progress.advance(task_b)
-
-            _sync_routines(client, progress, counts)
+            _sync_shared_entities(client, progress, counts, "Refreshing")
     except Exception as e:
         record_sync_result("last_sync_result", False, f"{type(e).__name__}: {e}")
         raise
 
-    set_sync_state("last_sync", _now_iso())
-    record_sync_result(
-        "last_sync_result", True, f"incremental: {counts['updated']} updated · {counts['deleted']} deleted"
-    )
-    from render_cache import invalidate
-
-    invalidate()
+    _finish_sync(f"incremental: {counts['updated']} updated · {counts['deleted']} deleted")
     log(
         "SYNC",
         "Hevy incremental sync complete",

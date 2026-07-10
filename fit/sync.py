@@ -235,17 +235,24 @@ def _sync_sleep(
 ) -> None:
     sessions = client.get_sleep_sessions(_iso(start), _iso(end))
 
-    with _tx(_conn()) as conn:
-        for s in sessions:
-            start_ms = int(s["startTimeMillis"])
-            end_ms = int(s["endTimeMillis"])
-            date = _date_of_ms(start_ms)
-            total_min = (end_ms - start_ms) // 60_000
+    # Aggregate in Python before the upsert: a day can have several sessions
+    # (night + nap, fragmented tracking) and the previous ON CONFLICT UPDATE
+    # let the last session overwrite the others instead of summing them.
+    # A session is attributed to the day the athlete WOKE UP — 23:30–07:00
+    # counts on the morning's date, the usual sleep-tracking convention.
+    totals: dict[str, int] = {}
+    for s in sessions:
+        start_ms = int(s["startTimeMillis"])
+        end_ms = int(s["endTimeMillis"])
+        date = _date_of_ms(end_ms)
+        totals[date] = totals.get(date, 0) + (end_ms - start_ms) // 60_000
+        counts["sleep_sessions"] += 1
 
+    with _tx(_conn()) as conn:
+        for date, total_min in totals.items():
             conn.execute(
                 """INSERT INTO fit_sleep (date, total_minutes)
                    VALUES (?, ?)
                    ON CONFLICT(date) DO UPDATE SET total_minutes=excluded.total_minutes""",
                 (date, total_min),
             )
-            counts["sleep_sessions"] += 1

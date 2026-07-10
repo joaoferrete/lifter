@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import Any
 
 import config
 import paths
@@ -31,7 +32,7 @@ def _token_file() -> Path:
 _REFRESH_TIMEOUT_S = 20
 
 
-def refresh_transport():
+def refresh_transport() -> Any:
     """google-auth HTTP transport with a real timeout applied to every call.
 
     Setting `Session.timeout` does nothing in requests — the timeout must be
@@ -44,7 +45,7 @@ def refresh_transport():
     return functools.partial(Request(), timeout=_REFRESH_TIMEOUT_S)
 
 
-def _write_token(creds) -> None:
+def _write_token(creds: Any) -> None:
     tf = _token_file()
     try:
         tf.write_text(creds.to_json())
@@ -55,7 +56,7 @@ def _write_token(creds) -> None:
         ) from e
 
 
-def get_credentials():
+def get_credentials() -> Any:
     """Return valid Google credentials, running the OAuth flow if needed."""
     from google.oauth2.credentials import Credentials
 

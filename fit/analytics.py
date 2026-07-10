@@ -40,7 +40,7 @@ def activity_summary(days: int = 7) -> dict:
     if not rows:
         return {}
 
-    def avg(key):
+    def avg(key: str) -> float | None:
         vals = [r[key] for r in rows if r[key] is not None]
         return round(sum(vals) / len(vals), 1) if vals else None
 

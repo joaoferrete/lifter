@@ -103,7 +103,7 @@ def test_get_workout_count():
     mock_response.json.return_value = {"workout_count": 42}
     mock_response.raise_for_status = MagicMock()
 
-    with patch.object(httpx, "get", return_value=mock_response):
+    with patch.object(httpx, "request", return_value=mock_response):
         client = HevyClient(api_key="fake-key")
         count = client.get_workout_count()
 
@@ -119,7 +119,7 @@ def test_get_user_info():
     mock_response.json.return_value = {"data": {"id": "u1", "name": "Test User", "url": "https://hevy.com/test"}}
     mock_response.raise_for_status = MagicMock()
 
-    with patch.object(httpx, "get", return_value=mock_response):
+    with patch.object(httpx, "request", return_value=mock_response):
         client = HevyClient(api_key="fake-key")
         info = client.get_user_info()
 
@@ -134,14 +134,14 @@ def test_create_routine_sanitizes_payload():
 
     posted_body = {}
 
-    def capture_post(url, **kwargs):
+    def capture_post(method, url, **kwargs):
         posted_body.update(kwargs.get("json", {}))
         mock = MagicMock()
         mock.json.return_value = {"routine": {"id": "new-routine-id"}}
         mock.raise_for_status = MagicMock()
         return mock
 
-    with patch.object(httpx, "post", side_effect=capture_post):
+    with patch.object(httpx, "request", side_effect=capture_post):
         client = HevyClient(api_key="fake-key")
         client.create_routine(
             {
@@ -159,3 +159,58 @@ def test_create_routine_sanitizes_payload():
     exercises = posted_body.get("routine", {}).get("exercises", [])
     assert len(exercises) == 1
     assert "title" not in exercises[0], "title must be stripped by sanitize"
+
+
+# ── pagination ────────────────────────────────────────────────────────────────
+
+
+def _page_response(payload):
+    mock = MagicMock()
+    mock.json.return_value = payload
+    return mock
+
+
+def test_paginate_uses_page_count_when_present():
+    import httpx
+
+    from hevy.client import HevyClient
+
+    pages = [
+        _page_response({"workouts": [{"id": "a"}, {"id": "b"}], "page_count": 2}),
+        _page_response({"workouts": [{"id": "c"}], "page_count": 2}),
+    ]
+    with patch.object(httpx, "request", side_effect=pages):
+        client = HevyClient(api_key="fake-key")
+        items = list(client.get_workouts(page_size=2))
+    assert [i["id"] for i in items] == ["a", "b", "c"]
+
+
+def test_paginate_events_without_page_count_continues_until_short_page():
+    """The events feed has no page_count — a full page must trigger a next fetch."""
+    import httpx
+
+    from hevy.client import HevyClient
+
+    pages = [
+        _page_response({"events": [{"id": 1}, {"id": 2}]}),  # full page → keep going
+        _page_response({"events": [{"id": 3}]}),  # short page → stop
+    ]
+    with patch.object(httpx, "request", side_effect=pages):
+        client = HevyClient(api_key="fake-key")
+        events = list(client.get_workout_events(since="2024-01-01", page_size=2))
+    assert [e["id"] for e in events] == [1, 2, 3]
+
+
+def test_paginate_without_page_count_stops_on_empty_page():
+    import httpx
+
+    from hevy.client import HevyClient
+
+    pages = [
+        _page_response({"events": [{"id": 1}, {"id": 2}]}),
+        _page_response({"events": []}),
+    ]
+    with patch.object(httpx, "request", side_effect=pages):
+        client = HevyClient(api_key="fake-key")
+        events = list(client.get_workout_events(since="2024-01-01", page_size=2))
+    assert len(events) == 2

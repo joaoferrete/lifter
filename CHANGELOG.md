@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Sleep sessions from Google Fit on the same day are now summed (a nap no
+  longer overwrites the night's sleep), and each session counts on the day
+  the athlete woke up — a 23:30–07:00 night belongs to the morning's date.
+- Hevy/Google Fit API calls now retry transient failures (429/5xx and
+  connection errors) with backoff instead of aborting the whole sync; the
+  Hevy events feed also no longer stops after the first page when the
+  response carries no page counter.
+- A profile that has never synced now gets the startup sync prompt (it was
+  treated as "fresh"); profiles without a Hevy API key stay silent.
 - e1RM for 1-rep sets is now the raw weight everywhere. The SQL paths (goal
   progress, workout cards, wizard) applied the Epley multiplier to true
   singles, inflating them ~3.3% versus the analytics views.

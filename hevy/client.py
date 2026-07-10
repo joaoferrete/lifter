@@ -1,9 +1,11 @@
 from collections.abc import Iterator
+from typing import Any
 
 import httpx
 
 import config
 from config import BASE_URL
+from http_retry import request_with_retry
 
 _VALID_SET_TYPES = {"warmup", "normal", "failure", "dropset"}
 
@@ -15,28 +17,36 @@ class HevyClient:
 
     def _get(self, path: str, params: dict | None = None) -> dict:
         url = f"{BASE_URL}{path}"
-        resp = httpx.get(url, headers=self._headers, params=params or {}, timeout=30)
+        resp = request_with_retry("GET", url, headers=self._headers, params=params or {})
         _raise(resp, path)
         return resp.json()
 
     def _post(self, path: str, body: dict) -> dict:
         url = f"{BASE_URL}{path}"
-        resp = httpx.post(url, headers=self._headers, json=body, timeout=30)
+        resp = request_with_retry("POST", url, headers=self._headers, json=body, idempotent=False)
         _raise(resp, path)
         return resp.json()
 
     def _put(self, path: str, body: dict) -> dict:
         url = f"{BASE_URL}{path}"
-        resp = httpx.put(url, headers=self._headers, json=body, timeout=30)
+        resp = request_with_retry("PUT", url, headers=self._headers, json=body, idempotent=False)
         _raise(resp, path)
         return resp.json()
 
-    def _paginate(self, path: str, key: str, page_size: int = 10, **params) -> Iterator[dict]:
+    def _paginate(self, path: str, key: str, page_size: int = 10, **params: object) -> Iterator[dict]:
         page = 1
         while True:
             data = self._get(path, {"page": page, "pageSize": page_size, **params})
-            yield from data.get(key, [])
-            if page >= data.get("page_count", 1):
+            items = data.get(key, [])
+            yield from items
+            page_count = data.get("page_count")
+            if page_count is not None:
+                # Standard Hevy pagination (workouts, routines, templates, ...).
+                if page >= page_count:
+                    break
+            elif len(items) < page_size:
+                # Endpoints without page_count (e.g. the events feed): keep going
+                # until a short/empty page, or updates past page 1 would be lost.
                 break
             page += 1
 
@@ -124,7 +134,7 @@ class HevyClient:
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 
-def _routine_id(resp) -> str:
+def _routine_id(resp: object) -> str:
     """Extract routine id from any Hevy response shape (dict, wrapped dict, or list)."""
     if isinstance(resp, list):
         resp = resp[0] if resp else {}
@@ -181,23 +191,23 @@ def _sanitize_routine(routine: dict, *, for_put: bool = False) -> dict:
     - folder_id is only included for POST (not in PutRoutinesRequestBody).
     """
 
-    def _int(v) -> int | None:
+    def _int(v: Any) -> int | None:
         try:
             return int(v) if v is not None else None
         except (TypeError, ValueError):
             return None
 
-    def _float(v) -> float | None:
+    def _float(v: Any) -> float | None:
         try:
             return float(v) if v is not None else None
         except (TypeError, ValueError):
             return None
 
-    def _str(v) -> str | None:
+    def _str(v: object) -> str | None:
         s = str(v).strip() if v is not None else None
         return s if s else None
 
-    def clean_set(s) -> dict | None:
+    def clean_set(s: object) -> dict | None:
         # Gemini sometimes returns sets as [[{...}]] instead of [{...}]
         if isinstance(s, list):
             s = s[0] if s and isinstance(s[0], dict) else None
@@ -221,7 +231,7 @@ def _sanitize_routine(routine: dict, *, for_put: bool = False) -> dict:
             result["rep_range"] = s["rep_range"]
         return result
 
-    def clean_exercise(ex) -> dict | None:
+    def clean_exercise(ex: object) -> dict | None:
         # Gemini sometimes returns exercises as [[{...}]] instead of [{...}]
         if isinstance(ex, list):
             ex = ex[0] if ex and isinstance(ex[0], dict) else None

@@ -3164,14 +3164,16 @@ def _check_stale_sync() -> None:
     def _is_stale(key: str) -> bool:
         val = get_sync_state(key)
         if not val:
-            return False
+            return True  # never synced — the data is as stale as it gets
         try:
             dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
             return (datetime.now(UTC) - dt).total_seconds() > _stale_seconds()
         except Exception:
             return False
 
-    stale_hevy = _is_stale("last_sync")
+    # Only consider Hevy when a key is configured — otherwise a fresh profile
+    # would be nagged to sync before it can possibly succeed.
+    stale_hevy = bool(config.HEVY_API_KEY) and _is_stale("last_sync")
 
     from fit.auth import is_connected as _fit_connected
 

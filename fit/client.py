@@ -2,11 +2,13 @@
 
 import httpx
 
+from http_retry import request_with_retry
+
 FIT_BASE = "https://www.googleapis.com/fitness/v1/users/me"
 
 
 class FitClient:
-    def __init__(self):
+    def __init__(self) -> None:
         from fit.auth import _token_file, disconnect, get_credentials, refresh_transport
 
         self._token_file = _token_file()
@@ -64,7 +66,9 @@ class FitClient:
         else:
             bucket = {"durationMillis": bucket_ms}
 
-        resp = httpx.post(
+        # The aggregate POST is a read — safe to retry like a GET.
+        resp = request_with_retry(
+            "POST",
             f"{FIT_BASE}/dataset:aggregate",
             headers=self._headers(),
             json={
@@ -73,7 +77,6 @@ class FitClient:
                 "startTimeMillis": start_ms,
                 "endTimeMillis": end_ms,
             },
-            timeout=30,
         )
         self._check(resp, "aggregate")
         return resp.json()
@@ -85,11 +88,11 @@ class FitClient:
             params: dict = {"startTime": start_iso, "endTime": end_iso, "activityType": 72}
             if page_token:
                 params["pageToken"] = page_token
-            resp = httpx.get(
+            resp = request_with_retry(
+                "GET",
                 f"{FIT_BASE}/sessions",
                 headers=self._headers(),
                 params=params,
-                timeout=30,
             )
             self._check(resp, "get_sleep_sessions")
             data = resp.json()
