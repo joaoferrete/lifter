@@ -1,10 +1,11 @@
 """Tests for hevy.sync — full and incremental sync logic with mocked client and store."""
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, call
+
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
 
 def _fake_workout(wid):
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     return {
         "id": wid,
         "title": f"Workout {wid}",
@@ -43,8 +44,15 @@ def _fake_routine(rid):
 
 def _patch_sync(monkeypatch, sync_mod, calls=None):
     if calls is None:
-        calls = {"workouts": [], "templates": [], "body_measurements": [], "deleted": [],
-                 "routines": [], "sync_states": {}, "sync_results": []}
+        calls = {
+            "workouts": [],
+            "templates": [],
+            "body_measurements": [],
+            "deleted": [],
+            "routines": [],
+            "sync_states": {},
+            "sync_results": [],
+        }
     calls.setdefault("sync_results", [])
     monkeypatch.setattr(sync_mod, "init_db", lambda: None)
     monkeypatch.setattr(sync_mod, "upsert_workout", lambda w: calls["workouts"].append(w["id"]))
@@ -54,15 +62,20 @@ def _patch_sync(monkeypatch, sync_mod, calls=None):
     monkeypatch.setattr(sync_mod, "upsert_routine", lambda r: calls["routines"].append(r["id"]))
     monkeypatch.setattr(sync_mod, "delete_stale_routines", lambda ids: None)
     monkeypatch.setattr(sync_mod, "set_sync_state", lambda k, v: calls["sync_states"].update({k: v}))
-    monkeypatch.setattr(sync_mod, "record_sync_result",
-                        lambda key, ok, detail="": calls["sync_results"].append({"key": key, "ok": ok, "detail": detail}))
+    monkeypatch.setattr(
+        sync_mod,
+        "record_sync_result",
+        lambda key, ok, detail="": calls["sync_results"].append({"key": key, "ok": ok, "detail": detail}),
+    )
     return calls
 
 
 # ── full_sync ─────────────────────────────────────────────────────────────────
 
+
 def test_full_sync_returns_correct_workout_count(monkeypatch):
     import hevy.sync as sync_mod
+
     calls = _patch_sync(monkeypatch, sync_mod)
 
     mock_client = MagicMock()
@@ -80,6 +93,7 @@ def test_full_sync_returns_correct_workout_count(monkeypatch):
 
 def test_full_sync_returns_template_and_measurement_counts(monkeypatch):
     import hevy.sync as sync_mod
+
     _patch_sync(monkeypatch, sync_mod)
 
     mock_client = MagicMock()
@@ -97,6 +111,7 @@ def test_full_sync_returns_template_and_measurement_counts(monkeypatch):
 
 def test_full_sync_sets_last_sync_state(monkeypatch):
     import hevy.sync as sync_mod
+
     calls = _patch_sync(monkeypatch, sync_mod)
 
     mock_client = MagicMock()
@@ -113,8 +128,10 @@ def test_full_sync_sets_last_sync_state(monkeypatch):
 
 # ── incremental_sync ──────────────────────────────────────────────────────────
 
+
 def test_incremental_sync_falls_back_to_full_when_no_last_sync(monkeypatch):
     import hevy.sync as sync_mod
+
     calls = _patch_sync(monkeypatch, sync_mod)
     monkeypatch.setattr(sync_mod, "get_sync_state", lambda k: None)
 
@@ -132,14 +149,17 @@ def test_incremental_sync_falls_back_to_full_when_no_last_sync(monkeypatch):
 
 def test_incremental_sync_handles_updated_events(monkeypatch):
     import hevy.sync as sync_mod
+
     calls = _patch_sync(monkeypatch, sync_mod)
     monkeypatch.setattr(sync_mod, "get_sync_state", lambda k: "2024-01-01T00:00:00Z")
 
     mock_client = MagicMock()
-    mock_client.get_workout_events.return_value = iter([
-        {"type": "updated", "workout": _fake_workout("w1")},
-        {"type": "updated", "workout": _fake_workout("w2")},
-    ])
+    mock_client.get_workout_events.return_value = iter(
+        [
+            {"type": "updated", "workout": _fake_workout("w1")},
+            {"type": "updated", "workout": _fake_workout("w2")},
+        ]
+    )
     mock_client.get_exercise_templates.return_value = iter([])
     mock_client.get_body_measurements.return_value = iter([])
     mock_client.get_routines.return_value = iter([])
@@ -153,14 +173,17 @@ def test_incremental_sync_handles_updated_events(monkeypatch):
 
 def test_incremental_sync_handles_deleted_events(monkeypatch):
     import hevy.sync as sync_mod
+
     calls = _patch_sync(monkeypatch, sync_mod)
     monkeypatch.setattr(sync_mod, "get_sync_state", lambda k: "2024-01-01T00:00:00Z")
 
     mock_client = MagicMock()
-    mock_client.get_workout_events.return_value = iter([
-        {"type": "deleted", "id": "gone1"},
-        {"type": "deleted", "id": "gone2"},
-    ])
+    mock_client.get_workout_events.return_value = iter(
+        [
+            {"type": "deleted", "id": "gone1"},
+            {"type": "deleted", "id": "gone2"},
+        ]
+    )
     mock_client.get_exercise_templates.return_value = iter([])
     mock_client.get_body_measurements.return_value = iter([])
     mock_client.get_routines.return_value = iter([])
@@ -173,8 +196,10 @@ def test_incremental_sync_handles_deleted_events(monkeypatch):
 
 # ── routine syncing ───────────────────────────────────────────────────────────
 
+
 def test_full_sync_syncs_routines(monkeypatch):
     import hevy.sync as sync_mod
+
     calls = _patch_sync(monkeypatch, sync_mod)
 
     mock_client = MagicMock()
@@ -192,6 +217,7 @@ def test_full_sync_syncs_routines(monkeypatch):
 
 def test_incremental_sync_syncs_routines(monkeypatch):
     import hevy.sync as sync_mod
+
     calls = _patch_sync(monkeypatch, sync_mod)
     monkeypatch.setattr(sync_mod, "get_sync_state", lambda k: "2024-01-01T00:00:00Z")
 
@@ -209,6 +235,7 @@ def test_incremental_sync_syncs_routines(monkeypatch):
 
 def test_full_sync_calls_delete_stale_routines(monkeypatch):
     import hevy.sync as sync_mod
+
     _patch_sync(monkeypatch, sync_mod)
 
     stale_calls = []
@@ -228,6 +255,7 @@ def test_full_sync_calls_delete_stale_routines(monkeypatch):
 
 def test_full_sync_passes_empty_set_to_delete_stale_when_no_routines(monkeypatch):
     import hevy.sync as sync_mod
+
     _patch_sync(monkeypatch, sync_mod)
 
     stale_calls = []
@@ -247,8 +275,10 @@ def test_full_sync_passes_empty_set_to_delete_stale_when_no_routines(monkeypatch
 
 # ── sync result recording ─────────────────────────────────────────────────────
 
+
 def test_full_sync_records_success(monkeypatch):
     import hevy.sync as sync_mod
+
     calls = _patch_sync(monkeypatch, sync_mod)
     client = MagicMock()
     client.get_workout_count.return_value = 2
@@ -259,14 +289,14 @@ def test_full_sync_records_success(monkeypatch):
 
     sync_mod.full_sync(client)
 
-    assert calls["sync_results"] == [
-        {"key": "last_sync_result", "ok": True, "detail": "full: 2 workouts"}
-    ]
+    assert calls["sync_results"] == [{"key": "last_sync_result", "ok": True, "detail": "full: 2 workouts"}]
 
 
 def test_full_sync_records_failure_and_reraises(monkeypatch):
     import pytest
+
     import hevy.sync as sync_mod
+
     calls = _patch_sync(monkeypatch, sync_mod)
     client = MagicMock()
     client.get_workout_count.side_effect = RuntimeError("api down")
@@ -283,6 +313,7 @@ def test_full_sync_records_failure_and_reraises(monkeypatch):
 
 def test_incremental_fallback_records_once(monkeypatch):
     import hevy.sync as sync_mod
+
     calls = _patch_sync(monkeypatch, sync_mod)
     monkeypatch.setattr(sync_mod, "get_sync_state", lambda k: None)  # forces full_sync fallback
     client = MagicMock()

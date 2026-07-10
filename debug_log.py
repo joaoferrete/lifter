@@ -1,10 +1,11 @@
 """Debug logging — writes structured lines to logs/debug-YYYY-MM-DD.log when enabled."""
+
 from datetime import datetime
 from pathlib import Path
 
 import paths
 
-LOGS_DIR = paths.LOGS_DIR   # default; the LOGS_DIR .env key (config) overrides
+LOGS_DIR = paths.LOGS_DIR  # default; the LOGS_DIR .env key (config) overrides
 RETENTION_MAX_FILES = 14
 
 
@@ -14,6 +15,7 @@ def logs_dir() -> Path:
     apply without a restart. Never raises."""
     try:
         import config
+
         raw = getattr(config, "LOGS_DIR", "")
         if raw:
             p = Path(raw).expanduser()
@@ -22,6 +24,7 @@ def logs_dir() -> Path:
     except Exception:
         pass
     return LOGS_DIR
+
 
 _enabled: bool = False
 
@@ -36,7 +39,7 @@ def prune_old_logs(max_files: int = RETENTION_MAX_FILES) -> int:
     try:
         # filename dates are ISO, so lexicographic sort is chronological
         files = sorted(logs_dir().glob("debug-*.log"))
-        for f in files[:max(len(files) - max_files, 0)]:
+        for f in files[: max(len(files) - max_files, 0)]:
             f.unlink(missing_ok=True)
             removed += 1
     except Exception:
@@ -49,6 +52,7 @@ def init() -> None:
     global _enabled
     try:
         from db.goals import get_pref
+
         _enabled = get_pref("debug_logging") == "1"
     except Exception:
         _enabled = False
@@ -82,6 +86,7 @@ def _traceback_of(exc: BaseException | None) -> str:
         return ""
     try:
         import traceback
+
         tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
         return "".join(f"    | {line}\n" for line in tb.rstrip().splitlines())
     except Exception:

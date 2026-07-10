@@ -1,11 +1,12 @@
 """Tests for the Developer Settings data export helper."""
+
 import json
 
 import pytest
 
 import cli
-from db.memories import save_memory
 from db.goals import save_goal
+from db.memories import save_memory
 
 
 def _read(path):
@@ -74,6 +75,7 @@ def test_export_unknown_kind_raises(tmp_db, tmp_path):
 
 def test_export_honors_export_dir_override(tmp_db, tmp_path, monkeypatch):
     import config
+
     monkeypatch.setattr(config, "EXPORT_DIR", str(tmp_path / "custom-exports"))
 
     path, _rows = cli._export_data("full")
@@ -84,6 +86,7 @@ def test_export_honors_export_dir_override(tmp_db, tmp_path, monkeypatch):
 
 def test_export_defaults_next_to_db(tmp_db, monkeypatch):
     import config
+
     monkeypatch.setattr(config, "EXPORT_DIR", "")
 
     path, _rows = cli._export_data("full")

@@ -1,4 +1,5 @@
 """Personal records detection."""
+
 import pandas as pd
 
 from db.store import query
@@ -79,15 +80,10 @@ def recent_prs(days: int = 30) -> list[dict]:
 
     # Track running max per exercise and find where a new max was set
     df = df.sort_values("start_time")
-    df["prev_max"] = df.groupby("exercise_template_id")["e1rm"].transform(
-        lambda x: x.shift(1).expanding().max()
-    )
+    df["prev_max"] = df.groupby("exercise_template_id")["e1rm"].transform(lambda x: x.shift(1).expanding().max())
 
     recent_cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
-    prs = df[
-        (df["start_time"] >= recent_cutoff)
-        & (df["e1rm"] > df["prev_max"].fillna(0))
-    ]
+    prs = df[(df["start_time"] >= recent_cutoff) & (df["e1rm"] > df["prev_max"].fillna(0))]
 
     return [
         {
@@ -148,9 +144,11 @@ def body_measurement_trend(weeks: int = 12) -> dict:
 
 # ── height & BMI ────────────────────────────────────────────────────────────
 
+
 def get_height_cm() -> float | None:
     """The athlete's height in cm, stored per-profile in preferences."""
     from db.goals import get_pref
+
     raw = get_pref("height_cm")
     try:
         return float(raw) if raw else None

@@ -1,4 +1,5 @@
 """Tests for the one-time legacy-layout migration (paths.migrate_legacy_layout)."""
+
 import os
 import stat
 
@@ -101,6 +102,7 @@ def test_one_failure_does_not_block_others(sandbox, monkeypatch):
     _populate_legacy(legacy, home)
 
     import shutil as _shutil
+
     orig_move = _shutil.move
 
     def flaky_move(src, dst):
@@ -112,8 +114,8 @@ def test_one_failure_does_not_block_others(sandbox, monkeypatch):
     moved = paths.migrate_legacy_layout()
 
     assert len(moved) == 5
-    assert (legacy / "profiles.json").exists()          # left for retry
-    assert paths.ENV_FILE.exists()                       # others proceeded
+    assert (legacy / "profiles.json").exists()  # left for retry
+    assert paths.ENV_FILE.exists()  # others proceeded
 
     # retry with move restored picks up the leftover
     monkeypatch.setattr(paths.shutil, "move", orig_move)

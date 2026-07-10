@@ -1,10 +1,11 @@
 """Tests for AI provider dispatch, labelling, and the ToolCall dataclass."""
-from unittest.mock import patch, MagicMock
+
+from unittest.mock import MagicMock, patch
 
 import ai.provider as provider_mod
 
-
 # ── provider_label ────────────────────────────────────────────────────────────
+
 
 def test_label_gemini(monkeypatch):
     monkeypatch.setattr(provider_mod, "AI_PROVIDER", "gemini")
@@ -50,8 +51,10 @@ def test_label_unknown_provider_capitalised(monkeypatch):
 
 # ── ToolCall / ChatResponse dataclasses ───────────────────────────────────────
 
+
 def test_tool_call_fields():
     from ai.provider import ToolCall
+
     tc = ToolCall(id="tc1", name="push_routine", args={"title": "Push"})
     assert tc.id == "tc1"
     assert tc.name == "push_routine"
@@ -60,6 +63,7 @@ def test_tool_call_fields():
 
 def test_chat_response_defaults():
     from ai.provider import ChatResponse
+
     resp = ChatResponse(text="hello")
     assert resp.text == "hello"
     assert resp.tool_calls == []
@@ -67,6 +71,7 @@ def test_chat_response_defaults():
 
 def test_chat_response_with_tool_calls():
     from ai.provider import ChatResponse, ToolCall
+
     tc = ToolCall(id="x", name="fn", args={})
     resp = ChatResponse(text=None, tool_calls=[tc])
     assert resp.text is None
@@ -74,6 +79,7 @@ def test_chat_response_with_tool_calls():
 
 
 # ── create_chat_session dispatch ──────────────────────────────────────────────
+
 
 def test_dispatch_claude(monkeypatch):
     monkeypatch.setattr(provider_mod, "AI_PROVIDER", "claude")
@@ -156,6 +162,7 @@ def test_dispatch_gemini_is_default(monkeypatch):
 def test_dispatch_unknown_provider_raises(monkeypatch):
     """A typo'd AI_PROVIDER must fail loudly, not silently fall back to Gemini."""
     import pytest
+
     monkeypatch.setattr(provider_mod, "AI_PROVIDER", "claud")  # typo
     with pytest.raises(RuntimeError, match="Unknown AI_PROVIDER"):
         provider_mod.create_chat_session("sys")
@@ -163,11 +170,13 @@ def test_dispatch_unknown_provider_raises(monkeypatch):
 
 # ── Bedrock bearer token ──────────────────────────────────────────────────────
 
+
 def test_anthropic_bedrock_client_uses_bearer_token(monkeypatch):
     """With a bearer token set, build AnthropicBedrock(api_key=...) and no AWS keys."""
     monkeypatch.setattr(provider_mod, "AWS_BEARER_TOKEN_BEDROCK", "tok-123")
     monkeypatch.setattr(provider_mod, "AWS_REGION", "us-east-1")
     import anthropic
+
     with patch.object(anthropic, "AnthropicBedrock") as MockClient:
         provider_mod._anthropic_bedrock_client()
     MockClient.assert_called_once_with(aws_region="us-east-1", api_key="tok-123")
@@ -180,6 +189,7 @@ def test_anthropic_bedrock_client_uses_aws_credentials(monkeypatch):
     monkeypatch.setattr(provider_mod, "AWS_SECRET_ACCESS_KEY", "secret")
     monkeypatch.setattr(provider_mod, "AWS_SESSION_TOKEN", "")
     import anthropic
+
     with patch.object(anthropic, "AnthropicBedrock") as MockClient:
         provider_mod._anthropic_bedrock_client()
     _, kwargs = MockClient.call_args
@@ -190,6 +200,7 @@ def test_anthropic_bedrock_client_uses_aws_credentials(monkeypatch):
 def test_anthropic_bedrock_client_no_creds_raises(monkeypatch):
     """No bearer token and no AWS keys → clear error, not a cryptic SDK failure."""
     import pytest
+
     monkeypatch.setattr(provider_mod, "AWS_BEARER_TOKEN_BEDROCK", "")
     monkeypatch.setattr(provider_mod, "AWS_ACCESS_KEY_ID", "")
     monkeypatch.setattr(provider_mod, "AWS_SECRET_ACCESS_KEY", "")
@@ -198,6 +209,7 @@ def test_anthropic_bedrock_client_no_creds_raises(monkeypatch):
 
 
 # ── complete_json ─────────────────────────────────────────────────────────────
+
 
 def test_loads_lenient_plain_json():
     assert provider_mod._loads_lenient('{"a": 1}') == {"a": 1}
@@ -210,6 +222,7 @@ def test_loads_lenient_strips_markdown_fences():
 
 def test_complete_json_openai_compat_uses_json_mode(monkeypatch, tmp_db):
     from db.goals import get_token_usage
+
     monkeypatch.setattr(provider_mod, "AI_PROVIDER", "openrouter")
     monkeypatch.setattr(provider_mod, "AI_MODEL", "anthropic/claude-3-5-sonnet")
 
@@ -263,8 +276,10 @@ def test_complete_json_claude_prefills_brace(monkeypatch, tmp_db):
 
 # ── _track_usage ──────────────────────────────────────────────────────────────
 
+
 def test_track_usage_calls_add_token_usage(tmp_db):
     from db.goals import get_token_usage
+
     provider_mod._track_usage(input_tokens=100, output_tokens=50)
     usage = get_token_usage()
     assert usage["input"] == 100
@@ -273,6 +288,7 @@ def test_track_usage_calls_add_token_usage(tmp_db):
 
 def test_track_usage_records_cache_read(tmp_db):
     from db.goals import get_token_usage
+
     provider_mod._track_usage(input_tokens=200, output_tokens=40, cache_read=150)
     usage = get_token_usage()
     assert usage["cache_read"] == 150
@@ -280,6 +296,7 @@ def test_track_usage_records_cache_read(tmp_db):
 
 def test_track_usage_is_cumulative_across_calls(tmp_db):
     from db.goals import get_token_usage
+
     provider_mod._track_usage(input_tokens=300, output_tokens=60)
     provider_mod._track_usage(input_tokens=200, output_tokens=40)
     usage = get_token_usage()
@@ -289,6 +306,7 @@ def test_track_usage_is_cumulative_across_calls(tmp_db):
 
 def test_track_usage_skips_all_zeros(tmp_db):
     from db.goals import get_token_usage
+
     provider_mod._track_usage()  # nothing — should not write any row
     usage = get_token_usage()
     assert usage == {"input": 0, "output": 0, "cache_read": 0}
@@ -297,11 +315,13 @@ def test_track_usage_skips_all_zeros(tmp_db):
 def test_track_usage_never_raises_on_db_error(monkeypatch):
     def boom(*a, **kw):
         raise RuntimeError("db exploded")
+
     monkeypatch.setattr("db.goals.add_token_usage", boom)
     provider_mod._track_usage(input_tokens=999)  # must not raise
 
 
 # ── chat history windowing (P2) ────────────────────────────────────────────────
+
 
 def test_summarize_history_returns_old_on_empty():
     assert provider_mod._summarize_history("prev", []) == "prev"
@@ -338,9 +358,11 @@ def test_openai_session_no_window_when_under_limit(monkeypatch):
     with patch("openai.OpenAI", return_value=MagicMock()):
         s = provider_mod.OpenAICompatibleChatSession("BASE")
     s._keep_turns = 5
-    s._messages = [{"role": "system", "content": "BASE"},
-                   {"role": "user", "content": "u0"},
-                   {"role": "assistant", "content": "a0"}]
+    s._messages = [
+        {"role": "system", "content": "BASE"},
+        {"role": "user", "content": "u0"},
+        {"role": "assistant", "content": "a0"},
+    ]
     before = list(s._messages)
     s._maybe_window()
     assert s._messages == before  # untouched
@@ -366,8 +388,7 @@ def test_claude_session_windows_at_user_boundary(monkeypatch):
     # so the kept slice has no dangling tool_result.
     assert s._messages[0] == {"role": "user", "content": "u1"}
     assert not any(
-        isinstance(m.get("content"), list)
-        and any(b.get("type") == "tool_result" for b in m["content"])
+        isinstance(m.get("content"), list) and any(b.get("type") == "tool_result" for b in m["content"])
         for m in s._messages
     )
     assert "S" in s._system[0]["text"] and "BASE" in s._system[0]["text"]
@@ -388,6 +409,7 @@ def test_keep_turns_zero_disables_windowing(monkeypatch):
 
 
 # ── stop_reason normalization ─────────────────────────────────────────────────
+
 
 def test_chat_response_stop_reason_defaults_to_none():
     r = provider_mod.ChatResponse(text="hi")
@@ -426,9 +448,7 @@ def test_norm_stop_reason_none_passthrough():
 
 def test_openai_compat_parse_maps_length_to_max_tokens(monkeypatch):
     monkeypatch.setattr(provider_mod, "AI_PROVIDER", "groq")
-    session = provider_mod.OpenAICompatibleChatSession.__new__(
-        provider_mod.OpenAICompatibleChatSession
-    )
+    session = provider_mod.OpenAICompatibleChatSession.__new__(provider_mod.OpenAICompatibleChatSession)
     msg = MagicMock()
     msg.content = "partial answer"
     msg.tool_calls = None
@@ -440,9 +460,7 @@ def test_openai_compat_parse_maps_length_to_max_tokens(monkeypatch):
 
 
 def test_openai_compat_parse_unparseable_tool_args_become_empty_dict():
-    session = provider_mod.OpenAICompatibleChatSession.__new__(
-        provider_mod.OpenAICompatibleChatSession
-    )
+    session = provider_mod.OpenAICompatibleChatSession.__new__(provider_mod.OpenAICompatibleChatSession)
     tc = MagicMock()
     tc.id = "call_1"
     tc.function.name = "push_routine"

@@ -6,6 +6,7 @@ root module is added but not listed, the source tree and pytest still work (the
 repo root is on sys.path), yet a ``pipx``/wheel install raises ModuleNotFoundError
 at runtime. This test catches that omission early.
 """
+
 import tomllib
 from pathlib import Path
 
@@ -14,10 +15,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 
 def _root_module_stems() -> set[str]:
     """Top-level .py files that ship as standalone modules (excludes packages)."""
-    return {
-        p.stem for p in _ROOT.glob("*.py")
-        if p.name != "setup.py"
-    }
+    return {p.stem for p in _ROOT.glob("*.py") if p.name != "setup.py"}
 
 
 def _declared_py_modules() -> list[str]:
@@ -46,6 +44,7 @@ def test_declared_py_modules_all_exist():
 # static checks catch config regressions; the release workflow additionally
 # inspects the built wheel itself.
 
+
 def test_locales_is_a_package():
     assert (_ROOT / "locales" / "__init__.py").exists(), (
         "locales/__init__.py missing — locales would be dropped from the wheel"
@@ -56,6 +55,7 @@ def test_locales_package_data_declared():
     data = tomllib.loads((_ROOT / "pyproject.toml").read_text())
     globs = data["tool"]["setuptools"]["package-data"].get("locales", [])
     import fnmatch
+
     for json_file in (_ROOT / "locales").glob("*.json"):
         assert any(fnmatch.fnmatch(json_file.name, g) for g in globs), (
             f"{json_file.name} not covered by [tool.setuptools.package-data] locales = {globs}"
@@ -64,6 +64,7 @@ def test_locales_package_data_declared():
 
 def test_locale_files_valid_and_nonempty():
     import json
+
     for name in ("en.json", "pt_BR.json"):
         data = json.loads((_ROOT / "locales" / name).read_text(encoding="utf-8"))
         assert isinstance(data, dict) and len(data) > 100

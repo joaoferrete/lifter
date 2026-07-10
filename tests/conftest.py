@@ -1,8 +1,10 @@
 """Shared test fixtures — isolate every test to its own in-memory SQLite database."""
+
 import importlib
 import os
 import sqlite3
 import tempfile
+from datetime import UTC
 from pathlib import Path
 
 import pytest
@@ -49,9 +51,15 @@ def tmp_db(db_path, monkeypatch) -> Path:
 
     # Patch every write helper to default to the test DB
     for fn_name in (
-        "upsert_workout", "delete_workout", "upsert_exercise_template",
-        "upsert_body_measurement", "upsert_routine", "delete_stale_routines",
-        "get_routines_with_exercises", "get_sync_state", "set_sync_state",
+        "upsert_workout",
+        "delete_workout",
+        "upsert_exercise_template",
+        "upsert_body_measurement",
+        "upsert_routine",
+        "delete_stale_routines",
+        "get_routines_with_exercises",
+        "get_sync_state",
+        "set_sync_state",
     ):
         _orig = getattr(store_mod, fn_name)
 
@@ -59,28 +67,34 @@ def tmp_db(db_path, monkeypatch) -> Path:
             def _patched(*a, **kw):
                 kw.setdefault("db_path", db_path)
                 return original(*a, **kw)
+
             return _patched
 
         monkeypatch.setattr(store_mod, fn_name, _make_patched(_orig))
 
     # ── analytics modules ────────────────────────────────────────────────────
     for mod_name in (
-        "analytics.volume", "analytics.progression",
-        "analytics.frequency", "analytics.records",
+        "analytics.volume",
+        "analytics.progression",
+        "analytics.frequency",
+        "analytics.records",
     ):
         mod = importlib.import_module(mod_name)
         monkeypatch.setattr(mod, "query", _query)
 
     # ── db.goals / db.memories ───────────────────────────────────────────────
     import db.goals as goals_mod
+
     monkeypatch.setattr(goals_mod, "_conn", _make_conn)
 
     import db.memories as mem_mod
+
     monkeypatch.setattr(mem_mod, "_conn", _make_conn)
 
     # ── fit.sync ─────────────────────────────────────────────────────────────
     try:
         import fit.sync as fit_sync_mod
+
         monkeypatch.setattr(fit_sync_mod, "_conn", _make_conn)
     except Exception:
         pass
@@ -88,6 +102,7 @@ def tmp_db(db_path, monkeypatch) -> Path:
     # ── fit.analytics ─────────────────────────────────────────────────────────
     try:
         import fit.analytics as fit_analytics_mod
+
         monkeypatch.setattr(fit_analytics_mod, "query", _query)
     except Exception:
         pass
@@ -95,10 +110,10 @@ def tmp_db(db_path, monkeypatch) -> Path:
     # ── ai.coach ─────────────────────────────────────────────────────────────
     try:
         import ai.coach as coach_mod
+
         monkeypatch.setattr(coach_mod, "query", _query)
         _orig_grwe = coach_mod.get_routines_with_exercises
-        monkeypatch.setattr(coach_mod, "get_routines_with_exercises",
-                            lambda: _orig_grwe(db_path=db_path))
+        monkeypatch.setattr(coach_mod, "get_routines_with_exercises", lambda: _orig_grwe(db_path=db_path))
     except Exception:
         pass
 
@@ -115,6 +130,7 @@ WORKOUT_ID_BASE = "wk-"
 
 def seed_exercise_template(db_path, template_id=TEMPLATE_ID, muscle="chest"):
     from db.store import upsert_exercise_template
+
     upsert_exercise_template(
         {
             "id": template_id,
@@ -130,6 +146,7 @@ def seed_exercise_template(db_path, template_id=TEMPLATE_ID, muscle="chest"):
 
 def seed_routine(db_path, routine_id, title="Test Routine", template_id=TEMPLATE_ID):
     from db.store import upsert_routine
+
     upsert_routine(
         {
             "id": routine_id,
@@ -158,10 +175,11 @@ def seed_routine(db_path, routine_id, title="Test Routine", template_id=TEMPLATE
 
 
 def seed_workout(db_path, workout_id, template_id=TEMPLATE_ID, days_ago=0, sets=None):
-    from db.store import upsert_workout
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta
 
-    start = datetime.now(timezone.utc) - timedelta(days=days_ago)
+    from db.store import upsert_workout
+
+    start = datetime.now(UTC) - timedelta(days=days_ago)
     end = start + timedelta(hours=1)
     sets = sets or [{"index": 0, "type": "normal", "weight_kg": 80.0, "reps": 5}]
 

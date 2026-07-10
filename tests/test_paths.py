@@ -1,4 +1,5 @@
 """Tests for XDG path resolution (paths.resolve_dirs)."""
+
 from pathlib import Path
 
 import paths
@@ -13,11 +14,13 @@ def test_defaults_without_env():
 
 
 def test_xdg_vars_honored():
-    dirs = paths.resolve_dirs({
-        "XDG_DATA_HOME": "/srv/data",
-        "XDG_CONFIG_HOME": "/srv/config",
-        "XDG_STATE_HOME": "/srv/state",
-    })
+    dirs = paths.resolve_dirs(
+        {
+            "XDG_DATA_HOME": "/srv/data",
+            "XDG_CONFIG_HOME": "/srv/config",
+            "XDG_STATE_HOME": "/srv/state",
+        }
+    )
     assert dirs.data == Path("/srv/data/lifter")
     assert dirs.config == Path("/srv/config/lifter")
     assert dirs.state == Path("/srv/state/lifter")
@@ -30,10 +33,12 @@ def test_relative_xdg_values_ignored():
 
 
 def test_lifter_home_collapses_all_and_wins():
-    dirs = paths.resolve_dirs({
-        "LIFTER_HOME": "/opt/lifter-home",
-        "XDG_DATA_HOME": "/srv/data",
-    })
+    dirs = paths.resolve_dirs(
+        {
+            "LIFTER_HOME": "/opt/lifter-home",
+            "XDG_DATA_HOME": "/srv/data",
+        }
+    )
     assert dirs.data == dirs.config == dirs.state == Path("/opt/lifter-home")
 
 

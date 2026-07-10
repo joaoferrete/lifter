@@ -1,4 +1,5 @@
 """Tests for config.set_env_values (.env upsert writer) and reload_env."""
+
 import stat
 
 import config
@@ -14,11 +15,7 @@ def test_creates_file_with_0600(tmp_path):
 def test_updates_existing_key_variants(tmp_path):
     env = tmp_path / ".env"
     env.write_text(
-        "# comment stays\n"
-        "GEMINI_API_KEY=old\n"
-        "export GROQ_API_KEY=old2\n"
-        "AWS_REGION = us-east-1\n"
-        "UNRELATED=keep\n"
+        "# comment stays\nGEMINI_API_KEY=old\nexport GROQ_API_KEY=old2\nAWS_REGION = us-east-1\nUNRELATED=keep\n"
     )
     config.set_env_values(
         {"GEMINI_API_KEY": "new", "GROQ_API_KEY": "new2", "AWS_REGION": "sa-east-1"},

@@ -1,4 +1,5 @@
 """Recovery and health analytics from Google Fit data."""
+
 from db.store import query
 
 
@@ -47,7 +48,7 @@ def activity_summary(days: int = 7) -> dict:
         "avg_steps": avg("steps"),
         "avg_calories": avg("total_calories"),
         "avg_hr": avg("avg_hr"),
-        "resting_hr": avg("min_hr"),   # minimum HR is a proxy for resting HR
+        "resting_hr": avg("min_hr"),  # minimum HR is a proxy for resting HR
         "avg_active_minutes": avg("active_minutes"),
         "days_tracked": len(rows),
     }
@@ -74,18 +75,8 @@ def recovery_score(days: int = 3) -> dict | None:
         hr_pts = 25  # neutral if no data
 
     score = int(sleep_pts + hr_pts)
-    label = (
-        "Excellent" if score >= 80
-        else "Good"    if score >= 65
-        else "Fair"    if score >= 45
-        else "Poor"
-    )
-    color = (
-        "green"  if score >= 80
-        else "cyan"    if score >= 65
-        else "yellow"  if score >= 45
-        else "red"
-    )
+    label = "Excellent" if score >= 80 else "Good" if score >= 65 else "Fair" if score >= 45 else "Poor"
+    color = "green" if score >= 80 else "cyan" if score >= 65 else "yellow" if score >= 45 else "red"
 
     return {
         "score": score,

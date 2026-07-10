@@ -1,14 +1,14 @@
 """Profile management for multi-user support."""
+
 import json
 import os
 import re
 import shutil
-from pathlib import Path
 
 import config
 import paths
 
-PROFILES_DIR  = paths.PROFILES_DIR
+PROFILES_DIR = paths.PROFILES_DIR
 PROFILES_FILE = paths.PROFILES_FILE
 
 
@@ -34,9 +34,7 @@ def _write(data: dict) -> None:
         tmp.write_text(json.dumps(data, indent=2))
         os.replace(tmp, PROFILES_FILE)
     except OSError as e:
-        raise RuntimeError(
-            f"Could not save profiles file at {PROFILES_FILE}: {e}"
-        ) from e
+        raise RuntimeError(f"Could not save profiles file at {PROFILES_FILE}: {e}") from e
 
 
 def _read_profile_cfg(slug: str) -> dict:
@@ -50,8 +48,8 @@ def _read_profile_cfg(slug: str) -> dict:
         except (OSError, json.JSONDecodeError) as e:
             try:
                 import debug_log
-                debug_log.error("PROFILE", "profile.json corrupt — rebuilding",
-                                slug=slug, error=str(e)[:200])
+
+                debug_log.error("PROFILE", "profile.json corrupt — rebuilding", slug=slug, error=str(e)[:200])
             except Exception:
                 pass
     return {"name": get_profile_name(slug), "slug": slug}
@@ -104,6 +102,7 @@ def create_profile(name: str, hevy_api_key: str = "") -> dict:
     _write(data)
     try:
         from debug_log import log
+
         log("PROFILE", "Profile created", name=name, slug=slug)
     except Exception:
         pass
@@ -124,6 +123,7 @@ def rename_profile(slug: str, new_name: str) -> None:
     _write(data)
     try:
         from debug_log import log
+
         log("PROFILE", "Profile renamed", slug=slug, old=old_name, new=new_name)
     except Exception:
         pass
@@ -142,6 +142,7 @@ def delete_profile(slug: str) -> None:
     _write(data)
     try:
         from debug_log import log
+
         log("PROFILE", "Profile deleted", slug=slug, name=name)
     except Exception:
         pass
@@ -164,6 +165,7 @@ def activate_profile(slug: str) -> None:
             pass
     try:
         from debug_log import log
+
         log("PROFILE", "Profile activated", slug=slug)
     except Exception:
         pass

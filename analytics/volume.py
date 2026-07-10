@@ -1,4 +1,5 @@
 """Weekly training volume (tonnage) per muscle group."""
+
 import pandas as pd
 
 from db.store import query

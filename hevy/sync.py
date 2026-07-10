@@ -1,24 +1,24 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
-from hevy.client import HevyClient
 from db.store import (
-    init_db,
-    upsert_workout,
-    delete_workout,
-    upsert_exercise_template,
-    upsert_body_measurement,
-    upsert_routine,
     delete_stale_routines,
+    delete_workout,
     get_sync_state,
-    set_sync_state,
+    init_db,
     record_sync_result,
+    set_sync_state,
+    upsert_body_measurement,
+    upsert_exercise_template,
+    upsert_routine,
+    upsert_workout,
 )
+from hevy.client import HevyClient
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _sync_routines(client: HevyClient, progress, counts: dict) -> None:
@@ -36,6 +36,7 @@ def _sync_routines(client: HevyClient, progress, counts: dict) -> None:
 
 def full_sync(client: HevyClient) -> dict:
     from debug_log import log
+
     log("SYNC", "Hevy full sync started")
     init_db()
 
@@ -77,25 +78,42 @@ def full_sync(client: HevyClient) -> dict:
     set_sync_state("last_sync", _now_iso())
     record_sync_result("last_sync_result", True, f"full: {counts['workouts']} workouts")
     from render_cache import invalidate
+
     invalidate()
-    log("SYNC", "Hevy full sync complete",
-        workouts=counts["workouts"], templates=counts["templates"],
-        body_measurements=counts["body_measurements"], routines=counts["routines"])
+    log(
+        "SYNC",
+        "Hevy full sync complete",
+        workouts=counts["workouts"],
+        templates=counts["templates"],
+        body_measurements=counts["body_measurements"],
+        routines=counts["routines"],
+    )
     return counts
 
 
 def incremental_sync(client: HevyClient) -> dict:
     from debug_log import log
+
     last_sync = get_sync_state("last_sync")
     if not last_sync:
         return full_sync(client)
 
     since = last_sync
     log("SYNC", "Hevy incremental sync started", since=since)
-    counts = {"updated": 0, "deleted": 0, "templates": 0, "body_measurements": 0, "routines": 0, "updated_ids": [], "since": since}
+    counts = {
+        "updated": 0,
+        "deleted": 0,
+        "templates": 0,
+        "body_measurements": 0,
+        "routines": 0,
+        "updated_ids": [],
+        "since": since,
+    }
 
     try:
-        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True) as progress:
+        with Progress(
+            SpinnerColumn(), TextColumn("[progress.description]{task.description}"), transient=True
+        ) as progress:
             task = progress.add_task(f"Fetching events since {last_sync}...", total=None)
             for event in client.get_workout_events(since=last_sync):
                 if event.get("type") == "updated":
@@ -125,10 +143,17 @@ def incremental_sync(client: HevyClient) -> dict:
         raise
 
     set_sync_state("last_sync", _now_iso())
-    record_sync_result("last_sync_result", True,
-                       f"incremental: {counts['updated']} updated · {counts['deleted']} deleted")
+    record_sync_result(
+        "last_sync_result", True, f"incremental: {counts['updated']} updated · {counts['deleted']} deleted"
+    )
     from render_cache import invalidate
+
     invalidate()
-    log("SYNC", "Hevy incremental sync complete",
-        updated=counts["updated"], deleted=counts["deleted"], routines=counts["routines"])
+    log(
+        "SYNC",
+        "Hevy incremental sync complete",
+        updated=counts["updated"],
+        deleted=counts["deleted"],
+        routines=counts["routines"],
+    )
     return counts

@@ -1,5 +1,7 @@
+from collections.abc import Iterator
+
 import httpx
-from typing import Iterator
+
 import config
 from config import BASE_URL
 
@@ -121,6 +123,7 @@ class HevyClient:
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+
 def _routine_id(resp) -> str:
     """Extract routine id from any Hevy response shape (dict, wrapped dict, or list)."""
     if isinstance(resp, list):
@@ -177,6 +180,7 @@ def _sanitize_routine(routine: dict, *, for_put: bool = False) -> dict:
     - empty-string fields are treated as absent.
     - folder_id is only included for POST (not in PutRoutinesRequestBody).
     """
+
     def _int(v) -> int | None:
         try:
             return int(v) if v is not None else None

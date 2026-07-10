@@ -1,4 +1,5 @@
 """Persistent coach memories — facts extracted from chat conversations."""
+
 from db.store import connect as _conn
 
 _DEFAULT_MEMORIES_MAX = 200
@@ -9,6 +10,7 @@ def _memories_max() -> int:
     """Configured cap on stored memories (pref `memories_max`, 0 = unlimited)."""
     try:
         from db.goals import get_pref
+
         raw = get_pref("memories_max")
         return max(0, int(raw)) if raw is not None else _DEFAULT_MEMORIES_MAX
     except Exception:
@@ -43,17 +45,13 @@ def enforce_memory_cap() -> None:
 
 def get_recent_memories(limit: int = 15) -> list[dict]:
     with _conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM chat_memories ORDER BY created_at DESC LIMIT ?", (limit,)
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM chat_memories ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
         return [dict(r) for r in rows]
 
 
 def get_all_memories() -> list[dict]:
     with _conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM chat_memories ORDER BY created_at DESC, id DESC"
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM chat_memories ORDER BY created_at DESC, id DESC").fetchall()
         return [dict(r) for r in rows]
 
 
@@ -84,6 +82,7 @@ def memories_as_context(limit: int = 15) -> str:
     if not memories:
         return ""
     from ai.sanitize import sanitize_for_prompt
+
     lines = ["## Coach memory (from previous conversations)"]
     for m in memories:
         date = (m.get("created_at") or "")[:10]

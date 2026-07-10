@@ -1,11 +1,12 @@
 """Tests for the Developer Settings data import (restore) helper."""
+
 import json
 
 import pytest
 
 import cli
-from db.memories import save_memory, get_all_memories, count_memories
 from db.goals import save_goal
+from db.memories import count_memories, get_all_memories, save_memory
 from db.store import query
 from tests.conftest import seed_exercise_template, seed_workout
 
@@ -21,6 +22,7 @@ def test_full_round_trip_restores_data_and_fks(tmp_db, tmp_path):
     # mutate: extra memory, workout gone
     save_memory("This one must disappear on restore")
     from db.store import delete_workout
+
     delete_workout("wk-1", db_path=tmp_db)
     assert query("SELECT COUNT(*) AS n FROM workouts")[0]["n"] == 0
 
@@ -80,8 +82,13 @@ def test_schema_drift_skips_unknown_tables_and_columns(tmp_db, tmp_path):
         "kind": "memories",
         "tables": {
             "chat_memories": [
-                {"id": 1, "created_at": "2024-01-01 10:00:00", "summary": "Kept",
-                 "category": "general", "future_column": "dropped"},
+                {
+                    "id": 1,
+                    "created_at": "2024-01-01 10:00:00",
+                    "summary": "Kept",
+                    "category": "general",
+                    "future_column": "dropped",
+                },
             ],
             "table_from_the_future": [{"a": 1}],
         },

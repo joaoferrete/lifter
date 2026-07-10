@@ -11,14 +11,15 @@ writable data now lives in user directories:
 Setting LIFTER_HOME forces all three into a single directory (useful for
 tests, portable installs, and development).
 """
+
 import os
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
 
 _APP = "lifter"
-_LEGACY_DIR = Path(__file__).resolve().parent   # old install layout (repo/site-packages)
+_LEGACY_DIR = Path(__file__).resolve().parent  # old install layout (repo/site-packages)
 
 
 @dataclass(frozen=True)

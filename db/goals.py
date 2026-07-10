@@ -1,6 +1,7 @@
 """User goals and preferences management."""
+
 import calendar
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from db.store import connect as _conn
 
@@ -8,10 +9,12 @@ from db.store import connect as _conn
 def _invalidate_render_cache() -> None:
     """Drop memoized render data after a goal mutation (see render_cache)."""
     from render_cache import invalidate
+
     invalidate()
 
 
 # ── preferences ───────────────────────────────────────────────────────────────
+
 
 def get_pref(key: str) -> str | None:
     with _conn() as conn:
@@ -75,12 +78,10 @@ def _maybe_rollover_month(conn) -> None:
 
     Operates on an already-open connection. Never raises on logging failure."""
     reset_day = get_token_reset_day()
-    today = datetime.now(timezone.utc).astimezone().date()
+    today = datetime.now(UTC).astimezone().date()
     period_start = _current_period_start(reset_day, today).isoformat()
 
-    row = conn.execute(
-        "SELECT value FROM user_preferences WHERE key = ?", (_PERIOD_START_KEY,)
-    ).fetchone()
+    row = conn.execute("SELECT value FROM user_preferences WHERE key = ?", (_PERIOD_START_KEY,)).fetchone()
     stored = row["value"] if row else None
 
     if stored == period_start:
@@ -89,8 +90,14 @@ def _maybe_rollover_month(conn) -> None:
     if stored is not None:
         try:
             from debug_log import log
-            log("TOKENS", "monthly counters rolled over",
-                old_period=stored, new_period=period_start, reset_day=reset_day)
+
+            log(
+                "TOKENS",
+                "monthly counters rolled over",
+                old_period=stored,
+                new_period=period_start,
+                reset_day=reset_day,
+            )
         except Exception:
             pass
         conn.execute(
@@ -114,11 +121,11 @@ def maybe_rollover_tokens() -> None:
 def add_token_usage(input_tokens: int = 0, output_tokens: int = 0, cache_read_tokens: int = 0) -> None:
     """Atomically increment both the lifetime and current-month token counters."""
     pairs = [
-        ("ai_tokens_input",            input_tokens),
-        ("ai_tokens_output",           output_tokens),
-        ("ai_tokens_cache_read",       cache_read_tokens),
-        ("ai_tokens_month_input",      input_tokens),
-        ("ai_tokens_month_output",     output_tokens),
+        ("ai_tokens_input", input_tokens),
+        ("ai_tokens_output", output_tokens),
+        ("ai_tokens_cache_read", cache_read_tokens),
+        ("ai_tokens_month_input", input_tokens),
+        ("ai_tokens_month_output", output_tokens),
         ("ai_tokens_month_cache_read", cache_read_tokens),
     ]
     with _conn() as conn:
@@ -152,8 +159,8 @@ def get_token_usage() -> dict:
         _maybe_rollover_month(conn)
         rows = _read_counters(conn, _TOKEN_KEYS)
     return {
-        "input":      rows.get("ai_tokens_input", 0),
-        "output":     rows.get("ai_tokens_output", 0),
+        "input": rows.get("ai_tokens_input", 0),
+        "output": rows.get("ai_tokens_output", 0),
         "cache_read": rows.get("ai_tokens_cache_read", 0),
     }
 
@@ -164,8 +171,8 @@ def get_token_usage_month() -> dict:
         _maybe_rollover_month(conn)
         rows = _read_counters(conn, _TOKEN_MONTH_KEYS)
     return {
-        "input":      rows.get("ai_tokens_month_input", 0),
-        "output":     rows.get("ai_tokens_month_output", 0),
+        "input": rows.get("ai_tokens_month_input", 0),
+        "output": rows.get("ai_tokens_month_output", 0),
         "cache_read": rows.get("ai_tokens_month_cache_read", 0),
     }
 
@@ -211,6 +218,7 @@ def token_budget_status() -> dict | None:
 
 # ── goals CRUD ────────────────────────────────────────────────────────────────
 
+
 def save_goal(
     type: str,
     description: str,
@@ -227,17 +235,14 @@ def save_goal(
                (type, description, target, unit, exercise_template_id,
                 exercise_name, muscle_group, start_value, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
-            (type, description, target, unit, exercise_template_id,
-             exercise_name, muscle_group, start_value),
+            (type, description, target, unit, exercise_template_id, exercise_name, muscle_group, start_value),
         )
     _invalidate_render_cache()
 
 
 def get_goals() -> list[dict]:
     with _conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM user_goals WHERE achieved_at IS NULL ORDER BY id"
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM user_goals WHERE achieved_at IS NULL ORDER BY id").fetchall()
         return [dict(r) for r in rows]
 
 
@@ -255,9 +260,7 @@ def clear_goals() -> None:
 
 def mark_goal_achieved(goal_id: int) -> None:
     with _conn() as conn:
-        conn.execute(
-            "UPDATE user_goals SET achieved_at = datetime('now') WHERE id = ?", (goal_id,)
-        )
+        conn.execute("UPDATE user_goals SET achieved_at = datetime('now') WHERE id = ?", (goal_id,))
 
 
 def get_uncelebrated_achievements() -> list[dict]:
@@ -314,6 +317,7 @@ def update_goal_fields(
 
 # ── goals check-in timing ─────────────────────────────────────────────────────
 
+
 def should_ask_goals() -> bool:
     """True on first run or when more than N days have passed since last goals check-in."""
     last = get_pref("goals_last_asked")
@@ -322,16 +326,17 @@ def should_ask_goals() -> bool:
     try:
         days = int(get_pref("goals_checkin_days") or 7)
         dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
-        return (datetime.now(timezone.utc) - dt).days >= days
+        return (datetime.now(UTC) - dt).days >= days
     except Exception:
         return True
 
 
 def mark_goals_asked() -> None:
-    set_pref("goals_last_asked", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    set_pref("goals_last_asked", datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
 # ── auto coaching report timing ───────────────────────────────────────────────
+
 
 def should_auto_report() -> bool:
     """True when the 7-day auto coaching report is due (and not disabled)."""
@@ -342,16 +347,17 @@ def should_auto_report() -> bool:
         return True
     try:
         dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
-        return (datetime.now(timezone.utc) - dt).days >= 7
+        return (datetime.now(UTC) - dt).days >= 7
     except Exception:
         return True
 
 
 def mark_report_generated() -> None:
-    set_pref("report_last_generated", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    set_pref("report_last_generated", datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
 # ── progress computation ──────────────────────────────────────────────────────
+
 
 def compute_goal_progress() -> list[dict]:
     """Compute current progress for every active goal. Marks achieved goals.
@@ -359,6 +365,7 @@ def compute_goal_progress() -> list[dict]:
     Memoized per active DB (invalidated on goal edits and sync) — this runs on
     every menu/snapshot render and each goal triggers analytics queries."""
     from render_cache import cached
+
     return cached("goal_progress", _compute_goal_progress)
 
 
@@ -403,6 +410,7 @@ def _compute_goal_progress() -> list[dict]:
 
             elif goal["type"] == "frequency":
                 from analytics.frequency import workout_frequency
+
                 current = float(workout_frequency(4)["avg_per_week"])
                 target = goal["target"] or 1.0
                 result["current"] = round(current, 1)
@@ -455,6 +463,7 @@ def _compute_goal_progress() -> list[dict]:
 
             elif goal["type"] == "volume":
                 from analytics.volume import sets_per_muscle_per_week
+
                 current = float(sets_per_muscle_per_week(4).get(goal["muscle_group"] or "", 0))
                 target = goal["target"] or 1.0
                 result["current"] = round(current, 1)
@@ -488,6 +497,7 @@ def goals_context_for_ai(weeks: int = 8) -> str:
     prog_by_id = {p["id"]: p for p in progress}
 
     from ai.sanitize import sanitize_for_prompt
+
     lines = ["## User goals"]
     for g in goals:
         p = prog_by_id.get(g["id"], {})

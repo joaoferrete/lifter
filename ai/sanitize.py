@@ -5,6 +5,7 @@ Any string that originates outside the codebase (user input, Hevy API,
 Google Fit, stored preferences, goal descriptions, memories) must pass
 through sanitize_for_prompt() before being interpolated into an AI prompt.
 """
+
 import re
 
 # Maximum characters for any single user-supplied value in a prompt.
@@ -16,10 +17,10 @@ _MAX_LEN = 300
 # explicit override keywords.
 _INJECTION_LINE = re.compile(
     r"^\s*(?:"
-    r"#{1,6}\s+"           # markdown headers
-    r"|```"                 # code fences
-    r"|---+"                # horizontal rules
-    r"|<\w[\w\-]*>"        # XML/HTML tags (opening)
+    r"#{1,6}\s+"  # markdown headers
+    r"|```"  # code fences
+    r"|---+"  # horizontal rules
+    r"|<\w[\w\-]*>"  # XML/HTML tags (opening)
     # Role declarations require the delimiter — plain prose like
     # "User prefers dumbbells" is legitimate memory content, "user:" is not.
     r"|(?:system|user|assistant)\s*[:：\[\(]"

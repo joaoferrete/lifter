@@ -14,6 +14,7 @@ _store: dict = {}
 
 def _ns() -> str:
     import config
+
     return str(config.DB_PATH)
 
 

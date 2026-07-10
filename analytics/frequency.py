@@ -1,4 +1,5 @@
 """Workout frequency, consistency, and session duration analytics."""
+
 import pandas as pd
 
 from db.store import query

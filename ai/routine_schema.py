@@ -20,8 +20,11 @@ _MAX_NOTES_LEN = 1000
 _JSON_FRAGMENT_MARKERS = ("{", "}", "[", "]", '":', "':")
 
 
-def validate_routine_args(args: dict, *, require_routine_id: bool = False,
-                          ) -> tuple[dict | None, list[str]]:
+def validate_routine_args(
+    args: dict,
+    *,
+    require_routine_id: bool = False,
+) -> tuple[dict | None, list[str]]:
     """Validate tool args for push_routine / update_routine.
 
     Returns (normalized_routine, []) on success or (None, [error, ...]) when
@@ -45,7 +48,7 @@ def validate_routine_args(args: dict, *, require_routine_id: bool = False,
 
     raw_exercises = args.get("exercises")
     if raw_exercises is None and require_routine_id:
-        raw_exercises = []   # updates may touch only title/notes
+        raw_exercises = []  # updates may touch only title/notes
     if not isinstance(raw_exercises, list):
         errors.append("exercises must be a list")
         raw_exercises = []
@@ -144,9 +147,13 @@ def _validate_set(raw, label: str) -> tuple[dict | None, list[str]]:
             set_type = "normal"
 
     result: dict = {"type": set_type}
-    for field, kind in (("weight_kg", float), ("reps", int),
-                        ("duration_seconds", int), ("distance_meters", int),
-                        ("custom_metric", float)):
+    for field, kind in (
+        ("weight_kg", float),
+        ("reps", int),
+        ("duration_seconds", int),
+        ("distance_meters", int),
+        ("custom_metric", float),
+    ):
         if raw.get(field) is None:
             continue
         value, err = _num(raw[field], kind)

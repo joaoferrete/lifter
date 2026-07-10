@@ -1,6 +1,6 @@
 """Tests for the SQLite persistence layer."""
-import pytest
-from tests.conftest import seed_exercise_template, seed_workout, seed_routine, TEMPLATE_ID
+
+from tests.conftest import seed_exercise_template, seed_routine, seed_workout
 
 
 def test_init_db_creates_all_tables(tmp_db):
@@ -8,18 +8,27 @@ def test_init_db_creates_all_tables(tmp_db):
 
     tables = {r["name"] for r in query("SELECT name FROM sqlite_master WHERE type='table'")}
     expected = {
-        "workouts", "workout_exercises", "workout_sets",
-        "exercise_templates", "body_measurements",
-        "fit_sleep", "fit_daily",
-        "user_goals", "user_preferences", "chat_memories",
+        "workouts",
+        "workout_exercises",
+        "workout_sets",
+        "exercise_templates",
+        "body_measurements",
+        "fit_sleep",
+        "fit_daily",
+        "user_goals",
+        "user_preferences",
+        "chat_memories",
         "sync_state",
-        "routines", "routine_exercises", "routine_sets",
+        "routines",
+        "routine_exercises",
+        "routine_sets",
     }
     assert expected.issubset(tables), f"Missing tables: {expected - tables}"
 
 
 def test_upsert_and_retrieve_workout(tmp_db):
     from db.store import query
+
     seed_exercise_template(tmp_db)
     seed_workout(tmp_db, "w1")
 
@@ -30,11 +39,16 @@ def test_upsert_and_retrieve_workout(tmp_db):
 
 def test_upsert_workout_cascades_to_sets(tmp_db):
     from db.store import query
+
     seed_exercise_template(tmp_db)
-    seed_workout(tmp_db, "w2", sets=[
-        {"index": 0, "type": "normal", "weight_kg": 100.0, "reps": 3},
-        {"index": 1, "type": "normal", "weight_kg": 90.0, "reps": 5},
-    ])
+    seed_workout(
+        tmp_db,
+        "w2",
+        sets=[
+            {"index": 0, "type": "normal", "weight_kg": 100.0, "reps": 3},
+            {"index": 1, "type": "normal", "weight_kg": 90.0, "reps": 5},
+        ],
+    )
 
     sets = query("SELECT * FROM workout_sets WHERE workout_id = ?", ("w2",))
     assert len(sets) == 2
@@ -44,6 +58,7 @@ def test_upsert_workout_cascades_to_sets(tmp_db):
 
 def test_upsert_workout_replaces_exercises_on_update(tmp_db):
     from db.store import query
+
     seed_exercise_template(tmp_db)
     seed_workout(tmp_db, "w3", sets=[{"index": 0, "type": "normal", "weight_kg": 50.0, "reps": 10}])
 
@@ -57,6 +72,7 @@ def test_upsert_workout_replaces_exercises_on_update(tmp_db):
 
 def test_delete_workout_cascades(tmp_db):
     from db.store import delete_workout, query
+
     seed_exercise_template(tmp_db)
     seed_workout(tmp_db, "w4")
 
@@ -68,6 +84,7 @@ def test_delete_workout_cascades(tmp_db):
 
 def test_upsert_exercise_template(tmp_db):
     from db.store import query
+
     seed_exercise_template(tmp_db, template_id="T99", muscle="biceps")
 
     rows = query("SELECT * FROM exercise_templates WHERE id = ?", ("T99",))
@@ -88,7 +105,7 @@ def test_sync_state_roundtrip(tmp_db):
 
 
 def test_upsert_body_measurement(tmp_db):
-    from db.store import upsert_body_measurement, query
+    from db.store import query, upsert_body_measurement
 
     upsert_body_measurement({"date": "2024-01-15", "weight_kg": 80.5, "fat_percent": 18.0}, db_path=tmp_db)
     rows = query("SELECT * FROM body_measurements WHERE date = ?", ("2024-01-15",))
@@ -104,8 +121,10 @@ def test_upsert_body_measurement(tmp_db):
 
 # ── routines ──────────────────────────────────────────────────────────────────
 
+
 def test_upsert_routine_stores_title(tmp_db):
     from db.store import query
+
     seed_exercise_template(tmp_db)
     seed_routine(tmp_db, "r1", title="Push Day")
 
@@ -116,6 +135,7 @@ def test_upsert_routine_stores_title(tmp_db):
 
 def test_upsert_routine_stores_exercises_and_sets(tmp_db):
     from db.store import query
+
     seed_exercise_template(tmp_db)
     seed_routine(tmp_db, "r2")
 
@@ -133,7 +153,8 @@ def test_upsert_routine_stores_exercises_and_sets(tmp_db):
 
 
 def test_upsert_routine_replaces_exercises_on_update(tmp_db):
-    from db.store import upsert_routine, query
+    from db.store import query, upsert_routine
+
     seed_exercise_template(tmp_db)
     seed_routine(tmp_db, "r3")
 
@@ -151,6 +172,7 @@ def test_upsert_routine_replaces_exercises_on_update(tmp_db):
 
 def test_delete_routine_removes_row(tmp_db):
     from db.store import delete_routine, query
+
     seed_exercise_template(tmp_db)
     seed_routine(tmp_db, "r4")
 
@@ -161,6 +183,7 @@ def test_delete_routine_removes_row(tmp_db):
 
 def test_delete_routine_cascades_to_exercises_and_sets(tmp_db):
     from db.store import delete_routine, query
+
     seed_exercise_template(tmp_db)
     seed_routine(tmp_db, "r5")
 
@@ -174,6 +197,7 @@ def test_delete_routine_cascades_to_exercises_and_sets(tmp_db):
 
 def test_delete_stale_routines_removes_unlisted(tmp_db):
     from db.store import delete_stale_routines, query
+
     seed_exercise_template(tmp_db)
     seed_routine(tmp_db, "keep1")
     seed_routine(tmp_db, "keep2")
@@ -188,6 +212,7 @@ def test_delete_stale_routines_removes_unlisted(tmp_db):
 
 def test_delete_stale_routines_keeps_all_when_all_present(tmp_db):
     from db.store import delete_stale_routines
+
     seed_exercise_template(tmp_db)
     seed_routine(tmp_db, "r1")
     seed_routine(tmp_db, "r2")
@@ -198,17 +223,20 @@ def test_delete_stale_routines_keeps_all_when_all_present(tmp_db):
 
 def test_delete_stale_routines_empty_db_returns_zero(tmp_db):
     from db.store import delete_stale_routines
+
     deleted = delete_stale_routines({"nonexistent"}, db_path=tmp_db)
     assert deleted == 0
 
 
 def test_get_routines_with_exercises_empty_db(tmp_db):
     from db.store import get_routines_with_exercises
+
     assert get_routines_with_exercises(db_path=tmp_db) == []
 
 
 def test_get_routines_with_exercises_returns_nested_structure(tmp_db):
     from db.store import get_routines_with_exercises
+
     seed_exercise_template(tmp_db)
     seed_routine(tmp_db, "r-nested", title="Leg Day")
 
@@ -224,7 +252,8 @@ def test_get_routines_with_exercises_returns_nested_structure(tmp_db):
 
 
 def test_get_routines_with_exercises_uses_template_title_as_fallback(tmp_db):
-    from db.store import upsert_routine, get_routines_with_exercises
+    from db.store import get_routines_with_exercises, upsert_routine
+
     seed_exercise_template(tmp_db, template_id="T-FALLBACK", muscle="back")
 
     # Exercise stored with no title — should fall back to exercise_templates.title
@@ -253,8 +282,10 @@ def test_get_routines_with_exercises_uses_template_title_as_fallback(tmp_db):
 
 # ── sync result records ───────────────────────────────────────────────────────
 
+
 def test_record_and_get_sync_result(tmp_db):
-    from db.store import record_sync_result, get_sync_result
+    from db.store import get_sync_result, record_sync_result
+
     record_sync_result("last_sync_result", True, "full: 5 workouts", db_path=tmp_db)
     res = get_sync_result("last_sync_result", db_path=tmp_db)
     assert res["ok"] is True
@@ -267,6 +298,7 @@ def test_record_and_get_sync_result(tmp_db):
 
 def test_get_sync_result_missing_or_corrupt(tmp_db):
     from db.store import get_sync_result, set_sync_state
+
     assert get_sync_result("last_sync_result", db_path=tmp_db) is None
     set_sync_state("last_sync_result", "not-json{", db_path=tmp_db)
     assert get_sync_result("last_sync_result", db_path=tmp_db) is None
@@ -275,6 +307,7 @@ def test_get_sync_result_missing_or_corrupt(tmp_db):
 
 
 def test_sync_result_detail_truncated(tmp_db):
-    from db.store import record_sync_result, get_sync_result
+    from db.store import get_sync_result, record_sync_result
+
     record_sync_result("last_sync_result", False, "x" * 500, db_path=tmp_db)
     assert len(get_sync_result("last_sync_result", db_path=tmp_db)["detail"]) == 200

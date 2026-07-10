@@ -1,6 +1,6 @@
 """Sync sleep, steps, calories, and heart rate from Google Fit."""
-import os
-from datetime import datetime, timezone, timedelta
+
+from datetime import UTC, datetime, timedelta
 
 from db.store import connect as _conn
 from fit.client import FitClient
@@ -11,7 +11,7 @@ def _ms(dt: datetime) -> int:
 
 
 def _date_of_ms(ms: int) -> str:
-    return datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+    return datetime.fromtimestamp(int(ms) / 1000, tz=UTC).strftime("%Y-%m-%d")
 
 
 def _iso(dt: datetime) -> str:
@@ -27,6 +27,7 @@ def _local_tz_id() -> str | None:
     # Most reliable: /etc/timezone on Linux/Debian/Ubuntu
     try:
         from pathlib import Path
+
         tz = Path("/etc/timezone").read_text().strip()
         if tz and "/" in tz:
             return tz
@@ -37,11 +38,12 @@ def _local_tz_id() -> str | None:
     try:
         import os
         from pathlib import Path
+
         link = Path("/etc/localtime").resolve()
         for marker in ("zoneinfo/", "zoneinfo\\"):
             idx = str(link).find(marker)
             if idx != -1:
-                candidate = str(link)[idx + len(marker):]
+                candidate = str(link)[idx + len(marker) :]
                 if "/" in candidate:
                     return candidate
     except Exception:
@@ -85,6 +87,7 @@ def _sum_points(points: list[dict], field: str = "intVal") -> int | float | None
 
 def sync_fit(days: int = 30) -> dict:
     from debug_log import log
+
     log("SYNC", "Google Fit sync started", days=days)
     client = FitClient()
 
@@ -95,13 +98,14 @@ def sync_fit(days: int = 30) -> dict:
     start = (end - timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
 
     # Convert to UTC for the API call
-    end_utc = end.astimezone(timezone.utc)
-    start_utc = start.astimezone(timezone.utc)
+    end_utc = end.astimezone(UTC)
+    start_utc = start.astimezone(UTC)
 
     tz_id = _local_tz_id()
     counts = {"daily_days": 0, "sleep_sessions": 0}
 
-    from db.store import set_sync_state, record_sync_result
+    from db.store import record_sync_result, set_sync_state
+
     try:
         _sync_daily(client, start_utc, end_utc, tz_id, counts)
         _sync_sleep(client, start_utc, end_utc, counts)
@@ -109,13 +113,12 @@ def sync_fit(days: int = 30) -> dict:
         record_sync_result("fit_last_sync_result", False, f"{type(e).__name__}: {e}")
         raise
 
-    set_sync_state("fit_last_sync", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
-    record_sync_result("fit_last_sync_result", True,
-                       f"{counts['daily_days']} days · {counts['sleep_sessions']} sleep")
+    set_sync_state("fit_last_sync", datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    record_sync_result("fit_last_sync_result", True, f"{counts['daily_days']} days · {counts['sleep_sessions']} sleep")
     from render_cache import invalidate
+
     invalidate()
-    log("SYNC", "Google Fit sync complete",
-        daily_days=counts["daily_days"], sleep_sessions=counts["sleep_sessions"])
+    log("SYNC", "Google Fit sync complete", daily_days=counts["daily_days"], sleep_sessions=counts["sleep_sessions"])
     return counts
 
 

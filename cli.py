@@ -1,56 +1,67 @@
 """hevy — interactive personal Hevy workout client."""
+
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 import questionary
+from rich import box
 from rich.console import Console
-from rich.markdown import Markdown
+from rich.markup import escape as _esc
 from rich.panel import Panel
 from rich.table import Table
-from rich import box
 
-from rich.markup import escape as _esc
 import config
-from i18n import _
+from analytics.frequency import muscle_group_frequency, workout_frequency
+from analytics.progression import detect_plateaus, exercise_progression, top_progressions
+from analytics.records import all_time_records, body_measurement_trend, recent_prs
+from analytics.volume import muscle_group_summary, sets_per_muscle_per_week, weekly_volume
+
 # AI_PROVIDER/AI_MODEL are read as config.X — apply_ai_overrides() mutates them
 # at runtime, so an import-by-name here would go stale.
 from config import get_provider_api_key
-from db.store import init_db, query
 from db.goals import (
-    get_pref, set_pref, get_goals, clear_goals, save_goal,
-    should_ask_goals, mark_goals_asked, compute_goal_progress,
-    should_auto_report, mark_report_generated,
+    clear_goals,
+    compute_goal_progress,
+    get_goals,
+    get_pref,
+    mark_goals_asked,
+    mark_report_generated,
+    save_goal,
+    set_pref,
+    should_ask_goals,
+    should_auto_report,
 )
+from db.store import init_db, query
 from hevy.client import HevyClient
 from hevy.sync import full_sync, incremental_sync
-from analytics.volume import muscle_group_summary, sets_per_muscle_per_week, weekly_volume
-from analytics.progression import detect_plateaus, top_progressions, exercise_progression
-from analytics.frequency import workout_frequency, muscle_group_frequency
-from analytics.records import all_time_records, recent_prs, body_measurement_trend
+from i18n import _
 
 console = Console()
 
-STYLE = questionary.Style([
-    ("qmark",       "fg:#00d7ff bold"),
-    ("question",    "bold"),
-    ("answer",      "fg:#00d7ff bold"),
-    ("pointer",     "fg:#00d7ff bold"),
-    ("highlighted", "fg:#00d7ff bold"),
-    ("selected",    "fg:#00d7ff"),
-    ("separator",   "fg:#555555"),
-    ("instruction", "fg:#555555 italic"),
-    ("checkbox",    "fg:#00d7ff"),
-])
+STYLE = questionary.Style(
+    [
+        ("qmark", "fg:#00d7ff bold"),
+        ("question", "bold"),
+        ("answer", "fg:#00d7ff bold"),
+        ("pointer", "fg:#00d7ff bold"),
+        ("highlighted", "fg:#00d7ff bold"),
+        ("selected", "fg:#00d7ff"),
+        ("separator", "fg:#555555"),
+        ("instruction", "fg:#555555 italic"),
+        ("checkbox", "fg:#00d7ff"),
+    ]
+)
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+
 def _app_version() -> str:
-    from importlib.metadata import version, PackageNotFoundError
+    from importlib.metadata import PackageNotFoundError, version
+
     try:
-        return version("lifter-cli")   # distribution name, not a module name
+        return version("lifter-cli")  # distribution name, not a module name
     except PackageNotFoundError:
         return "dev"
 
@@ -59,6 +70,7 @@ def _dlog(category: str, msg: str, **kv) -> None:
     """Forward to debug_log.log without ever raising."""
     try:
         import debug_log
+
         debug_log.log(category, msg, **kv)
     except Exception:
         pass
@@ -67,7 +79,7 @@ def _dlog(category: str, msg: str, **kv) -> None:
 def _time_ago(iso_str: str) -> str:
     try:
         dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
-        secs = int((datetime.now(timezone.utc) - dt).total_seconds())
+        secs = int((datetime.now(UTC) - dt).total_seconds())
         if secs < 60:
             return "just now"
         if secs < 3600:
@@ -82,6 +94,7 @@ def _time_ago(iso_str: str) -> str:
 def _sync_status_str(key: str) -> str:
     """One-line summary of the last recorded sync outcome for the dev panel."""
     from db.store import get_sync_result
+
     result = get_sync_result(key)
     if not result:
         return _("settings.dev.sync_never")
@@ -101,7 +114,7 @@ def _fmt_duration(start_iso: str, end_iso: str) -> str:
         return ""
 
 
-def _require_hevy() -> Optional[HevyClient]:
+def _require_hevy() -> HevyClient | None:
     if not config.HEVY_API_KEY:
         console.print(_("error.hevy_api_key_not_set"))
         return None
@@ -116,9 +129,7 @@ def _is_placeholder_key(value: str) -> bool:
 def _provider_key_ok(provider: str) -> bool:
     """Does this provider have a usable credential configured in .env?"""
     if provider == "bedrock":
-        return bool(config.AWS_BEARER_TOKEN_BEDROCK or (
-            config.AWS_ACCESS_KEY_ID and config.AWS_SECRET_ACCESS_KEY
-        ))
+        return bool(config.AWS_BEARER_TOKEN_BEDROCK or (config.AWS_ACCESS_KEY_ID and config.AWS_SECRET_ACCESS_KEY))
     key = get_provider_api_key(provider)
     return bool(key) and not _is_placeholder_key(key)
 
@@ -142,11 +153,11 @@ def _require_ai() -> bool:
     key = get_provider_api_key()
     if not key or _is_placeholder_key(key):
         key_names = {
-            "gemini":     "GEMINI_API_KEY",
-            "claude":     "ANTHROPIC_API_KEY",
+            "gemini": "GEMINI_API_KEY",
+            "claude": "ANTHROPIC_API_KEY",
             "openrouter": "OPENROUTER_API_KEY",
-            "groq":       "GROQ_API_KEY",
-            "github":     "GITHUB_TOKEN",
+            "groq": "GROQ_API_KEY",
+            "github": "GITHUB_TOKEN",
         }
         var = key_names.get(config.AI_PROVIDER, "the relevant API key")
         console.print(_("error.ai_key_not_set", var=var, provider=config.AI_PROVIDER))
@@ -166,6 +177,7 @@ def _pause():
 
 
 # ── unit helpers ──────────────────────────────────────────────────────────────
+
 
 def _get_units() -> str:
     return get_pref("units") or "kg"
@@ -248,13 +260,13 @@ def _parse_height_to_cm(raw: str) -> float | None:
 # ── score & muscle-distribution helpers ──────────────────────────────────────
 
 _MUSCLE_GROUPS: dict = {
-    "Chest":     ["chest", "pectorals"],
-    "Back":      ["lats", "upper_back", "lower_back", "trapezius"],
-    "Legs":      ["quadriceps", "hamstrings", "glutes", "calves", "hip_flexors"],
+    "Chest": ["chest", "pectorals"],
+    "Back": ["lats", "upper_back", "lower_back", "trapezius"],
+    "Legs": ["quadriceps", "hamstrings", "glutes", "calves", "hip_flexors"],
     "Shoulders": ["shoulders", "deltoids"],
-    "Arms":      ["biceps", "triceps", "forearms"],
-    "Core":      ["abdominals", "core", "obliques"],
-    "Cardio":    ["cardio", "full_body"],
+    "Arms": ["biceps", "triceps", "forearms"],
+    "Core": ["abdominals", "core", "obliques"],
+    "Cardio": ["cardio", "full_body"],
 }
 
 
@@ -270,6 +282,7 @@ def _day_choices(days: list[int]) -> list:
 
 def _sets_by_group(weeks: int = 4) -> dict:
     from render_cache import cached
+
     return cached(f"sets_by_group:{weeks}", lambda: _sets_by_group_uncached(weeks))
 
 
@@ -344,6 +357,7 @@ def _render_snapshot_panel() -> None:
 
     # Body: latest weight + BMI (when height is known)
     from analytics.records import compute_bmi, get_height_cm
+
     body = body_measurement_trend(8)
     if body.get("weight_kg"):
         body_parts = [f"[bold]{_fmt_weight(body['weight_kg'])}[/bold]"]
@@ -358,6 +372,7 @@ def _render_snapshot_panel() -> None:
 
     # Compact goal progress
     from db.goals import compute_goal_progress
+
     progress = compute_goal_progress()
     numeric = [g for g in progress if g.get("pct") is not None and not g["achieved"]]
     achieved = [g for g in progress if g["achieved"]]
@@ -381,16 +396,19 @@ def _render_snapshot_panel() -> None:
     if not lines:
         return
 
-    console.print(Panel(
-        "\n".join(lines).strip(),
-        title=_("snapshot.panel_title"),
-        border_style="dim",
-        padding=(0, 2),
-    ))
+    console.print(
+        Panel(
+            "\n".join(lines).strip(),
+            title=_("snapshot.panel_title"),
+            border_style="dim",
+            padding=(0, 2),
+        )
+    )
     console.print()
 
 
 # ── goals wizard ──────────────────────────────────────────────────────────────
+
 
 def _wizard_lift_prs() -> None:
     exercises = query("SELECT id, title FROM exercise_templates ORDER BY title")
@@ -515,8 +533,17 @@ def _wizard_body_fat() -> None:
 
 def _wizard_volume() -> None:
     muscles = [
-        "chest", "lats", "upper_back", "shoulders", "biceps", "triceps",
-        "quadriceps", "hamstrings", "glutes", "calves", "abdominals",
+        "chest",
+        "lats",
+        "upper_back",
+        "shoulders",
+        "biceps",
+        "triceps",
+        "quadriceps",
+        "hamstrings",
+        "glutes",
+        "calves",
+        "abdominals",
     ]
     muscle = questionary.select(_("wizard.volume_muscle_prompt"), choices=muscles, style=STYLE).ask()
     if not muscle:
@@ -570,13 +597,13 @@ def run_goals_wizard(is_update: bool = False) -> None:
     selected = questionary.checkbox(
         _("wizard.select_goals"),
         choices=[
-            questionary.Choice(_("wizard.goal_lift"),        value="lift_pr"),
-            questionary.Choice(_("wizard.goal_frequency"),   value="frequency"),
+            questionary.Choice(_("wizard.goal_lift"), value="lift_pr"),
+            questionary.Choice(_("wizard.goal_frequency"), value="frequency"),
             questionary.Choice(_("wizard.goal_weight_loss"), value="weight_loss"),
             questionary.Choice(_("wizard.goal_weight_gain"), value="weight_gain"),
-            questionary.Choice(_("wizard.goal_body_fat"),    value="body_fat"),
-            questionary.Choice(_("wizard.goal_volume"),      value="volume"),
-            questionary.Choice(_("wizard.goal_custom"),      value="custom"),
+            questionary.Choice(_("wizard.goal_body_fat"), value="body_fat"),
+            questionary.Choice(_("wizard.goal_volume"), value="volume"),
+            questionary.Choice(_("wizard.goal_custom"), value="custom"),
         ],
         style=STYLE,
     ).ask()
@@ -626,9 +653,9 @@ def _weekly_checkin() -> None:
     answer = questionary.select(
         _("weekly.still_same"),
         choices=[
-            questionary.Choice(_("weekly.keep"),   value="keep"),
+            questionary.Choice(_("weekly.keep"), value="keep"),
             questionary.Choice(_("weekly.update"), value="update"),
-            questionary.Choice(_("weekly.skip"),   value="skip"),
+            questionary.Choice(_("weekly.skip"), value="skip"),
         ],
         style=STYLE,
     ).ask()
@@ -646,6 +673,7 @@ def _weekly_checkin() -> None:
 
 
 # ── goal progress rendering ───────────────────────────────────────────────────
+
 
 def _render_goals_progress() -> None:
     progress = compute_goal_progress()
@@ -692,15 +720,18 @@ def _render_goals_progress() -> None:
         lines.append("")
 
     if lines:
-        console.print(Panel(
-            "\n".join(lines).rstrip(),
-            title=_("goals.progress_title"),
-            border_style="yellow",
-            padding=(0, 1),
-        ))
+        console.print(
+            Panel(
+                "\n".join(lines).rstrip(),
+                title=_("goals.progress_title"),
+                border_style="yellow",
+                padding=(0, 1),
+            )
+        )
 
 
 # ── sync report helpers ───────────────────────────────────────────────────────
+
 
 def _render_workout_cards(workout_ids: list[str]) -> None:
     for wid in workout_ids:
@@ -748,12 +779,14 @@ def _render_workout_cards(workout_ids: list[str]) -> None:
             bw = query("SELECT DISTINCT we.title FROM workout_exercises we WHERE we.workout_id = ?", (wid,))
             lines = [f"  {e['title']}" for e in bw]
 
-        console.print(Panel(
-            "\n".join(lines) if lines else "  (no sets logged)",
-            title=f"[bold cyan]{w['title']}[/bold cyan]  [dim]{date_str} · {duration}[/dim]",
-            border_style="cyan",
-            padding=(0, 1),
-        ))
+        console.print(
+            Panel(
+                "\n".join(lines) if lines else "  (no sets logged)",
+                title=f"[bold cyan]{w['title']}[/bold cyan]  [dim]{date_str} · {duration}[/dim]",
+                border_style="cyan",
+                padding=(0, 1),
+            )
+        )
 
 
 def _render_volume_delta() -> None:
@@ -777,7 +810,7 @@ def _render_volume_delta() -> None:
         if prev > 0:
             pct = (curr - prev) / prev * 100
             color = "green" if pct >= 0 else "red"
-            delta = f" [{color}]{'+'if pct>=0 else ''}{pct:.0f}%[/{color}]"
+            delta = f" [{color}]{'+' if pct >= 0 else ''}{pct:.0f}%[/{color}]"
         else:
             delta = " [dim]new[/dim]"
         console.print(f"    {muscle:<14} [cyan]{bar}[/cyan] {_fmt_weight(curr):>12}{delta}")
@@ -787,13 +820,15 @@ def _render_sync_report(counts: dict, is_full: bool) -> None:
     updated_ids: list[str] = counts.get("updated_ids", [])
 
     if is_full:
-        console.print(Panel(
-            f"[bold green]{counts.get('workouts', 0)}[/bold green] workouts  ·  "
-            f"[bold]{counts.get('templates', 0)}[/bold] exercise templates  ·  "
-            f"[bold]{counts.get('body_measurements', 0)}[/bold] body measurements",
-            title=_("sync.full_complete_title"),
-            border_style="green",
-        ))
+        console.print(
+            Panel(
+                f"[bold green]{counts.get('workouts', 0)}[/bold green] workouts  ·  "
+                f"[bold]{counts.get('templates', 0)}[/bold] exercise templates  ·  "
+                f"[bold]{counts.get('body_measurements', 0)}[/bold] body measurements",
+                title=_("sync.full_complete_title"),
+                border_style="green",
+            )
+        )
     else:
         updated = counts.get("updated", 0)
         deleted = counts.get("deleted", 0)
@@ -817,7 +852,9 @@ def _render_sync_report(counts: dict, is_full: bool) -> None:
     streak = freq.get("longest_streak_days", 0)
     if streak >= 2:
         fires = "🔥" * min(streak, 5)
-        console.print(f"\n  {fires}  [bold]{streak}-day streak![/bold]  [dim]({freq['total_workouts']} sessions in last 4w)[/dim]")
+        console.print(
+            f"\n  {fires}  [bold]{streak}-day streak![/bold]  [dim]({freq['total_workouts']} sessions in last 4w)[/dim]"
+        )
 
     _render_volume_delta()
     console.print()
@@ -826,18 +863,26 @@ def _render_sync_report(counts: dict, is_full: bool) -> None:
 
 # ── header ────────────────────────────────────────────────────────────────────
 
+
 def _show_header() -> None:
     from db.store import get_sync_state
+
     last_sync = get_sync_state("last_sync")
     total = (query("SELECT COUNT(*) as n FROM workouts") or [{"n": 0}])[0]["n"]
-    week_count = (query("SELECT COUNT(*) as n FROM workouts WHERE start_time >= datetime('now', '-7 days')") or [{"n": 0}])[0]["n"]
+    week_count = (
+        query("SELECT COUNT(*) as n FROM workouts WHERE start_time >= datetime('now', '-7 days')") or [{"n": 0}]
+    )[0]["n"]
     freq = workout_frequency(4)
     goals = get_goals()
     name = get_pref("display_name")
 
     # Last workout
     lw_row = query("SELECT MAX(start_time) as t FROM workouts")
-    lw_str = _("header.last_workout", ago=_time_ago(lw_row[0]["t"])) if lw_row and lw_row[0]["t"] else _("header.no_workouts")
+    lw_str = (
+        _("header.last_workout", ago=_time_ago(lw_row[0]["t"]))
+        if lw_row and lw_row[0]["t"]
+        else _("header.no_workouts")
+    )
 
     # Streak
     streak = freq.get("longest_streak_days", 0)
@@ -853,8 +898,12 @@ def _show_header() -> None:
     # Sync status
     if last_sync:
         try:
-            secs = int((datetime.now(timezone.utc) - datetime.fromisoformat(last_sync.replace("Z", "+00:00"))).total_seconds())
-            sync_str = _("header.sync_ok", ago=_time_ago(last_sync)) if secs < _stale_seconds() else _("header.sync_stale", ago=_time_ago(last_sync))
+            secs = int((datetime.now(UTC) - datetime.fromisoformat(last_sync.replace("Z", "+00:00"))).total_seconds())
+            sync_str = (
+                _("header.sync_ok", ago=_time_ago(last_sync))
+                if secs < _stale_seconds()
+                else _("header.sync_stale", ago=_time_ago(last_sync))
+            )
         except Exception:
             sync_str = _("header.sync_unknown")
     else:
@@ -862,14 +911,17 @@ def _show_header() -> None:
 
     # AI provider
     from ai.provider import provider_label
+
     ai_str = _("header.ai", label=provider_label())
 
     # Recovery from Google Fit
     recovery_str = ""
     try:
         from fit.auth import is_connected
+
         if is_connected():
             from fit.analytics import recovery_score
+
             rec = recovery_score(3)
             if rec:
                 recovery_str = _("header.recovery", color=rec["color"], score=rec["score"])
@@ -893,16 +945,19 @@ def _show_header() -> None:
 
     brand = f"LIFTER [dim]v{_app_version()}[/dim]"
     title = f"[bold cyan]{brand}  [dim]·[/dim]  {_esc(name)}[/bold cyan]" if name else f"[bold cyan]{brand}[/bold cyan]"
-    console.print(Panel(
-        f"{line1}\n{line2}\n{line3}",
-        title=title,
-        border_style="cyan",
-        padding=(0, 2),
-    ))
+    console.print(
+        Panel(
+            f"{line1}\n{line2}\n{line3}",
+            title=title,
+            border_style="cyan",
+            padding=(0, 2),
+        )
+    )
     console.print()
 
 
 # ── menu actions ──────────────────────────────────────────────────────────────
+
 
 def _do_sync():
     client = _require_hevy()
@@ -913,7 +968,7 @@ def _do_sync():
         _("sync.type_prompt"),
         choices=[
             questionary.Choice(_("sync.incremental"), value="inc"),
-            questionary.Choice(_("sync.full"),        value="full"),
+            questionary.Choice(_("sync.full"), value="full"),
         ],
         style=STYLE,
     ).ask()
@@ -927,6 +982,7 @@ def _do_sync():
         counts = full_sync(client) if is_full else incremental_sync(client)
     except RuntimeError as e:
         import debug_log
+
         debug_log.error("SYNC", "Manual sync failed", exc=e, type=sync_type)
         console.print(f"[red]{_esc(str(e))}[/red]")
         return
@@ -978,8 +1034,13 @@ def _do_stats():
     for muscle, vol in muscle_vol.items():
         bar_w = max(1, int(vol / max_vol * 16))
         bar = "█" * bar_w + "░" * (16 - bar_w)
-        t2.add_row(muscle, f"[cyan]{bar}[/cyan]", _fmt_weight(vol),
-                   str(sets_wk.get(muscle, 0)), str(muscle_freq_data.get(muscle, 0)))
+        t2.add_row(
+            muscle,
+            f"[cyan]{bar}[/cyan]",
+            _fmt_weight(vol),
+            str(sets_wk.get(muscle, 0)),
+            str(muscle_freq_data.get(muscle, 0)),
+        )
     console.print(t2)
 
     body = body_measurement_trend(weeks)
@@ -989,11 +1050,16 @@ def _do_stats():
         bt.add_column(_("stats.col_metric"), style="bold")
         bt.add_column(_("stats.col_latest"), justify="right")
         bt.add_column(_("stats.col_change", weeks=weeks), justify="right")
-        wt_change = body.get('weight_change_kg')
-        bt.add_row(_("stats.row_weight"), _fmt_weight(body.get('weight_kg')), _fmt_weight(wt_change) if wt_change not in (None, '—') else '—')
+        wt_change = body.get("weight_change_kg")
+        bt.add_row(
+            _("stats.row_weight"),
+            _fmt_weight(body.get("weight_kg")),
+            _fmt_weight(wt_change) if wt_change not in (None, "—") else "—",
+        )
         bt.add_row(_("stats.row_body_fat"), f"{body.get('fat_percent')}%", f"{body.get('fat_change_pct', '—')}%")
         from analytics.records import compute_bmi, get_height_cm
-        bmi = compute_bmi(body.get('weight_kg'), get_height_cm())
+
+        bmi = compute_bmi(body.get("weight_kg"), get_height_cm())
         if bmi is not None:
             bt.add_row(_("stats.row_bmi"), str(bmi), "—")
         console.print(bt)
@@ -1008,14 +1074,18 @@ def _do_stats():
         pt.add_column(_("stats.col_e1rm"), justify="right")
         pt.add_column(_("stats.col_date"))
         for pr in prs:
-            pt.add_row(pr["exercise"], _fmt_weight(pr['weight_kg']), str(pr["reps"]), _fmt_weight(pr['e1rm']), pr["date"])
+            pt.add_row(
+                pr["exercise"], _fmt_weight(pr["weight_kg"]), str(pr["reps"]), _fmt_weight(pr["e1rm"]), pr["date"]
+            )
         console.print(pt)
 
     plateaus = detect_plateaus(weeks)
     if plateaus:
         console.rule(_("stats.plateaus_rule"))
         for p in plateaus:
-            console.print(f"  [yellow]•[/yellow] {p['exercise']} — stalled {p['sessions_stalled']} sessions (e1RM {p['current_e1rm']} kg)")
+            console.print(
+                f"  [yellow]•[/yellow] {p['exercise']} — stalled {p['sessions_stalled']} sessions (e1RM {p['current_e1rm']} kg)"
+            )
 
     console.rule(_("stats.goals_rule"))
     _render_goals_progress()
@@ -1023,15 +1093,17 @@ def _do_stats():
 
 # ── body measurements (manual entry / onboarding) ─────────────────────────────
 
+
 def _is_number(v: str) -> bool:
     return v.strip().replace(".", "", 1).isdigit()
 
 
 def _save_body_today(weight_kg: float | None = None, fat_percent: float | None = None) -> None:
     """Upsert today's body_measurements row, preserving other fields already set today."""
-    from db.store import upsert_body_measurement
     from db.goals import _invalidate_render_cache
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    from db.store import upsert_body_measurement
+
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
     existing = query("SELECT * FROM body_measurements WHERE date = ?", (today,))
     row = dict(existing[0]) if existing else {}
     row["date"] = today
@@ -1041,8 +1113,7 @@ def _save_body_today(weight_kg: float | None = None, fat_percent: float | None =
         row["fat_percent"] = fat_percent
     upsert_body_measurement(row)
     _invalidate_render_cache()
-    _dlog("BODY", "Body measurement saved", date=today,
-          weight_kg=weight_kg, fat_percent=fat_percent)
+    _dlog("BODY", "Body measurement saved", date=today, weight_kg=weight_kg, fat_percent=fat_percent)
 
 
 def _prompt_weight_kg() -> float | None:
@@ -1079,6 +1150,7 @@ def _prompt_and_save_height() -> bool:
 def _do_body_entry() -> None:
     """Manually record current weight / body-fat and show BMI. Main-menu action."""
     from analytics.records import compute_bmi, get_height_cm
+
     console.clear()
 
     body = body_measurement_trend(8)
@@ -1095,8 +1167,7 @@ def _do_body_entry() -> None:
     if bmi is not None:
         info.append(_("body.current_bmi", bmi=bmi))
     if info:
-        console.print(Panel("\n".join(info), title=_("body.panel_title"),
-                            border_style="cyan", padding=(0, 2)))
+        console.print(Panel("\n".join(info), title=_("body.panel_title"), border_style="cyan", padding=(0, 2)))
 
     weight_kg = _prompt_weight_kg()
     f_raw = questionary.text(
@@ -1131,12 +1202,13 @@ def _onboard_body_metrics() -> None:
     weight_kg = _prompt_weight_kg()
     if weight_kg is not None:
         _save_body_today(weight_kg=weight_kg)
-    set_pref("weight_last_asked", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    set_pref("weight_last_asked", datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
 def _check_body_checkin() -> None:
     """Ask for current weight when the latest reading is stale; ask height once if unset."""
     from analytics.records import get_height_cm
+
     try:
         cadence = int(get_pref("goals_checkin_days") or 7)
     except (TypeError, ValueError):
@@ -1149,7 +1221,7 @@ def _check_body_checkin() -> None:
     if rows:
         try:
             last = datetime.fromisoformat(rows[0]["date"]).date()
-            stale = (datetime.now(timezone.utc).date() - last).days >= cadence
+            stale = (datetime.now(UTC).date() - last).days >= cadence
         except Exception:
             stale = True
 
@@ -1159,7 +1231,7 @@ def _check_body_checkin() -> None:
     if last_asked:
         try:
             asked = datetime.fromisoformat(last_asked.replace("Z", "+00:00"))
-            asked_recently = (datetime.now(timezone.utc) - asked).days < cadence
+            asked_recently = (datetime.now(UTC) - asked).days < cadence
         except Exception:
             asked_recently = False
 
@@ -1175,14 +1247,14 @@ def _check_body_checkin() -> None:
             if weight_kg is not None:
                 _save_body_today(weight_kg=weight_kg)
                 console.print(_("body.saved"))
-        set_pref("weight_last_asked", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        set_pref("weight_last_asked", datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
 def _do_progress():
     choice = questionary.select(
         _("progress.show_prompt"),
         choices=[
-            questionary.Choice(_("progress.top_gainers"),       value="top"),
+            questionary.Choice(_("progress.top_gainers"), value="top"),
             questionary.Choice(_("progress.specific_exercise"), value="exercise"),
         ],
         style=STYLE,
@@ -1213,7 +1285,9 @@ def _do_progress():
         t.add_column(_("progress.col_start_e1rm"), justify="right")
         t.add_column(_("progress.col_current_e1rm"), justify="right")
         for g in top:
-            t.add_row(g["exercise"], f"+{g['improvement_pct']}%", _fmt_weight(g['start_e1rm']), _fmt_weight(g['current_e1rm']))
+            t.add_row(
+                g["exercise"], f"+{g['improvement_pct']}%", _fmt_weight(g["start_e1rm"]), _fmt_weight(g["current_e1rm"])
+            )
         console.print(t)
     else:
         exercises = query("SELECT DISTINCT title FROM exercise_templates ORDER BY title")
@@ -1222,7 +1296,9 @@ def _do_progress():
             console.print(_("error.no_exercises_sync_first"))
             return
         name = questionary.autocomplete(
-            _("progress.search_prompt"), choices=names, style=STYLE,
+            _("progress.search_prompt"),
+            choices=names,
+            style=STYLE,
             validate=lambda v: v in names or _("validate.pick_from_list"),
         ).ask()
         if not name:
@@ -1249,7 +1325,12 @@ def _do_progress():
                     change = f" [green]+{_fmt_weight(delta)}[/green]"
                 elif delta < 0:
                     change = f" [red]{_fmt_weight(delta)}[/red]"
-            t.add_row(str(row["date"]), _fmt_weight(row['best_weight_kg']), str(row["best_reps"]), f"{_fmt_weight(row['e1rm'])}{change}")
+            t.add_row(
+                str(row["date"]),
+                _fmt_weight(row["best_weight_kg"]),
+                str(row["best_reps"]),
+                f"{_fmt_weight(row['e1rm'])}{change}",
+            )
             prev_e1rm = row["e1rm"]
         console.print(t)
 
@@ -1268,7 +1349,7 @@ def _do_records():
     t.add_column(_("stats.col_e1rm"), justify="right")
     t.add_column(_("stats.col_date"))
     for pr in prs:
-        t.add_row(pr["exercise"], _fmt_weight(pr['weight_kg']), str(pr["reps"]), _fmt_weight(pr['e1rm']), pr["date"])
+        t.add_row(pr["exercise"], _fmt_weight(pr["weight_kg"]), str(pr["reps"]), _fmt_weight(pr["e1rm"]), pr["date"])
     console.print(t)
 
 
@@ -1277,9 +1358,9 @@ def _do_goals():
     action = questionary.select(
         _("goals.menu_prompt"),
         choices=[
-            questionary.Choice(_("goals.view_label"),   value="view"),
+            questionary.Choice(_("goals.view_label"), value="view"),
             questionary.Choice(_("goals.update_label"), value="update"),
-            questionary.Choice(_("goals.reset_label"),  value="reset"),
+            questionary.Choice(_("goals.reset_label"), value="reset"),
         ],
         style=STYLE,
     ).ask()
@@ -1341,6 +1422,7 @@ def _run_report(weeks: int, generate_routine: bool = False) -> bool:
         result = get_coaching(weeks=weeks, generate_routine=generate_routine)
     except Exception as e:
         from ai.coach import _friendly_error
+
         _dlog("ERROR", f"Coaching report failed: {type(e).__name__}", error=str(e)[:200])
         console.print(f"[red]{_friendly_error(e)}[/red]")
         return False
@@ -1353,12 +1435,14 @@ def _run_report(weeks: int, generate_routine: bool = False) -> bool:
     score_items = [(lbl, v) for lbl, v in score_items if v is not None]
     if score_items:
         score_lines = [_fmt_score_bar(lbl, int(val), bar_width=16) for lbl, val in score_items]
-        console.print(Panel(
-            "\n".join(score_lines),
-            title=_("coach.scores_panel_title"),
-            border_style="cyan",
-            padding=(0, 2),
-        ))
+        console.print(
+            Panel(
+                "\n".join(score_lines),
+                title=_("coach.scores_panel_title"),
+                border_style="cyan",
+                padding=(0, 2),
+            )
+        )
         # Cache for snapshot panel
         if ws is not None:
             set_pref("last_workout_score", str(int(ws)))
@@ -1397,12 +1481,14 @@ def _run_report(weeks: int, generate_routine: bool = False) -> bool:
                 dist_lines.append(f"  {muscle:<16} {bar}  {pct:.0f}%")
 
         if dist_lines:
-            console.print(Panel(
-                "\n".join(dist_lines),
-                title=_("coach.volume_dist_title"),
-                border_style="cyan",
-                padding=(0, 2),
-            ))
+            console.print(
+                Panel(
+                    "\n".join(dist_lines),
+                    title=_("coach.volume_dist_title"),
+                    border_style="cyan",
+                    padding=(0, 2),
+                )
+            )
 
     # ── analysis ──────────────────────────────────────────────────────────────
     console.rule(_("coach.strengths_rule"))
@@ -1424,11 +1510,12 @@ def _run_report(weeks: int, generate_routine: bool = False) -> bool:
     routine = result.get("routine", {})
     if routine:
         from ai.routine_schema import validate_routine_args
+
         routine, _val_errors = validate_routine_args(routine)
         if routine is None:
             import debug_log
-            debug_log.error("AI", "Report routine rejected by validation",
-                            errors="; ".join(_val_errors)[:300])
+
+            debug_log.error("AI", "Report routine rejected by validation", errors="; ".join(_val_errors)[:300])
             console.print(_("chat.routine_invalid"))
     if routine:
         console.rule(_("coach.suggested_routine_rule", title=routine.get("title")))
@@ -1436,10 +1523,12 @@ def _run_report(weeks: int, generate_routine: bool = False) -> bool:
         for ex in routine.get("exercises", []):
             if not isinstance(ex, dict):
                 continue
+
             def _fmt_set(s: dict) -> str:
-                w = s.get('weight_kg')
+                w = s.get("weight_kg")
                 w_str = _fmt_weight(w) if w else "BW"
                 return f"[dim]{s.get('type', 'normal')}[/dim] {w_str}×{s.get('reps', '?')}"
+
             sets_str = "  ".join(_fmt_set(s) for s in ex.get("sets", []) if isinstance(s, dict))
             ex_title = ex.get("title") or ex.get("exercise_template_id", "Exercise")
             console.print(f"  [bold]{ex_title}[/bold]")
@@ -1450,13 +1539,15 @@ def _run_report(weeks: int, generate_routine: bool = False) -> bool:
         n_exercises = len([e for e in routine.get("exercises", []) if isinstance(e, dict)])
         if questionary.confirm(
             _("coach.push_routine_prompt", title=routine.get("title"), count=n_exercises),
-            default=False, style=STYLE,
+            default=False,
+            style=STYLE,
         ).ask():
             client = _require_hevy()
             if client:
                 try:
-                    from hevy.client import _routine_id
                     from ai.coach import _show_exercise_benefits
+                    from hevy.client import _routine_id
+
                     resp = push_routine_to_hevy(routine)
                     console.print(_("coach.routine_pushed", routine_id=_routine_id(resp)))
                     _show_exercise_benefits(routine.get("exercises", []))
@@ -1473,10 +1564,10 @@ def _do_chat():
     weeks_str = questionary.select(
         _("chat.context_prompt"),
         choices=[
-            questionary.Choice(_("time.weeks", n=4),   value=4),
-            questionary.Choice(_("time.weeks", n=8),   value=8),
-            questionary.Choice(_("time.weeks", n=12),  value=12),
-            questionary.Choice(_("chat.all_time"),     value=16),
+            questionary.Choice(_("time.weeks", n=4), value=4),
+            questionary.Choice(_("time.weeks", n=8), value=8),
+            questionary.Choice(_("time.weeks", n=12), value=12),
+            questionary.Choice(_("chat.all_time"), value=16),
         ],
         default=8,
         style=STYLE,
@@ -1486,6 +1577,7 @@ def _do_chat():
     weeks = int(weeks_str)
     _dlog("AI", "Chat requested", weeks=weeks)
     from ai.coach import start_enhanced_chat
+
     start_enhanced_chat(weeks=weeks)
     return NO_PAUSE
 
@@ -1493,28 +1585,38 @@ def _do_chat():
 # ── settings & reset ─────────────────────────────────────────────────────────
 
 _AI_LANGUAGES = [
-    "English", "Portuguese (BR)", "Portuguese (PT)", "Spanish", "French", "German",
-    "Italian", "Dutch", "Polish", "Russian", "Japanese", "Chinese",
+    "English",
+    "Portuguese (BR)",
+    "Portuguese (PT)",
+    "Spanish",
+    "French",
+    "German",
+    "Italian",
+    "Dutch",
+    "Polish",
+    "Russian",
+    "Japanese",
+    "Chinese",
 ]
 
 _UI_LANGUAGES = [
-    ("en",    "English"),
+    ("en", "English"),
     ("pt_BR", "Português (Brasil)"),
 ]
 
 
 # (env var, i18n label key, hidden input)
 _ENV_KEY_FIELDS: list[tuple[str, str, bool]] = [
-    ("GEMINI_API_KEY",           "settings.keys.gemini",        True),
-    ("ANTHROPIC_API_KEY",        "settings.keys.claude",        True),
-    ("OPENROUTER_API_KEY",       "settings.keys.openrouter",    True),
-    ("GROQ_API_KEY",             "settings.keys.groq",          True),
-    ("GITHUB_TOKEN",             "settings.keys.github",        True),
+    ("GEMINI_API_KEY", "settings.keys.gemini", True),
+    ("ANTHROPIC_API_KEY", "settings.keys.claude", True),
+    ("OPENROUTER_API_KEY", "settings.keys.openrouter", True),
+    ("GROQ_API_KEY", "settings.keys.groq", True),
+    ("GITHUB_TOKEN", "settings.keys.github", True),
     ("AWS_BEARER_TOKEN_BEDROCK", "settings.keys.bedrock_token", True),
-    ("AWS_REGION",               "settings.keys.aws_region",    False),
-    ("AWS_ACCESS_KEY_ID",        "settings.keys.aws_access",    True),
-    ("AWS_SECRET_ACCESS_KEY",    "settings.keys.aws_secret",    True),
-    ("AWS_SESSION_TOKEN",        "settings.keys.aws_session",   True),
+    ("AWS_REGION", "settings.keys.aws_region", False),
+    ("AWS_ACCESS_KEY_ID", "settings.keys.aws_access", True),
+    ("AWS_SECRET_ACCESS_KEY", "settings.keys.aws_secret", True),
+    ("AWS_SESSION_TOKEN", "settings.keys.aws_session", True),
 ]
 
 
@@ -1533,8 +1635,7 @@ def _do_api_keys_settings() -> None:
         lines = [_("settings.keys.env_file_line", path=_esc(str(paths.ENV_FILE))), ""]
         for var, label_key, _hidden in _ENV_KEY_FIELDS:
             lines.append(f"{_(label_key)}: [bold]{_esc(_mask_secret(getattr(config, var, '')))}[/bold]")
-        console.print(Panel("\n".join(lines), title=_("settings.keys.title"),
-                            border_style="cyan", padding=(0, 2)))
+        console.print(Panel("\n".join(lines), title=_("settings.keys.title"), border_style="cyan", padding=(0, 2)))
 
         choices = [
             questionary.Choice(f"  {_(label_key)}  ({_mask_secret(getattr(config, var, ''))})", value=var)
@@ -1547,12 +1648,11 @@ def _do_api_keys_settings() -> None:
 
         hidden = next(h for var, _k, h in _ENV_KEY_FIELDS if var == picked)
         action = questionary.select(
-            _("settings.keys.action_prompt", field=picked,
-              current=_mask_secret(getattr(config, picked, ""))),
+            _("settings.keys.action_prompt", field=picked, current=_mask_secret(getattr(config, picked, ""))),
             choices=[
-                questionary.Choice(_("settings.keys.set_option"),   value="set"),
+                questionary.Choice(_("settings.keys.set_option"), value="set"),
                 questionary.Choice(_("settings.keys.clear_option"), value="clear"),
-                questionary.Choice(_("nav.cancel"),                 value=None),
+                questionary.Choice(_("nav.cancel"), value=None),
             ],
             style=STYLE,
         ).ask()
@@ -1566,11 +1666,11 @@ def _do_api_keys_settings() -> None:
                 continue
             new_value = value.strip()
         else:
-            new_value = ""   # written as KEY= so reload_env(override=True) clears it
+            new_value = ""  # written as KEY= so reload_env(override=True) clears it
 
         config.set_env_values({picked: new_value})
         config.reload_env()
-        config.apply_ai_overrides()   # profile prefs keep winning over fresh env
+        config.apply_ai_overrides()  # profile prefs keep winning over fresh env
         _dlog("SETTING", "env key updated", var=picked, cleared=not new_value)
         if new_value:
             console.print(_("settings.keys.saved", var=picked))
@@ -1580,9 +1680,16 @@ def _do_api_keys_settings() -> None:
 
 def _do_ai_settings():
     from db.goals import (
-        get_pref, set_pref, get_token_usage, get_token_usage_month,
-        reset_token_usage, get_token_reset_day, set_token_reset_day,
-        get_token_budget, set_token_budget, token_budget_status,
+        get_pref,
+        get_token_budget,
+        get_token_reset_day,
+        get_token_usage,
+        get_token_usage_month,
+        reset_token_usage,
+        set_pref,
+        set_token_budget,
+        set_token_reset_day,
+        token_budget_status,
     )
     from db.memories import count_memories
 
@@ -1609,7 +1716,8 @@ def _do_ai_settings():
         except (TypeError, ValueError):
             history_turns = 12
         history_label = (
-            _("settings.ai.history_unlimited") if history_turns == 0
+            _("settings.ai.history_unlimited")
+            if history_turns == 0
             else _("settings.ai.history_count", n=history_turns)
         )
         slim_on = get_pref("ai_chat_slim") != "0"
@@ -1631,9 +1739,9 @@ def _do_ai_settings():
             return _("settings.ai.on") if b else _("settings.ai.off")
 
         budget_label = (
-            _("settings.ai.budget_off") if budget_status is None
-            else _("settings.ai.budget_usage",
-                   budget=f"{budget_status['budget']:,}", pct=int(budget_status["pct"]))
+            _("settings.ai.budget_off")
+            if budget_status is None
+            else _("settings.ai.budget_usage", budget=f"{budget_status['budget']:,}", pct=int(budget_status["pct"]))
         )
 
         lines = [
@@ -1650,11 +1758,22 @@ def _do_ai_settings():
             _("settings.ai.budget_line", budget=budget_label),
         ]
         if budget_status and budget_status["pct"] >= 100:
-            lines.append(_("settings.ai.budget_exceeded",
-                           used=f"{budget_status['used']:,}", budget=f"{budget_status['budget']:,}"))
+            lines.append(
+                _(
+                    "settings.ai.budget_exceeded",
+                    used=f"{budget_status['used']:,}",
+                    budget=f"{budget_status['budget']:,}",
+                )
+            )
         elif budget_status and budget_status["pct"] >= 80:
-            lines.append(_("settings.ai.budget_warning", pct=int(budget_status["pct"]),
-                           used=f"{budget_status['used']:,}", budget=f"{budget_status['budget']:,}"))
+            lines.append(
+                _(
+                    "settings.ai.budget_warning",
+                    pct=int(budget_status["pct"]),
+                    used=f"{budget_status['used']:,}",
+                    budget=f"{budget_status['budget']:,}",
+                )
+            )
         lines.append("")
         lines += _token_block(_("settings.ai.token_usage_month_title"), usage_month)
         lines.append("")
@@ -1681,16 +1800,20 @@ def _do_ai_settings():
                     value="toggle_auto_report",
                 ),
                 questionary.Choice(_("settings.ai.report_weeks_choice", weeks=report_weeks), value="report_weeks"),
-                questionary.Choice(_("settings.ai.toggle_name_choice", state=on_off(send_name_on)), value="toggle_name"),
-                questionary.Choice(_("settings.ai.toggle_body_choice", state=on_off(send_body_on)), value="toggle_body"),
+                questionary.Choice(
+                    _("settings.ai.toggle_name_choice", state=on_off(send_name_on)), value="toggle_name"
+                ),
+                questionary.Choice(
+                    _("settings.ai.toggle_body_choice", state=on_off(send_body_on)), value="toggle_body"
+                ),
                 questionary.Choice(_("settings.ai.language_choice", lang=lang), value="language"),
                 questionary.Choice(_("settings.ai.history_turns_choice", turns=history_label), value="history_turns"),
                 questionary.Choice(_("settings.ai.memories_choice", count=mem_count), value="memories"),
                 questionary.Choice(_("settings.ai.budget_choice", budget=budget_label), value="budget"),
                 questionary.Choice(_("settings.ai.reset_day_choice", day=reset_day), value="reset_day"),
-                questionary.Choice(_("settings.ai.reset_tokens_choice"),         value="reset_tokens"),
+                questionary.Choice(_("settings.ai.reset_tokens_choice"), value="reset_tokens"),
                 questionary.Separator("  ───"),
-                questionary.Choice(_("nav.back"),                                 value="back"),
+                questionary.Choice(_("nav.back"), value="back"),
             ],
             style=STYLE,
         ).ask()
@@ -1703,12 +1826,10 @@ def _do_ai_settings():
             if not configured:
                 console.print(_("settings.ai.provider_none"))
                 continue
-            choices = [
-                questionary.Choice(f"{p}  ·  {config.default_model_for(p)}", value=p)
-                for p in configured
-            ]
-            choices.append(questionary.Choice(
-                _("settings.ai.provider_env_option", provider=config._ENV_AI_PROVIDER), value="_env"))
+            choices = [questionary.Choice(f"{p}  ·  {config.default_model_for(p)}", value=p) for p in configured]
+            choices.append(
+                questionary.Choice(_("settings.ai.provider_env_option", provider=config._ENV_AI_PROVIDER), value="_env")
+            )
             choices.append(questionary.Choice(_("nav.cancel"), value=None))
             picked = questionary.select(_("settings.ai.provider_prompt"), choices=choices, style=STYLE).ask()
             if picked == "_env":
@@ -1716,12 +1837,11 @@ def _do_ai_settings():
                 set_pref("ai_model", "")
             elif picked and picked != config.AI_PROVIDER:
                 set_pref("ai_provider", picked)
-                set_pref("ai_model", "")   # model names are provider-specific
+                set_pref("ai_model", "")  # model names are provider-specific
             if picked:
                 config.apply_ai_overrides()
                 _dlog("SETTING", "ai_provider changed", provider=config.AI_PROVIDER, model=config.AI_MODEL)
-                console.print(_("settings.ai.provider_saved",
-                                provider=config.AI_PROVIDER, model=config.AI_MODEL))
+                console.print(_("settings.ai.provider_saved", provider=config.AI_PROVIDER, model=config.AI_MODEL))
             continue
 
         if action == "model":
@@ -1837,10 +1957,7 @@ def _do_ai_settings():
                 n = int(answer)
                 set_pref("ai_chat_history_turns", str(n))
                 _dlog("SETTING", "ai_chat_history_turns changed", value=n)
-                saved_label = (
-                    _("settings.ai.history_unlimited") if n == 0
-                    else _("settings.ai.history_count", n=n)
-                )
+                saved_label = _("settings.ai.history_unlimited") if n == 0 else _("settings.ai.history_count", n=n)
                 console.print(_("settings.ai.history_turns_saved", turns=saved_label))
 
         elif action == "reset_day":
@@ -1864,7 +1981,7 @@ def _do_ai_settings():
 
 def _do_manage_memories() -> None:
     from db.goals import get_pref, set_pref
-    from db.memories import get_all_memories, delete_memories, count_memories, enforce_memory_cap
+    from db.memories import count_memories, delete_memories, enforce_memory_cap, get_all_memories
 
     while True:
         console.clear()
@@ -1873,10 +1990,14 @@ def _do_manage_memories() -> None:
         except (TypeError, ValueError):
             mem_max = 200
         max_label = _("settings.ai.memories_unlimited") if mem_max == 0 else str(mem_max)
-        console.print(Panel(
-            _("settings.ai.memories_panel", count=count_memories(), max=max_label),
-            title=_("settings.ai.memories_title"), border_style="cyan", padding=(0, 2),
-        ))
+        console.print(
+            Panel(
+                _("settings.ai.memories_panel", count=count_memories(), max=max_label),
+                title=_("settings.ai.memories_title"),
+                border_style="cyan",
+                padding=(0, 2),
+            )
+        )
 
         action = questionary.select(
             _("settings.ai.memories_prompt"),
@@ -1899,9 +2020,7 @@ def _do_manage_memories() -> None:
                 questionary.press_any_key_to_continue(_("nav.press_any_key")).ask()
                 continue
             choices = [
-                questionary.Choice(
-                    f"[{(m['created_at'] or '')[:10]}] {m['summary'][:70]}", value=m["id"]
-                )
+                questionary.Choice(f"[{(m['created_at'] or '')[:10]}] {m['summary'][:70]}", value=m["id"])
                 for m in memories
             ]
             picked = questionary.checkbox(_("settings.ai.memories_select"), choices=choices, style=STYLE).ask()
@@ -1937,12 +2056,12 @@ def _do_data_reset():
         action = questionary.select(
             _("data_reset.prompt"),
             choices=[
-                questionary.Choice(_("data_reset.memories_choice"),   value="memories"),
-                questionary.Choice(_("data_reset.goals_choice"),      value="goals"),
+                questionary.Choice(_("data_reset.memories_choice"), value="memories"),
+                questionary.Choice(_("data_reset.goals_choice"), value="goals"),
                 questionary.Choice(_("data_reset.sync_state_choice"), value="sync_state"),
-                questionary.Choice(_("data_reset.all_choice"),        value="all"),
+                questionary.Choice(_("data_reset.all_choice"), value="all"),
                 questionary.Separator("  ───"),
-                questionary.Choice(_("nav.back"),                      value="back"),
+                questionary.Choice(_("nav.back"), value="back"),
             ],
             style=STYLE,
         ).ask()
@@ -1951,10 +2070,9 @@ def _do_data_reset():
             return
 
         if action == "memories":
-            if questionary.confirm(
-                _("data_reset.memories_confirm"), default=False, style=STYLE
-            ).ask():
+            if questionary.confirm(_("data_reset.memories_confirm"), default=False, style=STYLE).ask():
                 from db.memories import clear_memories
+
                 clear_memories()
                 _dlog("RESET", "Coach memories cleared")
                 console.print(_("data_reset.memories_done"))
@@ -1962,15 +2080,15 @@ def _do_data_reset():
         elif action == "goals":
             if questionary.confirm(_("data_reset.goals_confirm"), default=False, style=STYLE).ask():
                 from db.goals import clear_goals
+
                 clear_goals()
                 _dlog("RESET", "All goals cleared")
                 console.print(_("data_reset.goals_done"))
 
         elif action == "sync_state":
-            if questionary.confirm(
-                _("data_reset.sync_state_confirm"), default=False, style=STYLE
-            ).ask():
+            if questionary.confirm(_("data_reset.sync_state_confirm"), default=False, style=STYLE).ask():
                 from db.store import set_sync_state
+
                 set_sync_state("last_sync", "1970-01-01T00:00:00Z")
                 _dlog("RESET", "Sync state reset")
                 console.print(_("data_reset.sync_state_done"))
@@ -1982,6 +2100,7 @@ def _do_data_reset():
                     return query(sql)[0]["n"]
                 except Exception:
                     return 0
+
             summary_lines = [
                 _("data_reset.all_item_workouts", n=_count("SELECT COUNT(*) AS n FROM workouts")),
                 _("data_reset.all_item_goals", n=_count("SELECT COUNT(*) AS n FROM user_goals")),
@@ -1990,11 +2109,13 @@ def _do_data_reset():
                 _("data_reset.all_item_memories", n=_count("SELECT COUNT(*) AS n FROM chat_memories")),
                 _("data_reset.all_item_fit", n=_count("SELECT COUNT(*) AS n FROM fit_daily")),
             ]
-            console.print(Panel(
-                "\n".join(summary_lines),
-                title=_("data_reset.all_summary_title"),
-                border_style="red",
-            ))
+            console.print(
+                Panel(
+                    "\n".join(summary_lines),
+                    title=_("data_reset.all_summary_title"),
+                    border_style="red",
+                )
+            )
             console.print(_("data_reset.all_warning"))
             if not questionary.confirm(_("data_reset.all_confirm1"), default=False, style=STYLE).ask():
                 continue
@@ -2002,9 +2123,12 @@ def _do_data_reset():
                 continue
 
             import os
+
             from config import DB_PATH
+
             try:
                 from fit.auth import disconnect as fit_disconnect
+
                 fit_disconnect()
             except Exception:
                 pass
@@ -2015,9 +2139,10 @@ def _do_data_reset():
                     os.remove(f"{DB_PATH}{suffix}")
                 except FileNotFoundError:
                     pass
-            init_db()   # callers up the menu chain read prefs immediately
+            init_db()  # callers up the menu chain read prefs immediately
 
             from render_cache import invalidate
+
             invalidate()
             _dlog("RESET", "Full data wipe executed")
             console.print(_("data_reset.all_done"))
@@ -2026,24 +2151,34 @@ def _do_data_reset():
 
 def _do_create_profile_flow() -> str:
     """Interactive profile creation. Returns the new slug."""
-    from profile_mgr import create_profile, PROFILES_DIR
-    name = (questionary.text(
-        _("profiles.name_prompt"),
-        validate=lambda v: bool(v.strip()) or _("validate.name_required"),
-        style=STYLE,
-    ).ask() or "").strip()
+    from profile_mgr import PROFILES_DIR, create_profile
+
+    name = (
+        questionary.text(
+            _("profiles.name_prompt"),
+            validate=lambda v: bool(v.strip()) or _("validate.name_required"),
+            style=STYLE,
+        ).ask()
+        or ""
+    ).strip()
     if not name:
         name = "New Profile"
-    api_key = (questionary.text(
-        _("profiles.api_key_prompt"),
-        style=STYLE,
-    ).ask() or "").strip()
+    api_key = (
+        questionary.text(
+            _("profiles.api_key_prompt"),
+            style=STYLE,
+        ).ask()
+        or ""
+    ).strip()
     lang_choices = [questionary.Choice(lname, value=code) for code, lname in _UI_LANGUAGES]
-    lang_code = questionary.select(
-        _("profiles.language_prompt"),
-        choices=lang_choices,
-        style=STYLE,
-    ).ask() or "en"
+    lang_code = (
+        questionary.select(
+            _("profiles.language_prompt"),
+            choices=lang_choices,
+            style=STYLE,
+        ).ask()
+        or "en"
+    )
     profile = create_profile(name, hevy_api_key=api_key)
     slug = profile["slug"]
     # Write the language pref into the new profile's DB now so it survives
@@ -2061,8 +2196,12 @@ def _do_create_profile_flow() -> str:
 
 def _do_profiles_menu() -> None:
     from profile_mgr import (
-        list_profiles, get_active_slug, activate_profile, set_active_slug,
-        rename_profile, delete_profile, get_profile_name,
+        delete_profile,
+        get_active_slug,
+        get_profile_name,
+        list_profiles,
+        rename_profile,
+        set_active_slug,
     )
 
     while True:
@@ -2071,12 +2210,14 @@ def _do_profiles_menu() -> None:
         active_name = get_profile_name(active_slug) if active_slug else "None"
         profiles = list_profiles()
 
-        console.print(Panel(
-            _("profiles.panel_content", name=_esc(active_name), total=len(profiles)),
-            title=_("profiles.panel_title"),
-            border_style="cyan",
-            padding=(0, 2),
-        ))
+        console.print(
+            Panel(
+                _("profiles.panel_content", name=_esc(active_name), total=len(profiles)),
+                title=_("profiles.panel_title"),
+                border_style="cyan",
+                padding=(0, 2),
+            )
+        )
 
         action = questionary.select(
             _("profiles.menu_prompt"),
@@ -2086,7 +2227,7 @@ def _do_profiles_menu() -> None:
                 questionary.Choice(_("profiles.rename_choice"), value="rename"),
                 questionary.Choice(_("profiles.delete_choice"), value="delete"),
                 questionary.Separator("  ───────────────────────────────────────"),
-                questionary.Choice(_("nav.back"),               value="back"),
+                questionary.Choice(_("nav.back"), value="back"),
             ],
             style=STYLE,
         ).ask()
@@ -2115,6 +2256,7 @@ def _do_profiles_menu() -> None:
                 console.print(_("profiles.switching", name=_esc(get_profile_name(slug))))
                 import os as _os
                 import sys as _sys
+
                 _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
 
         elif action == "create":
@@ -2124,14 +2266,18 @@ def _do_profiles_menu() -> None:
                 set_active_slug(slug)
                 import os as _os
                 import sys as _sys
+
                 _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
 
         elif action == "rename":
             if active_slug:
-                new_name = (questionary.text(
-                    _("profiles.rename_prompt", name=_esc(active_name)),
-                    style=STYLE,
-                ).ask() or "").strip()
+                new_name = (
+                    questionary.text(
+                        _("profiles.rename_prompt", name=_esc(active_name)),
+                        style=STYLE,
+                    ).ask()
+                    or ""
+                ).strip()
                 if new_name:
                     rename_profile(active_slug, new_name)
                     console.print(_("profiles.renamed", name=_esc(new_name)))
@@ -2158,8 +2304,9 @@ def _do_profiles_menu() -> None:
 
 
 def _do_profile_settings() -> None:
-    from profile_mgr import get_active_slug, update_profile_key, PROFILES_DIR
     import json as _json
+
+    from profile_mgr import PROFILES_DIR, get_active_slug, update_profile_key
 
     active_slug = get_active_slug()
     name = get_pref("display_name") or ""
@@ -2175,24 +2322,27 @@ def _do_profile_settings() -> None:
     masked_key = (hevy_key[:4] + "…" + hevy_key[-4:]) if len(hevy_key) > 8 else ("set" if hevy_key else "not set")
 
     from analytics.records import get_height_cm
+
     height_cm = get_height_cm()
     height_line = _("profile.height_label", height=_fmt_height(height_cm)) if height_cm else _("profile.height_notset")
 
     name_line = _("profile.display_name_label", name=_esc(name)) if name else _("profile.display_name_notset")
-    console.print(Panel(
-        f"{name_line}\n{_('profile.api_key_label', key=masked_key)}\n{height_line}",
-        title=_("profile.panel_title"),
-        border_style="cyan",
-        padding=(0, 2),
-    ))
+    console.print(
+        Panel(
+            f"{name_line}\n{_('profile.api_key_label', key=masked_key)}\n{height_line}",
+            title=_("profile.panel_title"),
+            border_style="cyan",
+            padding=(0, 2),
+        )
+    )
 
     action = questionary.select(
         _("profile.edit_prompt"),
         choices=[
             questionary.Choice(_("profile.display_name_choice"), value="name"),
-            questionary.Choice(_("profile.api_key_choice"),      value="apikey"),
-            questionary.Choice(_("profile.height_choice"),       value="height"),
-            questionary.Choice(_("nav.cancel"),                  value="back"),
+            questionary.Choice(_("profile.api_key_choice"), value="apikey"),
+            questionary.Choice(_("profile.height_choice"), value="height"),
+            questionary.Choice(_("nav.cancel"), value="back"),
         ],
         style=STYLE,
     ).ask()
@@ -2218,6 +2368,7 @@ def _do_profile_settings() -> None:
 
 def _do_preferences_settings() -> None:
     import i18n as _i18n
+
     while True:
         console.clear()
         units = _get_units()
@@ -2231,6 +2382,7 @@ def _do_preferences_settings() -> None:
         off_str = _("settings.off")
 
         import debug_log
+
         lines = [
             _("settings.prefs.units_label", units=units),
             _("settings.prefs.checkin_label", days=checkin_days),
@@ -2246,13 +2398,15 @@ def _do_preferences_settings() -> None:
         action = questionary.select(
             _("settings.prefs.prompt"),
             choices=[
-                questionary.Choice(_("settings.prefs.units_choice", units=units),                            value="units"),
-                questionary.Choice(_("settings.prefs.checkin_choice", days=checkin_days),                    value="checkin"),
-                questionary.Choice(_("settings.prefs.autosync_choice", state=on_str if auto_sync else off_str), value="autosync"),
-                questionary.Choice(_("settings.prefs.stale_hours_choice", hours=stale_hours),                value="stale_hours"),
-                questionary.Choice(_("settings.prefs.stats_window_choice", window=default_weeks),            value="stats_window"),
-                questionary.Choice(_("settings.prefs.ui_language_choice", lang=ui_lang_name),                value="ui_language"),
-                questionary.Choice(_("settings.prefs.dirs_choice"),                                         value="dirs"),
+                questionary.Choice(_("settings.prefs.units_choice", units=units), value="units"),
+                questionary.Choice(_("settings.prefs.checkin_choice", days=checkin_days), value="checkin"),
+                questionary.Choice(
+                    _("settings.prefs.autosync_choice", state=on_str if auto_sync else off_str), value="autosync"
+                ),
+                questionary.Choice(_("settings.prefs.stale_hours_choice", hours=stale_hours), value="stale_hours"),
+                questionary.Choice(_("settings.prefs.stats_window_choice", window=default_weeks), value="stats_window"),
+                questionary.Choice(_("settings.prefs.ui_language_choice", lang=ui_lang_name), value="ui_language"),
+                questionary.Choice(_("settings.prefs.dirs_choice"), value="dirs"),
                 questionary.Separator("  ───"),
                 questionary.Choice(_("nav.back"), value="back"),
             ],
@@ -2266,7 +2420,7 @@ def _do_preferences_settings() -> None:
             new_units = questionary.select(
                 _("settings.prefs.units_prompt"),
                 choices=[
-                    questionary.Choice(_("settings.prefs.units_kg"),  value="kg"),
+                    questionary.Choice(_("settings.prefs.units_kg"), value="kg"),
                     questionary.Choice(_("settings.prefs.units_lbs"), value="lbs"),
                 ],
                 default=units,
@@ -2281,7 +2435,7 @@ def _do_preferences_settings() -> None:
             new_days = questionary.select(
                 _("settings.prefs.checkin_prompt"),
                 choices=[
-                    questionary.Choice(_("settings.prefs.checkin_7"),  value="7"),
+                    questionary.Choice(_("settings.prefs.checkin_7"), value="7"),
                     questionary.Choice(_("settings.prefs.checkin_14"), value="14"),
                     questionary.Choice(_("settings.prefs.checkin_30"), value="30"),
                 ],
@@ -2344,13 +2498,16 @@ def _do_preferences_settings() -> None:
 def _do_dirs_settings() -> None:
     """Configure the export and logs folders (global — stored in .env)."""
     import debug_log
+
     which = questionary.select(
         _("settings.prefs.dirs_prompt"),
         choices=[
-            questionary.Choice(_("settings.prefs.dirs_export_choice",
-                                 path=_esc(str(config.export_dir()))), value="EXPORT_DIR"),
-            questionary.Choice(_("settings.prefs.dirs_logs_choice",
-                                 path=_esc(str(debug_log.logs_dir()))), value="LOGS_DIR"),
+            questionary.Choice(
+                _("settings.prefs.dirs_export_choice", path=_esc(str(config.export_dir()))), value="EXPORT_DIR"
+            ),
+            questionary.Choice(
+                _("settings.prefs.dirs_logs_choice", path=_esc(str(debug_log.logs_dir()))), value="LOGS_DIR"
+            ),
             questionary.Choice(_("nav.back"), value=None),
         ],
         style=STYLE,
@@ -2390,23 +2547,26 @@ def _do_dirs_settings() -> None:
 
 
 _EXPORT_KINDS = {
-    "memories":     ["chat_memories"],
-    "goals":        ["user_goals"],
+    "memories": ["chat_memories"],
+    "goals": ["user_goals"],
     "measurements": ["body_measurements"],
-    "full":         None,  # every table in the active DB
+    "full": None,  # every table in the active DB
 }
 
 
-def _export_data(kind: str, dest_dir: Optional[Path] = None) -> tuple[Path, int]:
+def _export_data(kind: str, dest_dir: Path | None = None) -> tuple[Path, int]:
     """Dump the requested tables to a timestamped JSON file. Returns (path, total_rows)."""
-    from db.store import query as _query
     from db.goals import get_token_usage, get_token_usage_month
+    from db.store import query as _query
 
     tables = _EXPORT_KINDS[kind]
     if tables is None:
-        tables = [r["name"] for r in _query(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-        )]
+        tables = [
+            r["name"]
+            for r in _query(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
+        ]
 
     dumped: dict = {}
     total = 0
@@ -2421,7 +2581,7 @@ def _export_data(kind: str, dest_dir: Optional[Path] = None) -> tuple[Path, int]
     payload = {
         "app": "lifter",
         "kind": kind,
-        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exported_at": datetime.now(UTC).isoformat(),
         "tables": dumped,
     }
     # user_preferences holds only UI settings and ai_tokens_* counters — API keys
@@ -2456,16 +2616,17 @@ def _read_import_payload(path: Path) -> dict:
     return payload
 
 
-def _import_data(path: Path, payload: Optional[dict] = None) -> dict:
+def _import_data(path: Path, payload: dict | None = None) -> dict:
     """Restore tables from an export file (replace semantics, single transaction).
 
     For every dumped table that exists in the current schema: delete all rows,
     then insert the dumped rows. Tables absent from the schema are skipped;
     columns unknown to the schema are dropped per row.
     """
-    import db.store as store_mod   # module attrs → honors the tmp_db monkeypatch
+    import db.store as store_mod  # module attrs → honors the tmp_db monkeypatch
+
     payload = payload or _read_import_payload(path)
-    store_mod.init_db()            # the profile may have just been reset
+    store_mod.init_db()  # the profile may have just been reset
 
     imported: dict = {}
     skipped_tables: list = []
@@ -2512,6 +2673,7 @@ def _import_data(path: Path, payload: Optional[dict] = None) -> dict:
         conn.close()
 
     from render_cache import invalidate
+
     invalidate()
     return {
         "kind": payload.get("kind", "?"),
@@ -2525,16 +2687,18 @@ def _import_data(path: Path, payload: Optional[dict] = None) -> dict:
 
 def _do_import_data() -> None:
     exports_dir = config.export_dir()
-    candidates = sorted(
-        exports_dir.glob("lifter-export-*.json"),
-        key=lambda p: p.stat().st_mtime, reverse=True,
-    )[:15] if exports_dir.is_dir() else []
+    candidates = (
+        sorted(
+            exports_dir.glob("lifter-export-*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )[:15]
+        if exports_dir.is_dir()
+        else []
+    )
 
     if candidates:
-        choices = [
-            questionary.Choice(f"  {p.name}  ({p.stat().st_size / 1024:,.0f} KB)", value=p)
-            for p in candidates
-        ]
+        choices = [questionary.Choice(f"  {p.name}  ({p.stat().st_size / 1024:,.0f} KB)", value=p) for p in candidates]
         choices += [
             questionary.Separator("  ───"),
             questionary.Choice(_("settings.dev.import.manual_choice"), value="_manual"),
@@ -2565,26 +2729,30 @@ def _do_import_data() -> None:
         return
 
     lines = [
-        _("settings.dev.import.summary_meta",
-          kind=payload.get("kind", "?"), when=_esc(str(payload.get("exported_at", "?")))),
+        _(
+            "settings.dev.import.summary_meta",
+            kind=payload.get("kind", "?"),
+            when=_esc(str(payload.get("exported_at", "?"))),
+        ),
         "",
     ]
     for table, rows in payload["tables"].items():
         try:
             existing = query(f'SELECT COUNT(*) AS n FROM "{table}"')[0]["n"]
-            lines.append(_("settings.dev.import.summary_row",
-                           table=table, count=len(rows), existing=existing))
+            lines.append(_("settings.dev.import.summary_row", table=table, count=len(rows), existing=existing))
         except sqlite3.OperationalError:
             lines.append(_("settings.dev.import.summary_unknown", table=table))
     lines += ["", _("settings.dev.import.warning")]
-    console.print(Panel("\n".join(lines), title=_("settings.dev.import.summary_title"),
-                        border_style="red", padding=(0, 2)))
+    console.print(
+        Panel("\n".join(lines), title=_("settings.dev.import.summary_title"), border_style="red", padding=(0, 2))
+    )
 
     if not questionary.confirm(_("settings.dev.import.confirm1"), default=False, style=STYLE).ask():
         return
-    if payload.get("kind") == "full" and not questionary.confirm(
-        _("settings.dev.import.confirm2"), default=False, style=STYLE
-    ).ask():
+    if (
+        payload.get("kind") == "full"
+        and not questionary.confirm(_("settings.dev.import.confirm2"), default=False, style=STYLE).ask()
+    ):
         return
 
     try:
@@ -2602,8 +2770,9 @@ def _do_import_data() -> None:
 
     if summary["kind"] == "full":
         # restored prefs carry process-level state — re-apply them
-        import i18n as _i18n
         import debug_log
+        import i18n as _i18n
+
         _i18n.init(get_pref("ui_language") or config.DEFAULT_LANGUAGE)
         debug_log.enable(get_pref("debug_logging") == "1")
         config.apply_ai_overrides()
@@ -2616,10 +2785,10 @@ def _do_export_data() -> None:
         action = questionary.select(
             _("settings.dev.export.prompt"),
             choices=[
-                questionary.Choice(_("settings.dev.export.memories_choice"),     value="memories"),
-                questionary.Choice(_("settings.dev.export.goals_choice"),        value="goals"),
+                questionary.Choice(_("settings.dev.export.memories_choice"), value="memories"),
+                questionary.Choice(_("settings.dev.export.goals_choice"), value="goals"),
                 questionary.Choice(_("settings.dev.export.measurements_choice"), value="measurements"),
-                questionary.Choice(_("settings.dev.export.full_choice"),         value="full"),
+                questionary.Choice(_("settings.dev.export.full_choice"), value="full"),
                 questionary.Separator("  ───"),
                 questionary.Choice(_("nav.back"), value="back"),
             ],
@@ -2668,14 +2837,16 @@ def _do_developer_settings() -> None:
         action = questionary.select(
             _("settings.dev.prompt"),
             choices=[
-                questionary.Choice(_("settings.dev.export_choice"),     value="export"),
-                questionary.Choice(_("settings.dev.import_choice"),     value="import"),
+                questionary.Choice(_("settings.dev.export_choice"), value="export"),
+                questionary.Choice(_("settings.dev.import_choice"), value="import"),
                 questionary.Choice(_("settings.dev.ai_context_choice"), value="ai_context"),
-                questionary.Choice(_("settings.dev.db_info_choice"),    value="db_info"),
-                questionary.Choice(_("settings.dev.debug_choice", state=on_str if debug_on else off_str), value="debug"),
+                questionary.Choice(_("settings.dev.db_info_choice"), value="db_info"),
+                questionary.Choice(
+                    _("settings.dev.debug_choice", state=on_str if debug_on else off_str), value="debug"
+                ),
                 questionary.Choice(_("settings.dev.clear_logs_choice"), value="clear_logs"),
                 questionary.Separator("  ───"),
-                questionary.Choice(_("settings.dev.reset_choice"),      value="reset"),
+                questionary.Choice(_("settings.dev.reset_choice"), value="reset"),
                 questionary.Separator("  ───"),
                 questionary.Choice(_("nav.back"), value="back"),
             ],
@@ -2695,6 +2866,7 @@ def _do_developer_settings() -> None:
             # Builds the exact <training_data> block the chat sends to the AI
             # provider — entirely local, no API call.
             from ai.coach import _build_context
+
             slim = get_pref("ai_chat_slim") != "0"
             include_routines = get_pref("ai_include_routines") != "0"
             ctx = _build_context(8, slim=slim, include_routine=include_routines)
@@ -2703,21 +2875,30 @@ def _do_developer_settings() -> None:
             path = out_dir / f"lifter-ai-context-{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.md"
             path.write_text(ctx, encoding="utf-8")
             _dlog("EXPORT", "AI context preview written", chars=len(ctx))
-            console.print(_("settings.dev.ai_context_done",
-                            path=_esc(str(path)), chars=f"{len(ctx):,}", tokens=f"{len(ctx) // 4:,}"))
+            console.print(
+                _(
+                    "settings.dev.ai_context_done",
+                    path=_esc(str(path)),
+                    chars=f"{len(ctx):,}",
+                    tokens=f"{len(ctx) // 4:,}",
+                )
+            )
             questionary.press_any_key_to_continue(_("nav.press_any_key")).ask()
 
         elif action == "db_info":
-            table_names = [r["name"] for r in query(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-            )]
+            table_names = [
+                r["name"]
+                for r in query(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                )
+            ]
             info_lines = [
-                _("settings.dev.db_info_row",
-                  table=t, count=query(f'SELECT COUNT(*) AS n FROM "{t}"')[0]["n"])
+                _("settings.dev.db_info_row", table=t, count=query(f'SELECT COUNT(*) AS n FROM "{t}"')[0]["n"])
                 for t in table_names
             ]
-            console.print(Panel("\n".join(info_lines), title=_("settings.dev.db_info_title"),
-                                border_style="cyan", padding=(0, 2)))
+            console.print(
+                Panel("\n".join(info_lines), title=_("settings.dev.db_info_title"), border_style="cyan", padding=(0, 2))
+            )
             questionary.press_any_key_to_continue(_("nav.press_any_key")).ask()
 
         elif action == "debug":
@@ -2748,10 +2929,14 @@ def _do_developer_settings() -> None:
 
 def _do_about() -> None:
     console.clear()
-    console.print(Panel(
-        _("about.body", version=_app_version()),
-        title=_("about.title"), border_style="cyan", padding=(1, 3),
-    ))
+    console.print(
+        Panel(
+            _("about.body", version=_app_version()),
+            title=_("about.title"),
+            border_style="cyan",
+            padding=(1, 3),
+        )
+    )
     questionary.press_any_key_to_continue(_("nav.press_any_key")).ask()
 
 
@@ -2762,14 +2947,14 @@ def _do_settings() -> None:
             _("settings.menu_prompt"),
             choices=[
                 questionary.Choice(_("settings.profiles_choice"), value="profiles"),
-                questionary.Choice(_("settings.profile_choice"),  value="profile"),
-                questionary.Choice(_("settings.prefs_choice"),    value="prefs"),
-                questionary.Choice(_("settings.ai_choice"),       value="ai"),
-                questionary.Choice(_("settings.dev_choice"),      value="dev"),
+                questionary.Choice(_("settings.profile_choice"), value="profile"),
+                questionary.Choice(_("settings.prefs_choice"), value="prefs"),
+                questionary.Choice(_("settings.ai_choice"), value="ai"),
+                questionary.Choice(_("settings.dev_choice"), value="dev"),
                 questionary.Separator("  ───────────────────────────────────────"),
-                questionary.Choice(_("settings.about_choice"),    value="about"),
+                questionary.Choice(_("settings.about_choice"), value="about"),
                 questionary.Separator("  ───────────────────────────────────────"),
-                questionary.Choice(_("nav.back"),                 value="back"),
+                questionary.Choice(_("nav.back"), value="back"),
             ],
             style=STYLE,
         ).ask()
@@ -2792,11 +2977,13 @@ def _do_settings() -> None:
 
 # ── google fit ────────────────────────────────────────────────────────────────
 
+
 def _render_recovery_panel() -> None:
     """Show a compact recovery panel if Fit data exists."""
     try:
-        from fit.analytics import recovery_score, sleep_summary, activity_summary
+        from fit.analytics import activity_summary, recovery_score, sleep_summary
         from fit.auth import is_connected
+
         if not is_connected():
             return
         rec = recovery_score(3)
@@ -2806,30 +2993,31 @@ def _render_recovery_panel() -> None:
             return
         parts = []
         if rec:
-            parts.append(_("fit.metric_recovery", color=rec['color'], score=rec['score'], label=rec['label']))
+            parts.append(_("fit.metric_recovery", color=rec["color"], score=rec["score"], label=rec["label"]))
         if sleep.get("avg_hours"):
-            parts.append(_("fit.metric_sleep", hours=sleep['avg_hours']))
+            parts.append(_("fit.metric_sleep", hours=sleep["avg_hours"]))
         if activity.get("avg_steps"):
             parts.append(_("fit.metric_steps", steps=f"{int(activity['avg_steps']):,}"))
         if activity.get("resting_hr"):
-            parts.append(_("fit.metric_rhr", rhr=activity['resting_hr']))
+            parts.append(_("fit.metric_rhr", rhr=activity["resting_hr"]))
         if parts:
-            console.print(Panel("  ·  ".join(parts), title=_("fit.recovery_panel_title"),
-                                border_style="green", padding=(0, 2)))
+            console.print(
+                Panel("  ·  ".join(parts), title=_("fit.recovery_panel_title"), border_style="green", padding=(0, 2))
+            )
             console.print()
     except Exception:
         pass
 
 
 def _do_fit():
-    from fit.auth import is_connected, disconnect
+    from fit.auth import disconnect, is_connected
 
     action = questionary.select(
         _("fit.menu_prompt"),
         choices=[
-            questionary.Choice(_("fit.sync_choice"),       value="sync"),
-            questionary.Choice(_("fit.connect_choice"),    value="connect"),
-            questionary.Choice(_("fit.view_choice"),       value="view"),
+            questionary.Choice(_("fit.sync_choice"), value="sync"),
+            questionary.Choice(_("fit.connect_choice"), value="connect"),
+            questionary.Choice(_("fit.view_choice"), value="view"),
             questionary.Choice(_("fit.disconnect_choice"), value="disconnect"),
         ],
         style=STYLE,
@@ -2855,13 +3043,16 @@ def _do_fit():
         days = int(days_str.split()[0])
         try:
             from fit.sync import sync_fit
+
             with console.status(_("fit.syncing_n_days", days=days), spinner="dots"):
                 counts = sync_fit(days=days)
-            console.print(Panel(
-                _("fit.sync_counts", daily=counts['daily_days'], sleep=counts['sleep_sessions']),
-                title=_("fit.sync_complete_title"),
-                border_style="green",
-            ))
+            console.print(
+                Panel(
+                    _("fit.sync_counts", daily=counts["daily_days"], sleep=counts["sleep_sessions"]),
+                    title=_("fit.sync_complete_title"),
+                    border_style="green",
+                )
+            )
             _render_recovery_panel()
         except Exception as e:
             _dlog("ERROR", f"Google Fit sync failed: {type(e).__name__}", error=str(e)[:200])
@@ -2897,8 +3088,10 @@ def _fit_setup() -> None:
         except Exception:
             console.print(_("fit.credentials_invalid"))
             return
-        import paths as _paths
         import shutil as _shutil
+
+        import paths as _paths
+
         _paths.ensure_dirs()
         _shutil.copy2(source, _paths.FIT_CREDENTIALS_FILE)
         _paths.FIT_CREDENTIALS_FILE.chmod(0o600)
@@ -2909,6 +3102,7 @@ def _fit_setup() -> None:
 
     try:
         from fit.auth import get_credentials
+
         get_credentials()
         _dlog("SETTING", "Google Fit connected")
         console.print(_("fit.connected_ok"))
@@ -2923,7 +3117,7 @@ def _fit_setup() -> None:
 
 
 def _render_fit_dashboard() -> None:
-    from fit.analytics import sleep_summary, activity_summary, recovery_score
+    from fit.analytics import activity_summary, recovery_score, sleep_summary
 
     console.rule(_("fit.dashboard_rule"))
 
@@ -2932,7 +3126,9 @@ def _render_fit_dashboard() -> None:
         score = rec["score"]
         bar_w = int(score / 100 * 30)
         bar = f"[{rec['color']}]{'█' * bar_w}[/{rec['color']}][dim]{'░' * (30 - bar_w)}[/dim]"
-        console.print(f"\n  {_('fit.recovery_score_label')}  {bar}  [{rec['color']}]{score}/100  {rec['label']}[/{rec['color']}]\n")
+        console.print(
+            f"\n  {_('fit.recovery_score_label')}  {bar}  [{rec['color']}]{score}/100  {rec['label']}[/{rec['color']}]\n"
+        )
 
     for days in (7, 14):
         sleep = sleep_summary(days)
@@ -2960,9 +3156,11 @@ def _render_fit_dashboard() -> None:
 
 # ── first-run & weekly check-in ───────────────────────────────────────────────
 
+
 def _check_stale_sync() -> None:
     """Auto-sync or prompt if Hevy/Google Fit data is older than 24 hours."""
     from db.store import get_sync_state
+
     auto_sync = get_pref("auto_sync") == "1"
 
     def _is_stale(key: str) -> bool:
@@ -2971,13 +3169,14 @@ def _check_stale_sync() -> None:
             return False
         try:
             dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
-            return (datetime.now(timezone.utc) - dt).total_seconds() > _stale_seconds()
+            return (datetime.now(UTC) - dt).total_seconds() > _stale_seconds()
         except Exception:
             return False
 
     stale_hevy = _is_stale("last_sync")
 
     from fit.auth import is_connected as _fit_connected
+
     fit_ok = _fit_connected()
     stale_fit = fit_ok and _is_stale("fit_last_sync")
 
@@ -2999,9 +3198,7 @@ def _check_stale_sync() -> None:
             except Exception as e:
                 _dlog("SYNC", "Hevy auto-sync error", error=str(e)[:200])
                 console.print(_("sync.auto_sync_hevy_failed", error=e))
-        elif questionary.confirm(
-            _("sync.stale_hevy_prompt"), default=True, style=STYLE
-        ).ask():
+        elif questionary.confirm(_("sync.stale_hevy_prompt"), default=True, style=STYLE).ask():
             _dlog("SYNC", "User accepted Hevy sync prompt")
             client = _require_hevy()
             if client:
@@ -3010,6 +3207,7 @@ def _check_stale_sync() -> None:
                     console.print(_("sync.hevy_done", updated=counts["updated"], deleted=counts["deleted"]))
                 except Exception as e:
                     import debug_log
+
                     debug_log.error("SYNC", "Hevy sync (stale prompt) failed", exc=e)
                     console.print(_("sync.auto_sync_hevy_failed", error=e))
         else:
@@ -3020,21 +3218,25 @@ def _check_stale_sync() -> None:
             try:
                 _dlog("SYNC", "Google Fit auto-sync triggered (data stale >24h)")
                 from fit.sync import sync_fit
+
                 with console.status(_("sync.auto_syncing_fit"), spinner="dots"):
                     counts = sync_fit(days=30)
-                console.print(_("sync.auto_synced_fit", daily_days=counts["daily_days"], sleep_sessions=counts["sleep_sessions"]))
+                console.print(
+                    _("sync.auto_synced_fit", daily_days=counts["daily_days"], sleep_sessions=counts["sleep_sessions"])
+                )
             except Exception as e:
                 _dlog("SYNC", "Google Fit auto-sync error", error=str(e)[:200])
                 console.print(_("sync.auto_sync_fit_failed", error=e))
-        elif questionary.confirm(
-            _("sync.stale_fit_prompt"), default=True, style=STYLE
-        ).ask():
+        elif questionary.confirm(_("sync.stale_fit_prompt"), default=True, style=STYLE).ask():
             _dlog("SYNC", "User accepted Google Fit sync prompt")
             try:
                 from fit.sync import sync_fit
+
                 with console.status(_("sync.fit_syncing"), spinner="dots"):
                     counts = sync_fit(days=90)
-                console.print(_("sync.fit_done", daily_days=counts["daily_days"], sleep_sessions=counts["sleep_sessions"]))
+                console.print(
+                    _("sync.fit_done", daily_days=counts["daily_days"], sleep_sessions=counts["sleep_sessions"])
+                )
             except Exception as e:
                 console.print(_("error.fit_sync_failed", error=e))
         else:
@@ -3046,9 +3248,7 @@ def _check_goals_and_checkin() -> None:
         goals = get_goals()
         if not goals:
             # First time ever
-            if questionary.confirm(
-                _("goals.set_now_first_run"), default=True, style=STYLE
-            ).ask():
+            if questionary.confirm(_("goals.set_now_first_run"), default=True, style=STYLE).ask():
                 _dlog("GOAL", "First-run goals wizard started")
                 run_goals_wizard()
             else:
@@ -3062,7 +3262,8 @@ def _check_goals_and_checkin() -> None:
 def _check_goal_celebrations() -> None:
     """One-time festive panel for goals achieved since the last celebration."""
     from db.goals import get_uncelebrated_achievements, mark_achievements_celebrated
-    compute_goal_progress()   # freshly-synced data may mark newly-achieved goals
+
+    compute_goal_progress()  # freshly-synced data may mark newly-achieved goals
     achieved = get_uncelebrated_achievements()
     if not achieved:
         return
@@ -3071,8 +3272,7 @@ def _check_goal_celebrations() -> None:
         lines.append(_("goals.celebrate.item", description=_esc(goal["description"])))
     lines += ["", _("goals.celebrate.outro")]
     console.print()
-    console.print(Panel("\n".join(lines), title=_("goals.celebrate.panel_title"),
-                        border_style="green", padding=(1, 2)))
+    console.print(Panel("\n".join(lines), title=_("goals.celebrate.panel_title"), border_style="green", padding=(1, 2)))
     mark_achievements_celebrated()
     _dlog("GOAL", "Goal celebration shown", count=len(achieved))
     _pause()
@@ -3087,6 +3287,7 @@ def _check_auto_report() -> None:
         return
     # Nothing to report on yet — skip until there's training data.
     from db.store import query
+
     if not query("SELECT 1 FROM workouts LIMIT 1"):
         return
 
@@ -3101,15 +3302,15 @@ def _check_auto_report() -> None:
 # ── main loop ─────────────────────────────────────────────────────────────────
 
 ACTIONS = {
-    "sync":     _do_sync,
-    "stats":    _do_stats,
+    "sync": _do_sync,
+    "stats": _do_stats,
     "progress": _do_progress,
-    "records":  _do_records,
-    "goals":    _do_goals,
-    "body":     _do_body_entry,
-    "fit":      _do_fit,
-    "coach":    _do_coach,
-    "chat":     _do_chat,
+    "records": _do_records,
+    "goals": _do_goals,
+    "body": _do_body_entry,
+    "fit": _do_fit,
+    "coach": _do_coach,
+    "chat": _do_chat,
     "settings": _do_settings,
 }
 
@@ -3123,6 +3324,7 @@ def _run_action(choice: str, action) -> object:
     Returns the action's result (NO_PAUSE or None).
     """
     import debug_log
+
     try:
         return action()
     except (KeyboardInterrupt, EOFError):
@@ -3134,41 +3336,42 @@ def _run_action(choice: str, action) -> object:
     except Exception as e:
         debug_log.error("APP", f"Unhandled error in '{choice}'", exc=e)
         hint = ""
-        if isinstance(e, sqlite3.OperationalError) and any(
-            word in str(e).lower() for word in ("locked", "malformed")
-        ):
+        if isinstance(e, sqlite3.OperationalError) and any(word in str(e).lower() for word in ("locked", "malformed")):
             hint = "\n" + _("error.db_hint")
-        console.print(Panel(
-            _("error.unexpected", exc_type=type(e).__name__,
-              log_dir=_esc(str(debug_log.logs_dir()))) + hint,
-            border_style="red", padding=(0, 2),
-        ))
+        console.print(
+            Panel(
+                _("error.unexpected", exc_type=type(e).__name__, log_dir=_esc(str(debug_log.logs_dir()))) + hint,
+                border_style="red",
+                padding=(0, 2),
+            )
+        )
         return None
 
 
 def _build_menu() -> tuple:
     try:
         from fit.auth import is_connected as _fit_connected
+
         fit_label = _("menu.fit_connected") if _fit_connected() else _("menu.fit_disconnected")
     except Exception:
         fit_label = _("menu.fit_connected")
 
     last_action = get_pref("last_menu_action")
     items = [
-        questionary.Choice(_("menu.sync"),     value="sync"),
-        questionary.Choice(_("menu.chat"),     value="chat"),
+        questionary.Choice(_("menu.sync"), value="sync"),
+        questionary.Choice(_("menu.chat"), value="chat"),
         questionary.Separator("  ──────────────────────────────────"),
-        questionary.Choice(_("menu.goals"),    value="goals"),
-        questionary.Choice(_("menu.body"),     value="body"),
-        questionary.Choice(_("menu.stats"),    value="stats"),
+        questionary.Choice(_("menu.goals"), value="goals"),
+        questionary.Choice(_("menu.body"), value="body"),
+        questionary.Choice(_("menu.stats"), value="stats"),
         questionary.Choice(_("menu.progress"), value="progress"),
-        questionary.Choice(_("menu.records"),  value="records"),
+        questionary.Choice(_("menu.records"), value="records"),
         questionary.Separator("  ──────────────────────────────────"),
-        questionary.Choice(_("menu.coach"),    value="coach"),
-        questionary.Choice(fit_label,          value="fit"),
+        questionary.Choice(_("menu.coach"), value="coach"),
+        questionary.Choice(fit_label, value="fit"),
         questionary.Separator("  ──────────────────────────────────"),
         questionary.Choice(_("menu.settings"), value="settings"),
-        questionary.Choice(_("menu.exit"),     value="exit"),
+        questionary.Choice(_("menu.exit"), value="exit"),
     ]
     default = next((c for c in items if isinstance(c, questionary.Choice) and c.value == last_action), None)
     return items, default
@@ -3178,29 +3381,40 @@ def _bootstrap_profiles() -> None:
     """Select or create a profile before any DB operations."""
     import shutil as _shutil
     from pathlib import Path as _Path
+
     from profile_mgr import (
-        PROFILES_FILE, PROFILES_DIR, list_profiles, get_active_slug,
-        set_active_slug, activate_profile, create_profile,
+        PROFILES_DIR,
+        PROFILES_FILE,
+        activate_profile,
+        create_profile,
+        get_active_slug,
+        list_profiles,
+        set_active_slug,
     )
 
     project_dir = _Path(__file__).resolve().parent
-    old_db    = project_dir / "hevy.db"
+    old_db = project_dir / "hevy.db"
     old_token = project_dir / "fit_token.json"
 
     # Migration: existing single-user hevy.db with no profiles.json yet
     if not PROFILES_FILE.exists() and old_db.exists():
         console.print()
-        console.print(Panel(
-            _("migration.panel_body"),
-            title=_("migration.panel_title"),
-            border_style="cyan",
-            padding=(0, 2),
-        ))
-        name = (questionary.text(
-            _("migration.name_prompt"),
-            default="Default",
-            style=STYLE,
-        ).ask() or "Default").strip()
+        console.print(
+            Panel(
+                _("migration.panel_body"),
+                title=_("migration.panel_title"),
+                border_style="cyan",
+                padding=(0, 2),
+            )
+        )
+        name = (
+            questionary.text(
+                _("migration.name_prompt"),
+                default="Default",
+                style=STYLE,
+            ).ask()
+            or "Default"
+        ).strip()
 
         profile = create_profile(name, hevy_api_key=config.HEVY_API_KEY)
         slug = profile["slug"]
@@ -3221,26 +3435,36 @@ def _bootstrap_profiles() -> None:
         # First run — prompt for name, Hevy API key, and language
         console.print()
         console.rule(_("welcome.rule"))
-        name = (questionary.text(
-            _("welcome.name_prompt"),
-            default="Athlete",
-            style=STYLE,
-        ).ask() or "Athlete").strip()
-        api_key = (questionary.text(
-            _("welcome.api_key_prompt"),
-            style=STYLE,
-        ).ask() or "").strip()
+        name = (
+            questionary.text(
+                _("welcome.name_prompt"),
+                default="Athlete",
+                style=STYLE,
+            ).ask()
+            or "Athlete"
+        ).strip()
+        api_key = (
+            questionary.text(
+                _("welcome.api_key_prompt"),
+                style=STYLE,
+            ).ask()
+            or ""
+        ).strip()
         lang_choices = [questionary.Choice(lname, value=code) for code, lname in _UI_LANGUAGES]
-        lang_code = questionary.select(
-            _("welcome.language_prompt"),
-            choices=lang_choices,
-            style=STYLE,
-        ).ask() or "en"
+        lang_code = (
+            questionary.select(
+                _("welcome.language_prompt"),
+                choices=lang_choices,
+                style=STYLE,
+            ).ask()
+            or "en"
+        )
         profile = create_profile(name, hevy_api_key=api_key)
         activate_profile(profile["slug"])
         init_db()
         set_pref("ui_language", lang_code)
         import i18n as _i18n
+
         _i18n.init(lang_code)
         _dlog("PROFILE", "First run: profile created", slug=profile["slug"])
         # Baseline body metrics — the user may not have Google Fit connected yet.
@@ -3276,41 +3500,49 @@ def _bootstrap_profiles() -> None:
 
 def main():
     import sys
+
     if len(sys.argv) > 1 and sys.argv[1] in ("--version", "-V"):
         print(f"lifter {_app_version()}")
         return
 
     import paths
+
     paths.ensure_dirs()
     moved = paths.migrate_legacy_layout()
     if moved:
-        config.reload_env()               # the .env file may have just moved
+        config.reload_env()  # the .env file may have just moved
 
     import i18n as _i18n
-    _i18n.init(config.DEFAULT_LANGUAGE)   # Phase 1: before profile selector
+
+    _i18n.init(config.DEFAULT_LANGUAGE)  # Phase 1: before profile selector
 
     if moved:
-        console.print(Panel(
-            "\n".join(_esc(m) for m in moved),
-            title=_("migration.xdg_title"), border_style="cyan", padding=(0, 2),
-        ))
-        console.print(_("migration.xdg_done",
-                        config_dir=_esc(str(paths.CONFIG_DIR)),
-                        data_dir=_esc(str(paths.DATA_DIR))))
+        console.print(
+            Panel(
+                "\n".join(_esc(m) for m in moved),
+                title=_("migration.xdg_title"),
+                border_style="cyan",
+                padding=(0, 2),
+            )
+        )
+        console.print(
+            _("migration.xdg_done", config_dir=_esc(str(paths.CONFIG_DIR)), data_dir=_esc(str(paths.DATA_DIR)))
+        )
     _bootstrap_profiles()
     init_db()
-    config.apply_ai_overrides()           # per-profile provider/model prefs
+    config.apply_ai_overrides()  # per-profile provider/model prefs
     ui_lang = get_pref("ui_language") or config.DEFAULT_LANGUAGE
-    _i18n.init(ui_lang)                   # Phase 2: after profile DB is open
+    _i18n.init(ui_lang)  # Phase 2: after profile DB is open
     import debug_log
+
     debug_log.init()
-    from profile_mgr import get_active_slug
     import config as _cfg
-    _dlog("APP", "Lifter started",
-          profile=get_active_slug() or "none",
-          provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL)
+    from profile_mgr import get_active_slug
+
+    _dlog("APP", "Lifter started", profile=get_active_slug() or "none", provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL)
     from db.goals import maybe_rollover_tokens
-    maybe_rollover_tokens()   # reset monthly token counter if the period rolled over
+
+    maybe_rollover_tokens()  # reset monthly token counter if the period rolled over
     try:
         _check_goals_and_checkin()
         _check_body_checkin()

@@ -1,6 +1,6 @@
 """Google OAuth flow for the Fitness API."""
+
 import os
-import stat
 from pathlib import Path
 
 import config
@@ -35,16 +35,15 @@ def _write_token(creds) -> None:
         tf.chmod(0o600)
     except OSError as e:
         raise RuntimeError(
-            f"Could not save the Google Fit token at {tf}: {e}\n"
-            "Check disk space and file permissions."
+            f"Could not save the Google Fit token at {tf}: {e}\nCheck disk space and file permissions."
         ) from e
 
 
 def get_credentials():
     """Return valid Google credentials, running the OAuth flow if needed."""
     import requests as _requests
-    from google.oauth2.credentials import Credentials
     from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
 
     tf = _token_file()
     creds = None
@@ -64,6 +63,7 @@ def get_credentials():
                     "Follow the setup instructions in the menu to create one."
                 )
             from google_auth_oauthlib.flow import InstalledAppFlow
+
             flow = InstalledAppFlow.from_client_secrets_file(str(creds_file), SCOPES)
             creds = flow.run_local_server(port=0, open_browser=True)
 
@@ -79,6 +79,7 @@ def is_connected() -> bool:
         return False
     try:
         from google.oauth2.credentials import Credentials
+
         creds = Credentials.from_authorized_user_file(str(tf), SCOPES)
         return creds is not None and (creds.valid or bool(creds.refresh_token))
     except Exception:

@@ -1,6 +1,6 @@
 """Google Fit REST API client."""
+
 import httpx
-from datetime import datetime, timezone
 
 FIT_BASE = "https://www.googleapis.com/fitness/v1/users/me"
 
@@ -8,8 +8,9 @@ FIT_BASE = "https://www.googleapis.com/fitness/v1/users/me"
 class FitClient:
     def __init__(self):
         import requests as _requests
-        from fit.auth import get_credentials, disconnect, _token_file
         from google.auth.transport.requests import Request
+
+        from fit.auth import _token_file, disconnect, get_credentials
 
         self._token_file = _token_file()
         self._disconnect = disconnect
@@ -20,6 +21,7 @@ class FitClient:
 
     def _headers(self) -> dict:
         from google.auth.exceptions import RefreshError
+
         try:
             if not self._creds.valid:
                 self._creds.refresh(self._refresh)
@@ -46,22 +48,13 @@ class FitClient:
                 "during the OAuth setup. (error 403)"
             )
         if resp.status_code == 400:
-            raise RuntimeError(
-                f"Google Fit: bad request during {operation}. "
-                f"Detail: {resp.text[:300]} (error 400)"
-            )
+            raise RuntimeError(f"Google Fit: bad request during {operation}. Detail: {resp.text[:300]} (error 400)")
         if resp.status_code == 429:
             retry_after = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
             if retry_after:
-                raise RuntimeError(
-                    f"Google Fit rate limit reached. Try again in {retry_after} seconds. (error 429)"
-                )
-            raise RuntimeError(
-                "Google Fit rate limit reached. Please wait a moment and try again. (error 429)"
-            )
-        raise RuntimeError(
-            f"Google Fit error during {operation}: {resp.text[:200]} (error {resp.status_code})"
-        )
+                raise RuntimeError(f"Google Fit rate limit reached. Try again in {retry_after} seconds. (error 429)")
+            raise RuntimeError("Google Fit rate limit reached. Please wait a moment and try again. (error 429)")
+        raise RuntimeError(f"Google Fit error during {operation}: {resp.text[:200]} (error {resp.status_code})")
 
     def aggregate(
         self,

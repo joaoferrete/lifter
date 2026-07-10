@@ -1,26 +1,24 @@
 """AI coaching — analyzes workout data, generates suggestions, manages goals."""
+
 import json
 import re
 import readline
-from pathlib import Path
-
-import paths
+from datetime import UTC, datetime
 
 import questionary
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from datetime import datetime, timezone
-
-from ai.provider import create_chat_session, stream_complete, complete_json, provider_label, ToolCall
-from ai.sanitize import sanitize_for_prompt, ANTI_INJECTION_PREAMBLE
-from analytics.volume import muscle_group_summary, sets_per_muscle_per_week
+import paths
+from ai.provider import complete_json, create_chat_session, provider_label, stream_complete
+from ai.sanitize import ANTI_INJECTION_PREAMBLE, sanitize_for_prompt
+from analytics.frequency import muscle_group_frequency, workout_frequency
 from analytics.progression import detect_plateaus, top_progressions
-from analytics.frequency import workout_frequency, muscle_group_frequency
-from analytics.records import all_time_records, recent_prs, body_measurement_trend
-from db.store import query, get_routines_with_exercises
-from db.goals import goals_context_for_ai, get_pref, get_goals
+from analytics.records import body_measurement_trend, recent_prs
+from analytics.volume import muscle_group_summary, sets_per_muscle_per_week
+from db.goals import get_goals, get_pref, goals_context_for_ai
+from db.store import get_routines_with_exercises, query
 from i18n import _
 
 console = Console()
@@ -46,11 +44,18 @@ def _readline_prompt(markup: str) -> str:
 def _friendly_error(e: Exception) -> str:
     """Return a user-friendly error message for AI provider exceptions."""
     try:
-        import debug_log
         import config as _cfg
+        import debug_log
+
         _status = getattr(e, "status_code", None) or getattr(e, "code", None)
-        debug_log.error("AI", f"{type(e).__name__}: {str(e)[:200]}", exc=e,
-                        provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL, status=_status)
+        debug_log.error(
+            "AI",
+            f"{type(e).__name__}: {str(e)[:200]}",
+            exc=e,
+            provider=_cfg.AI_PROVIDER,
+            model=_cfg.AI_MODEL,
+            status=_status,
+        )
     except Exception:
         pass
 
@@ -75,6 +80,7 @@ def _friendly_error(e: Exception) -> str:
                 break
         if not retry_after and "retry after" in msg.lower():
             import re
+
             m = re.search(r"(\d+)\s*s", msg, re.IGNORECASE)
             retry_after = m.group(1) if m else None
         if retry_after:
@@ -94,6 +100,7 @@ def _friendly_error(e: Exception) -> str:
         return _("error.generic_status", status=status)
     return _("error.generic", exc_type=type(e).__name__)
 
+
 _AI_LANG_MAP = {
     "Portuguese (BR)": "Brazilian Portuguese",
     "Portuguese (PT)": "European Portuguese",
@@ -106,8 +113,8 @@ def _ai_lang_instruction(lang: str) -> str:
 
 # ── context builder ───────────────────────────────────────────────────────────
 
-def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = True,
-                   full_library: bool = False) -> str:
+
+def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = True, full_library: bool = False) -> str:
     send_name = get_pref("ai_send_name") != "0"
     name = (get_pref("display_name") if send_name else None) or "the athlete"
     freq = workout_frequency(weeks)
@@ -145,7 +152,7 @@ def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = T
 
     safe_name = sanitize_for_prompt(name, max_len=60)
 
-    now = datetime.now(timezone.utc).astimezone()
+    now = datetime.now(UTC).astimezone()
     current_datetime_line = f"- Current date/time: {now.strftime('%A, %Y-%m-%d %H:%M')} (local)"
 
     # Days since last workout — helps the coach assess recovery state
@@ -154,7 +161,7 @@ def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = T
     if last_wkt:
         try:
             last_dt = datetime.fromisoformat(last_wkt[0]["start_time"].replace("Z", "+00:00"))
-            days_since_last = (datetime.now(timezone.utc) - last_dt).days
+            days_since_last = (datetime.now(UTC) - last_dt).days
         except Exception:
             pass
 
@@ -186,6 +193,7 @@ def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = T
             f"  - Body fat: {body.get('fat_percent')}% (change: {body.get('fat_change_pct', 'N/A')}%)",
         ]
         from analytics.records import compute_bmi, get_height_cm
+
         _height_cm = get_height_cm()
         _bmi = compute_bmi(body.get("weight_kg"), _height_cm)
         if _bmi is not None:
@@ -194,17 +202,23 @@ def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = T
     if prs:
         lines += ["", "## Personal records set in last 30 days"]
         for pr in prs[:8]:
-            lines.append(f"  - {pr['exercise']}: {pr['weight_kg']}kg × {pr['reps']} reps (e1RM {pr['e1rm']} kg) on {pr['date']}")
+            lines.append(
+                f"  - {pr['exercise']}: {pr['weight_kg']}kg × {pr['reps']} reps (e1RM {pr['e1rm']} kg) on {pr['date']}"
+            )
 
     if top_gains:
         lines += ["", "## Top improvements this period"]
         for g in top_gains:
-            lines.append(f"  - {g['exercise']}: +{g['improvement_pct']}% (e1RM {g['start_e1rm']} → {g['current_e1rm']} kg)")
+            lines.append(
+                f"  - {g['exercise']}: +{g['improvement_pct']}% (e1RM {g['start_e1rm']} → {g['current_e1rm']} kg)"
+            )
 
     if plateaus:
         lines += ["", "## Exercises showing a plateau"]
         for p in plateaus:
-            lines.append(f"  - {p['exercise']}: no progress in last {p['sessions_stalled']} sessions (e1RM {p['current_e1rm']} kg)")
+            lines.append(
+                f"  - {p['exercise']}: no progress in last {p['sessions_stalled']} sessions (e1RM {p['current_e1rm']} kg)"
+            )
 
     lines += ["", goals_context_for_ai(weeks)]
 
@@ -219,6 +233,7 @@ def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = T
     # Fit / recovery data
     try:
         from fit.analytics import fit_context_for_ai
+
         fit_ctx = fit_context_for_ai(7)
         if "No Google Fit" not in fit_ctx:
             lines += ["", fit_ctx]
@@ -228,6 +243,7 @@ def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = T
     # Memories from past conversations
     try:
         from db.memories import memories_as_context
+
         mem_ctx = memories_as_context()
         if mem_ctx:
             lines += ["", mem_ctx]
@@ -241,7 +257,7 @@ def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = T
         f"""SELECT id, title, start_time, end_time
            FROM workouts
            ORDER BY start_time DESC
-           LIMIT {'5' if slim else '7'}"""
+           LIMIT {"5" if slim else "7"}"""
     )
     if recent_wkts:
         lines += ["", "## Recent workouts (last sessions, newest first)"]
@@ -282,8 +298,7 @@ def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = T
             if seen_ex:
                 for ex_title, row in seen_ex.items():
                     lines.append(
-                        f"    - {ex_title}: {row['weight_kg']} kg × {row['reps']} reps"
-                        f" (e1RM {row['e1rm']:.1f} kg)"
+                        f"    - {ex_title}: {row['weight_kg']} kg × {row['reps']} reps (e1RM {row['e1rm']:.1f} kg)"
                     )
             else:
                 # Bodyweight / cardio session — just list exercise names
@@ -335,7 +350,9 @@ def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = T
 
 # ── one-shot coaching report ──────────────────────────────────────────────────
 
-_COACH_SYSTEM = ANTI_INJECTION_PREAMBLE + """\
+_COACH_SYSTEM = (
+    ANTI_INJECTION_PREAMBLE
+    + """\
 You are an experienced strength and hypertrophy coach with deep knowledge of exercise science.
 
 Base every programming decision on peer-reviewed research and evidence-based principles:
@@ -401,23 +418,31 @@ Rules:
 - Every exercise MUST have a notes field with execution instructions and attention points.
 - Return ONLY the JSON object, no markdown fences or extra text.\
 """
+)
 
 
 def get_coaching(weeks: int = 8, generate_routine: bool = False) -> dict:
-    from debug_log import log
     import config as _cfg
     from db.goals import get_token_usage as _get_usage
+    from debug_log import log
+
     _tokens_before = _get_usage()
     # The athlete's existing routines stay in the context by default — they help the
     # analysis and any routine edits — and this is configurable. Generating a NEW
     # routine, on the other hand, is always an explicit request.
     include_routines_ctx = (get_pref("ai_include_routines") != "0") or generate_routine
-    log("AI", "Coaching report started", provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL,
-        weeks=weeks, generate_routine=generate_routine, routines_in_context=include_routines_ctx)
+    log(
+        "AI",
+        "Coaching report started",
+        provider=_cfg.AI_PROVIDER,
+        model=_cfg.AI_MODEL,
+        weeks=weeks,
+        generate_routine=generate_routine,
+        routines_in_context=include_routines_ctx,
+    )
     # The one-shot report cannot use tools, so when it must generate a routine it needs
     # the full catalogue inline; plain analysis keeps the lean (previously-used) list.
-    context = _build_context(weeks, include_routine=include_routines_ctx,
-                             full_library=generate_routine)
+    context = _build_context(weeks, include_routine=include_routines_ctx, full_library=generate_routine)
     lang = get_pref("ai_language") or "English"
     lang_line = f"\nAlways respond entirely in {_ai_lang_instruction(lang)}.\n" if lang != "English" else ""
     ask_line = (
@@ -427,16 +452,15 @@ def get_coaching(weeks: int = 8, generate_routine: bool = False) -> dict:
     )
     # The training data goes in the (cacheable) system block rather than the user
     # message, so repeated reports within the cache TTL reuse it as a cache hit.
-    routine_rule = "" if generate_routine else (
-        '\nIMPORTANT: The athlete did not request a routine. Omit the "routine" field '
-        "entirely (set it to null) and do not generate any exercises.\n"
+    routine_rule = (
+        ""
+        if generate_routine
+        else (
+            '\nIMPORTANT: The athlete did not request a routine. Omit the "routine" field '
+            "entirely (set it to null) and do not generate any exercises.\n"
+        )
     )
-    system = (
-        f"{_COACH_SYSTEM}{lang_line}{routine_rule}"
-        "\n\n<training_data>\n"
-        f"{context}\n"
-        "</training_data>"
-    )
+    system = f"{_COACH_SYSTEM}{lang_line}{routine_rule}\n\n<training_data>\n{context}\n</training_data>"
     prompt = ask_line
 
     console.print(_("coach.powered_by", provider=provider_label()))
@@ -447,10 +471,13 @@ def get_coaching(weeks: int = 8, generate_routine: bool = False) -> dict:
         result = complete_json(prompt, system=system, max_tokens=report_max_tokens)
 
     _tokens_after = _get_usage()
-    log("AI", "Coaching report complete",
+    log(
+        "AI",
+        "Coaching report complete",
         input=_tokens_after["input"] - _tokens_before["input"],
         output=_tokens_after["output"] - _tokens_before["output"],
-        cache_read=_tokens_after["cache_read"] - _tokens_before["cache_read"])
+        cache_read=_tokens_after["cache_read"] - _tokens_before["cache_read"],
+    )
     return result
 
 
@@ -467,14 +494,14 @@ def _stamp_routine(routine: dict) -> dict:
 
 def push_routine_to_hevy(routine_data: dict) -> dict:
     from hevy.client import HevyClient
+
     return HevyClient().create_routine(_stamp_routine(routine_data))
 
 
 # ── tools ─────────────────────────────────────────────────────────────────────
 
 _CHAT_SYSTEM_BASE = (
-    ANTI_INJECTION_PREAMBLE
-    + "You are a personal fitness coach assistant with deep knowledge of exercise science. "
+    ANTI_INJECTION_PREAMBLE + "You are a personal fitness coach assistant with deep knowledge of exercise science. "
     "You have the athlete's complete training history, their stated goals, and memories from previous conversations.\n"
     "Ground every recommendation in evidence-based principles: progressive overload, SRA cycle, "
     "MEV/MAV/MRV volume landmarks (Israetel et al.), RIR autoregulation, periodization models, "
@@ -629,6 +656,7 @@ _FIND_EXERCISES_TOOL: dict = {
 
 # ── tool handlers ─────────────────────────────────────────────────────────────
 
+
 def _generate_benefits(exercises: list) -> dict:
     """Generate a {exercise title: benefits} map on demand.
 
@@ -655,8 +683,7 @@ def _generate_benefits(exercises: list) -> dict:
     lang = get_pref("ai_language") or "English"
     lang_line = f"\nRespond entirely in {_ai_lang_instruction(lang)}." if lang != "English" else ""
     system = (
-        ANTI_INJECTION_PREAMBLE
-        + "You are a strength and hypertrophy coach. For each exercise, write 2-3 sentences "
+        ANTI_INJECTION_PREAMBLE + "You are a strength and hypertrophy coach. For each exercise, write 2-3 sentences "
         "on its main benefits for the athlete's goals. "
         "Return ONLY a JSON object mapping each exercise title to its benefits string." + lang_line
     )
@@ -676,7 +703,8 @@ def _show_exercise_benefits(exercises: list) -> None:
     """Display a benefits panel for each exercise, generating benefits on demand
     when they were not produced during routine generation (the common case now)."""
     missing = [
-        ex for ex in exercises
+        ex
+        for ex in exercises
         if isinstance(ex, dict)
         and not (ex.get("benefits") or "").strip()
         and (ex.get("title") or ex.get("exercise_template_id"))
@@ -705,29 +733,35 @@ def _show_exercise_benefits(exercises: list) -> None:
         benefit_lines.append(f"  {benefits}")
         benefit_lines.append("")
     if benefit_lines:
-        console.print(Panel(
-            "\n".join(benefit_lines).strip(),
-            title=_("chat.exercise_benefits_title"),
-            border_style="green",
-        ))
+        console.print(
+            Panel(
+                "\n".join(benefit_lines).strip(),
+                title=_("chat.exercise_benefits_title"),
+                border_style="green",
+            )
+        )
 
 
 def _reject_invalid_routine(errors: list[str]) -> dict:
     """Tool result for garbage routine args — tells the model exactly what to fix."""
     import debug_log
+
     debug_log.error("AI", "Invalid routine tool args rejected", errors="; ".join(errors)[:300])
     console.print(_("chat.routine_invalid"))
     return {
         "success": False,
-        "error": ("Invalid routine data: " + "; ".join(errors)[:500]
-                  + ". Regenerate the routine with valid fields (shorter notes if needed)."),
+        "error": (
+            "Invalid routine data: "
+            + "; ".join(errors)[:500]
+            + ". Regenerate the routine with valid fields (shorter notes if needed)."
+        ),
     }
 
 
 def _show_and_confirm_routine(routine: dict) -> dict:
     """Show the proposed routine, ask for confirmation, push if approved. Returns tool result."""
-    from hevy.client import HevyClient
     from ai.routine_schema import validate_routine_args
+    from hevy.client import HevyClient
 
     routine, errors = validate_routine_args(routine)
     if routine is None:
@@ -754,34 +788,37 @@ def _show_and_confirm_routine(routine: dict) -> dict:
     invalid_ids = [
         ex.get("exercise_template_id", "")
         for ex in routine.get("exercises", [])
-        if isinstance(ex, dict) and ex.get("exercise_template_id")
+        if isinstance(ex, dict)
+        and ex.get("exercise_template_id")
         and not query(
             "SELECT 1 FROM exercise_templates WHERE id = ?",
             (ex["exercise_template_id"],),
         )
     ]
     if invalid_ids:
-        console.print(_("chat.routine_invalid_ids", count=len(invalid_ids), ids=', '.join(invalid_ids[:3])))
+        console.print(_("chat.routine_invalid_ids", count=len(invalid_ids), ids=", ".join(invalid_ids[:3])))
 
     if not questionary.confirm(_("chat.push_routine_prompt"), default=True).ask():
         from debug_log import log
+
         log("AI", "Routine push declined by user")
         console.print(_("chat.routine_not_pushed"))
         return {"success": False, "message": "User declined"}
 
     try:
         with console.status(_("chat.saving_routine"), spinner="dots"):
-            from hevy.client import _routine_id
             from debug_log import log
+            from hevy.client import _routine_id
+
             resp = HevyClient().create_routine(_stamp_routine(routine))
             routine_id = _routine_id(resp)
-        log("AI", "Routine pushed to Hevy", routine_id=routine_id,
-            exercises=len(routine.get("exercises", [])))
+        log("AI", "Routine pushed to Hevy", routine_id=routine_id, exercises=len(routine.get("exercises", [])))
         console.print(_("chat.routine_pushed", routine_id=routine_id))
         _show_exercise_benefits(routine.get("exercises", []))
         return {"success": True, "routine_id": routine_id}
     except Exception as e:
         from debug_log import log
+
         log("ERROR", f"Routine push failed: {type(e).__name__}", error=str(e)[:200])
         console.print(f"[red]Failed: {e}[/red]\n")
         return {"success": False, "error": str(e)}
@@ -789,9 +826,9 @@ def _show_and_confirm_routine(routine: dict) -> dict:
 
 def _show_and_confirm_routine_update(fc_args: dict) -> dict:
     """Show the proposed routine update, ask for confirmation, push if approved."""
-    from hevy.client import HevyClient
-    from db.store import upsert_routine
     from ai.routine_schema import validate_routine_args
+    from db.store import upsert_routine
+    from hevy.client import HevyClient
 
     validated, errors = validate_routine_args(fc_args, require_routine_id=True)
     if validated is None:
@@ -826,14 +863,16 @@ def _show_and_confirm_routine_update(fc_args: dict) -> dict:
     invalid_ids = [
         ex.get("exercise_template_id", "")
         for ex in new_routine.get("exercises", [])
-        if isinstance(ex, dict) and ex.get("exercise_template_id")
+        if isinstance(ex, dict)
+        and ex.get("exercise_template_id")
         and not query("SELECT 1 FROM exercise_templates WHERE id = ?", (ex["exercise_template_id"],))
     ]
     if invalid_ids:
-        console.print(_("chat.routine_invalid_ids", count=len(invalid_ids), ids=', '.join(invalid_ids[:3])))
+        console.print(_("chat.routine_invalid_ids", count=len(invalid_ids), ids=", ".join(invalid_ids[:3])))
 
     if not questionary.confirm(_("chat.save_changes_prompt"), default=True).ask():
         from debug_log import log
+
         log("AI", "Routine update declined by user", routine_id=routine_id)
         console.print(_("chat.update_cancelled"))
         return {"success": False, "message": "User declined"}
@@ -841,6 +880,7 @@ def _show_and_confirm_routine_update(fc_args: dict) -> dict:
     try:
         with console.status(_("chat.updating_routine"), spinner="dots"):
             from debug_log import log
+
             HevyClient().update_routine(routine_id, _stamp_routine(new_routine))
             upsert_routine({"id": routine_id, **new_routine})
         log("AI", "Routine updated in Hevy", routine_id=routine_id)
@@ -849,6 +889,7 @@ def _show_and_confirm_routine_update(fc_args: dict) -> dict:
         return {"success": True, "routine_id": routine_id}
     except Exception as e:
         from debug_log import log
+
         log("ERROR", f"Routine update failed: {type(e).__name__}", routine_id=routine_id, error=str(e)[:200])
         console.print(f"[red]Failed: {e}[/red]\n")
         return {"success": False, "error": str(e)}
@@ -880,19 +921,27 @@ def _handle_find_exercises(fc_args: dict) -> dict:
         tuple(params),
     )
     matches = [
-        {"exercise_template_id": r["id"], "title": r["title"],
-         "type": r["type"], "muscle_group": r["primary_muscle_group"]}
+        {
+            "exercise_template_id": r["id"],
+            "title": r["title"],
+            "type": r["type"],
+            "muscle_group": r["primary_muscle_group"],
+        }
         for r in rows
     ]
     from debug_log import log
+
     log("AI", "find_exercises", query=q, muscle_group=mg, type=ty, matches=len(matches))
-    return {"count": len(matches), "exercises": matches,
-            "note": "Truncated to 50 results — refine the search if needed." if len(matches) == 50 else None}
+    return {
+        "count": len(matches),
+        "exercises": matches,
+        "note": "Truncated to 50 results — refine the search if needed." if len(matches) == 50 else None,
+    }
 
 
 def _handle_manage_goals(fc_args: dict) -> dict:
     """Handle a goal add/update/remove request. Returns tool result."""
-    from db.goals import save_goal, delete_goal, update_goal_fields, get_goals
+    from db.goals import delete_goal, get_goals, save_goal, update_goal_fields
 
     action = fc_args.get("action")
     summary = fc_args.get("changes_summary", "Modify a goal")
@@ -904,14 +953,17 @@ def _handle_manage_goals(fc_args: dict) -> dict:
             console.print(_("chat.goal_invalid_id", gid=gid))
             return {"success": False, "error": f"Goal ID {gid} does not exist"}
 
-    console.print(Panel(
-        f"[bold]{sanitize_for_prompt(summary, max_len=200)}[/bold]",
-        title=_("chat.goal_panel_title"),
-        border_style="yellow",
-    ))
+    console.print(
+        Panel(
+            f"[bold]{sanitize_for_prompt(summary, max_len=200)}[/bold]",
+            title=_("chat.goal_panel_title"),
+            border_style="yellow",
+        )
+    )
 
     if not questionary.confirm(_("chat.apply_change_prompt"), default=True).ask():
         from debug_log import log
+
         log("AI", "Goal change declined by user", action=action)
         console.print(_("chat.change_not_applied"))
         return {"success": False, "message": "User declined"}
@@ -972,12 +1024,14 @@ def _handle_manage_goals(fc_args: dict) -> dict:
                 raise ValueError(f"Unknown action: {action}")
 
         from debug_log import log
+
         log("AI", "Goal change applied", action=action)
         console.print(f"{label}\n")
         return result
 
     except Exception as e:
         from debug_log import log
+
         log("ERROR", f"Goal change failed: {type(e).__name__}", action=action, error=str(e)[:200])
         console.print(f"[red]Failed: {e}[/red]\n")
         return {"success": False, "error": str(e)}
@@ -985,9 +1039,27 @@ def _handle_manage_goals(fc_args: dict) -> dict:
 
 # ── weak-model tool-call nudge ────────────────────────────────────────────────
 
-_ROUTINE_SIGNALS = ["sets", "reps", "treino", "workout", "routine", "exercício", "exercise",
-                    "warmup", "normal", "dropset", "kg×", "kg x", "agachamento", "supino",
-                    "remada", "rosca", "tríceps", "desenvolvimento", "levantamento"]
+_ROUTINE_SIGNALS = [
+    "sets",
+    "reps",
+    "treino",
+    "workout",
+    "routine",
+    "exercício",
+    "exercise",
+    "warmup",
+    "normal",
+    "dropset",
+    "kg×",
+    "kg x",
+    "agachamento",
+    "supino",
+    "remada",
+    "rosca",
+    "tríceps",
+    "desenvolvimento",
+    "levantamento",
+]
 _GOAL_SIGNALS = ["goal", "meta", "objetivo", "target", "alvo", "added", "removed", "updated"]
 
 
@@ -1014,10 +1086,10 @@ def _missed_tool_call_nudge(text: str) -> str | None:
 
 # ── memory extraction ─────────────────────────────────────────────────────────
 
-_EXTRACT_CHUNK_CHARS = 6000    # per-chunk transcript budget
-_EXTRACT_MAX_CHUNKS = 6        # hard cap → ~36k chars of transcript per session
-_MEMORY_BUDGET_SINGLE = 8      # single-chunk sessions behave like the classic path
-_MEMORY_BUDGET_MULTI = 12      # long sessions span more topics, allow more slots
+_EXTRACT_CHUNK_CHARS = 6000  # per-chunk transcript budget
+_EXTRACT_MAX_CHUNKS = 6  # hard cap → ~36k chars of transcript per session
+_MEMORY_BUDGET_SINGLE = 8  # single-chunk sessions behave like the classic path
+_MEMORY_BUDGET_MULTI = 12  # long sessions span more topics, allow more slots
 
 _MEMORY_SYSTEM = (
     "You extract memorable fitness coaching facts from conversations. "
@@ -1107,9 +1179,9 @@ def _parse_memory_json(raw: str) -> list[str]:
 def _extract_from_chunk(chunk_text: str) -> list[str]:
     """One extraction call over one transcript chunk. Never raises."""
     from debug_log import log
+
     try:
-        full_text = "".join(stream_complete(_MEMORY_PROMPT + chunk_text,
-                                            system=_MEMORY_SYSTEM, max_tokens=1024))
+        full_text = "".join(stream_complete(_MEMORY_PROMPT + chunk_text, system=_MEMORY_SYSTEM, max_tokens=1024))
         return _parse_memory_json(full_text)
     except Exception as e:
         log("AI", "Memory chunk extraction failed", error=type(e).__name__)
@@ -1123,13 +1195,13 @@ def _consolidate_memories(items: list[str], budget: int) -> list[str]:
     must never cost the session its memories.
     """
     from debug_log import log
+
     try:
         prompt = _MEMORY_CONSOLIDATE_PROMPT.format(
             budget=budget,
             candidates="\n".join(f"- {item}" for item in items),
         )
-        full_text = "".join(stream_complete(prompt, system=_MEMORY_CONSOLIDATE_SYSTEM,
-                                            max_tokens=1024))
+        full_text = "".join(stream_complete(prompt, system=_MEMORY_CONSOLIDATE_SYSTEM, max_tokens=1024))
         merged = _parse_memory_json(full_text)
         if merged:
             return merged[:budget]
@@ -1154,9 +1226,8 @@ def _extract_and_save_memories(conversation_log: list[dict]) -> int:
     if len(chunks) > _EXTRACT_MAX_CHUNKS:
         # keep the opening chunk (goals/injuries are stated up front) plus the
         # most recent ones — the end is what the old head-slice used to lose
-        log("AI", "Transcript capped for extraction",
-            chunks=len(chunks), kept=_EXTRACT_MAX_CHUNKS)
-        chunks = chunks[:1] + chunks[-(_EXTRACT_MAX_CHUNKS - 1):]
+        log("AI", "Transcript capped for extraction", chunks=len(chunks), kept=_EXTRACT_MAX_CHUNKS)
+        chunks = chunks[:1] + chunks[-(_EXTRACT_MAX_CHUNKS - 1) :]
 
     items: list[str] = []
     for i, chunk in enumerate(chunks):
@@ -1180,7 +1251,8 @@ def _extract_and_save_memories(conversation_log: list[dict]) -> int:
 
     saved = 0
     try:
-        from db.memories import save_memory, MEMORY_SUMMARY_MAX_LEN
+        from db.memories import MEMORY_SUMMARY_MAX_LEN, save_memory
+
         for mem in deduped:
             # Sanitize before storing — prevents injected text from
             # persisting as a "memory" across future sessions.
@@ -1225,7 +1297,7 @@ def _tool_action_log_entry(name: str, args: dict, result: dict) -> str | None:
             return f"[action] Goal {result.get('action', 'changed')}: {summary}"
         return None
 
-    return None   # find_exercises and anything else: read-only, not a decision
+    return None  # find_exercises and anything else: read-only, not a decision
 
 
 # ── enhanced chat ─────────────────────────────────────────────────────────────
@@ -1238,8 +1310,8 @@ _CHAT_MAX_TOKENS = 8192
 
 def start_enhanced_chat(weeks: int = 8) -> None:
     """Interactive chat with tool calling, goal management, and memory persistence."""
-    from debug_log import log as _log
     import config as _cfg
+    from debug_log import log as _log
 
     slim = get_pref("ai_chat_slim") != "0"  # default True unless explicitly disabled
     # The athlete's saved routines are included by default (helps the coach create,
@@ -1247,19 +1319,20 @@ def start_enhanced_chat(weeks: int = 8) -> None:
     # still requires an explicit request — the push_routine tool only fires when asked.
     include_routines = get_pref("ai_include_routines") != "0"
     context = _build_context(weeks, slim=slim, include_routine=include_routines)
-    _log("AI", "Chat session started",
-         provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL, weeks=weeks,
-         slim=slim, lang=get_pref("ai_language") or "English")
+    _log(
+        "AI",
+        "Chat session started",
+        provider=_cfg.AI_PROVIDER,
+        model=_cfg.AI_MODEL,
+        weeks=weeks,
+        slim=slim,
+        lang=get_pref("ai_language") or "English",
+    )
     lang = get_pref("ai_language") or "English"
     lang_line = f"\nAlways respond entirely in {_ai_lang_instruction(lang)}.\n" if lang != "English" else ""
     # Use XML-like delimiters so the model can clearly distinguish
     # instructions (above) from untrusted data (below).
-    system = (
-        f"{_CHAT_SYSTEM_BASE}{lang_line}\n\n"
-        "<training_data>\n"
-        f"{context}\n"
-        "</training_data>"
-    )
+    system = f"{_CHAT_SYSTEM_BASE}{lang_line}\n\n<training_data>\n{context}\n</training_data>"
 
     session = create_chat_session(
         system=system,
@@ -1272,13 +1345,21 @@ def start_enhanced_chat(weeks: int = 8) -> None:
 
     try:
         from db.goals import token_budget_status
+
         budget_status = token_budget_status()
         if budget_status and budget_status["pct"] >= 100:
-            console.print(_("chat.budget_exceeded",
-                            used=f"{budget_status['used']:,}", budget=f"{budget_status['budget']:,}"))
+            console.print(
+                _("chat.budget_exceeded", used=f"{budget_status['used']:,}", budget=f"{budget_status['budget']:,}")
+            )
         elif budget_status and budget_status["pct"] >= 80:
-            console.print(_("chat.budget_warning", pct=int(budget_status["pct"]),
-                            used=f"{budget_status['used']:,}", budget=f"{budget_status['budget']:,}"))
+            console.print(
+                _(
+                    "chat.budget_warning",
+                    pct=int(budget_status["pct"]),
+                    used=f"{budget_status['used']:,}",
+                    budget=f"{budget_status['budget']:,}",
+                )
+            )
     except Exception:
         pass
 
@@ -1350,13 +1431,17 @@ def start_enhanced_chat(weeks: int = 8) -> None:
             if response.stop_reason == "max_tokens":
                 # Truncated tool arguments are unusable (JSON fragments leak into
                 # field values) — never dispatch them; ask the model to retry.
-                _log("AI", "Tool call truncated at max_tokens",
-                     tools=",".join(tc.name for tc in response.tool_calls))
+                _log("AI", "Tool call truncated at max_tokens", tools=",".join(tc.name for tc in response.tool_calls))
                 console.print(_("chat.response_truncated"))
                 tool_results = [
-                    (tc, {"success": False, "error":
-                          "Your response was cut off at the token limit, so the tool "
-                          "arguments were incomplete. Retry with more concise exercise notes."})
+                    (
+                        tc,
+                        {
+                            "success": False,
+                            "error": "Your response was cut off at the token limit, so the tool "
+                            "arguments were incomplete. Retry with more concise exercise notes.",
+                        },
+                    )
                     for tc in response.tool_calls
                 ]
             else:
@@ -1404,8 +1489,7 @@ def start_enhanced_chat(weeks: int = 8) -> None:
         pass
 
     # ── log session totals ────────────────────────────────────────────────────
-    _log("AI", "Chat session ended",
-         turns=len([m for m in conversation_log if m["role"] == "user"]))
+    _log("AI", "Chat session ended", turns=len([m for m in conversation_log if m["role"] == "user"]))
 
     # ── extract and save memories after session ends ──
     if len(conversation_log) >= 2:

@@ -7,6 +7,7 @@ Usage:
 
 Call i18n.init(lang) to change the active language at any point.
 """
+
 import json
 from pathlib import Path
 
@@ -21,7 +22,7 @@ def _resolve_lang(lang: str) -> str:
     normalized = lang.replace("-", "_")
     if normalized in _SUPPORTED:
         return normalized
-    prefix = lang.split("_")[0].split("-")[0]
+    prefix = lang.split("_", maxsplit=1)[0].split("-", maxsplit=1)[0]
     for supported in sorted(_SUPPORTED):
         if supported.startswith(prefix):
             return supported
@@ -42,8 +43,11 @@ def _load(lang: str) -> dict:
         if lang not in _warned_langs:
             _warned_langs.add(lang)
             import sys
-            print(f"Warning: locale file {path} is corrupt or unreadable ({e}) — "
-                  "falling back to raw key names.", file=sys.stderr)
+
+            print(
+                f"Warning: locale file {path} is corrupt or unreadable ({e}) — falling back to raw key names.",
+                file=sys.stderr,
+            )
         return {}
 
 

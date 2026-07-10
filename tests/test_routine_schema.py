@@ -1,6 +1,5 @@
 """Tests for ai/routine_schema.validate_routine_args — the gate that keeps
 malformed AI tool arguments (truncated JSON fragments) away from the UI/DB."""
-import pytest
 
 from ai.routine_schema import validate_routine_args
 

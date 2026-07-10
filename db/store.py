@@ -1,8 +1,7 @@
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 import config
 
@@ -289,12 +288,29 @@ def upsert_body_measurement(m: dict, db_path: Path | None = None) -> None:
                  abdomen=excluded.abdomen, waist=excluded.waist, hips=excluded.hips,
                  left_thigh=excluded.left_thigh, right_thigh=excluded.right_thigh,
                  left_calf=excluded.left_calf, right_calf=excluded.right_calf""",
-            {f: m.get(f) for f in [
-                "date", "weight_kg", "lean_mass_kg", "fat_percent",
-                "neck_cm", "shoulder_cm", "chest_cm",
-                "left_bicep_cm", "right_bicep_cm", "left_forearm_cm", "right_forearm_cm",
-                "abdomen", "waist", "hips", "left_thigh", "right_thigh", "left_calf", "right_calf",
-            ]},
+            {
+                f: m.get(f)
+                for f in [
+                    "date",
+                    "weight_kg",
+                    "lean_mass_kg",
+                    "fat_percent",
+                    "neck_cm",
+                    "shoulder_cm",
+                    "chest_cm",
+                    "left_bicep_cm",
+                    "right_bicep_cm",
+                    "left_forearm_cm",
+                    "right_forearm_cm",
+                    "abdomen",
+                    "waist",
+                    "hips",
+                    "left_thigh",
+                    "right_thigh",
+                    "left_calf",
+                    "right_calf",
+                ]
+            },
         )
 
 
@@ -314,11 +330,17 @@ def set_sync_state(key: str, value: str, db_path: Path | None = None) -> None:
 
 def record_sync_result(key: str, ok: bool, detail: str = "", db_path: Path | None = None) -> None:
     """Persist the outcome of a sync attempt as JSON in sync_state."""
-    set_sync_state(key, json.dumps({
-        "ok": ok,
-        "when": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "detail": (detail or "")[:200],
-    }), db_path=db_path)
+    set_sync_state(
+        key,
+        json.dumps(
+            {
+                "ok": ok,
+                "when": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "detail": (detail or "")[:200],
+            }
+        ),
+        db_path=db_path,
+    )
 
 
 def get_sync_result(key: str, db_path: Path | None = None) -> dict | None:
@@ -434,8 +456,12 @@ def get_routines_with_exercises(db_path: Path | None = None) -> list[dict]:
             continue
         if re_id not in exercises_map:
             ex: dict = {
-                "id": re_id, "idx": row["re_idx"], "title": row["ex_title"],
-                "notes": row["ex_notes"], "rest_seconds": row["rest_seconds"], "sets": [],
+                "id": re_id,
+                "idx": row["re_idx"],
+                "title": row["ex_title"],
+                "notes": row["ex_notes"],
+                "rest_seconds": row["rest_seconds"],
+                "sets": [],
             }
             exercises_map[re_id] = ex
             routines_map[rid]["exercises"].append(ex)

@@ -1,4 +1,5 @@
 """Exercise progression tracking and plateau detection."""
+
 import pandas as pd
 
 from db.store import query
@@ -80,11 +81,7 @@ def all_exercise_progressions(weeks: int = 12) -> dict[str, pd.DataFrame]:
     df["e1rm"] = df.apply(lambda r: _e1rm(r["weight_kg"], r["reps"]), axis=1)
 
     # Best e1RM per exercise per day (mirrors exercise_progression's per-day pick).
-    best = (
-        df.sort_values("e1rm", ascending=False)
-        .groupby(["template_id", "date"], as_index=False)
-        .first()
-    )
+    best = df.sort_values("e1rm", ascending=False).groupby(["template_id", "date"], as_index=False).first()
 
     result: dict[str, pd.DataFrame] = {}
     for _template_id, g in best.groupby("template_id"):
