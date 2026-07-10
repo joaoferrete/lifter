@@ -28,13 +28,22 @@ def _resolve_lang(lang: str) -> str:
     return _DEFAULT_LANG
 
 
+_warned_langs: set = set()
+
+
 def _load(lang: str) -> dict:
     path = _LOCALES_DIR / f"{lang}.json"
     if not path.exists():
         return {}
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as e:
+        # Runs before debug_log/i18n are usable, so warn on stderr in English.
+        if lang not in _warned_langs:
+            _warned_langs.add(lang)
+            import sys
+            print(f"Warning: locale file {path} is corrupt or unreadable ({e}) — "
+                  "falling back to raw key names.", file=sys.stderr)
         return {}
 
 

@@ -217,3 +217,83 @@ def test_version_flag_prints_and_exits_early(monkeypatch, capsys):
 def test_app_version_nonempty():
     import cli
     assert cli._app_version()
+
+
+# ── _run_action safety net ────────────────────────────────────────────────────
+
+def _capture_errors(monkeypatch):
+    import debug_log
+    calls = []
+    monkeypatch.setattr(debug_log, "error", lambda *a, **k: calls.append((a, k)))
+    return calls
+
+
+def test_run_action_returns_result(monkeypatch):
+    import cli
+    _capture_errors(monkeypatch)
+    assert cli._run_action("stats", lambda: cli.NO_PAUSE) is cli.NO_PAUSE
+    assert cli._run_action("stats", lambda: None) is None
+
+
+def test_run_action_catches_runtime_error(monkeypatch, capsys):
+    import cli
+    errors = _capture_errors(monkeypatch)
+
+    def boom():
+        raise RuntimeError("Hevy API key is invalid (error 401)")
+
+    result = cli._run_action("sync", boom)
+
+    assert result is None
+    assert len(errors) == 1
+    out = capsys.readouterr().out
+    assert "401" in out
+
+
+def test_run_action_catches_unexpected_error(monkeypatch, capsys):
+    import cli
+    errors = _capture_errors(monkeypatch)
+
+    def boom():
+        raise ValueError("bug")
+
+    result = cli._run_action("stats", boom)
+
+    assert result is None
+    assert len(errors) == 1
+    out = capsys.readouterr().out
+    assert "ValueError" in out
+
+
+def test_run_action_swallows_keyboard_interrupt(monkeypatch):
+    import cli
+    _capture_errors(monkeypatch)
+
+    def interrupted():
+        raise KeyboardInterrupt
+
+    assert cli._run_action("stats", interrupted) is None
+
+
+# ── _do_chat pause semantics (Bug A) ──────────────────────────────────────────
+
+def test_do_chat_guard_failure_pauses(monkeypatch):
+    import cli
+    monkeypatch.setattr(cli, "_require_ai", lambda: False)
+    # None ⇒ the main loop pauses, keeping the error visible
+    assert cli._do_chat() is None
+
+
+def test_do_chat_session_skips_pause(monkeypatch, tmp_db):
+    import cli
+    import ai.coach as coach_mod
+    monkeypatch.setattr(cli, "_require_ai", lambda: True)
+
+    class FakeAsk:
+        def ask(self):
+            return 8
+
+    monkeypatch.setattr(cli.questionary, "select", lambda *a, **k: FakeAsk())
+    monkeypatch.setattr(coach_mod, "start_enhanced_chat", lambda weeks: None)
+
+    assert cli._do_chat() is cli.NO_PAUSE

@@ -168,3 +168,38 @@ def test_update_profile_key(tmp_path):
     update_profile_key(p["slug"], "new-key-abc")
     cfg = json.loads((PROFILES_DIR / p["slug"] / "profile.json").read_text())
     assert cfg["hevy_api_key"] == "new-key-abc"
+
+
+# ── corrupt profile.json resilience ───────────────────────────────────────────
+
+def test_rename_profile_survives_corrupt_profile_json():
+    from profile_mgr import create_profile, rename_profile, PROFILES_DIR, get_profile_name
+    p = create_profile("Alice")
+    cfg_file = PROFILES_DIR / p["slug"] / "profile.json"
+    cfg_file.write_text('{"name": "Alice", TRUNCATED')
+
+    rename_profile(p["slug"], "Alicia")
+
+    data = json.loads(cfg_file.read_text())
+    assert data["name"] == "Alicia"
+    assert get_profile_name(p["slug"]) == "Alicia"
+
+
+def test_update_profile_key_survives_corrupt_profile_json():
+    from profile_mgr import create_profile, update_profile_key, PROFILES_DIR
+    p = create_profile("Bob", hevy_api_key="old")
+    cfg_file = PROFILES_DIR / p["slug"] / "profile.json"
+    cfg_file.write_text("not json at all")
+
+    update_profile_key(p["slug"], "new-key")
+
+    data = json.loads(cfg_file.read_text())
+    assert data["hevy_api_key"] == "new-key"
+    assert data["slug"] == p["slug"]
+
+
+def test_write_is_atomic_no_tmp_left_behind():
+    from profile_mgr import create_profile, PROFILES_FILE
+    create_profile("Carol")
+    assert PROFILES_FILE.exists()
+    assert not PROFILES_FILE.with_suffix(".json.tmp").exists()

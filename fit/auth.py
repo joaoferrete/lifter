@@ -30,8 +30,14 @@ def _token_file() -> Path:
 
 def _write_token(creds) -> None:
     tf = _token_file()
-    tf.write_text(creds.to_json())
-    tf.chmod(0o600)
+    try:
+        tf.write_text(creds.to_json())
+        tf.chmod(0o600)
+    except OSError as e:
+        raise RuntimeError(
+            f"Could not save the Google Fit token at {tf}: {e}\n"
+            "Check disk space and file permissions."
+        ) from e
 
 
 def get_credentials():

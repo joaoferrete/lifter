@@ -385,3 +385,73 @@ def test_keep_turns_zero_disables_windowing(monkeypatch):
     n = len(s._messages)
     s._maybe_window()
     assert len(s._messages) == n  # disabled — nothing trimmed
+
+
+# ── stop_reason normalization ─────────────────────────────────────────────────
+
+def test_chat_response_stop_reason_defaults_to_none():
+    r = provider_mod.ChatResponse(text="hi")
+    assert r.stop_reason is None
+
+
+def test_norm_stop_reason_anthropic_values():
+    norm = provider_mod._norm_stop_reason
+    assert norm("max_tokens") == "max_tokens"
+    assert norm("end_turn") == "end"
+    assert norm("tool_use") == "tool_use"
+    assert norm("stop_sequence") == "end"
+
+
+def test_norm_stop_reason_openai_values():
+    norm = provider_mod._norm_stop_reason
+    assert norm("length") == "max_tokens"
+    assert norm("stop") == "end"
+    assert norm("tool_calls") == "tool_use"
+
+
+def test_norm_stop_reason_gemini_enum_like():
+    norm = provider_mod._norm_stop_reason
+
+    class FinishReason:
+        def __str__(self):
+            return "FinishReason.MAX_TOKENS"
+
+    assert norm(FinishReason()) == "max_tokens"
+    assert norm("STOP") == "end"
+
+
+def test_norm_stop_reason_none_passthrough():
+    assert provider_mod._norm_stop_reason(None) is None
+
+
+def test_openai_compat_parse_maps_length_to_max_tokens(monkeypatch):
+    monkeypatch.setattr(provider_mod, "AI_PROVIDER", "groq")
+    session = provider_mod.OpenAICompatibleChatSession.__new__(
+        provider_mod.OpenAICompatibleChatSession
+    )
+    msg = MagicMock()
+    msg.content = "partial answer"
+    msg.tool_calls = None
+
+    response = session._parse(msg, "length")
+
+    assert response.stop_reason == "max_tokens"
+    assert response.text == "partial answer"
+
+
+def test_openai_compat_parse_unparseable_tool_args_become_empty_dict():
+    session = provider_mod.OpenAICompatibleChatSession.__new__(
+        provider_mod.OpenAICompatibleChatSession
+    )
+    tc = MagicMock()
+    tc.id = "call_1"
+    tc.function.name = "push_routine"
+    tc.function.arguments = '{"title": "cut off mid'
+    msg = MagicMock()
+    msg.content = None
+    msg.tool_calls = [tc]
+
+    response = session._parse(msg, "length")
+
+    assert response.tool_calls[0].args == {}
+    assert response.stop_reason == "max_tokens"

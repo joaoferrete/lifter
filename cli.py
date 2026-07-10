@@ -154,6 +154,12 @@ def _require_ai() -> bool:
     return True
 
 
+# Menu actions that manage their own screen pacing return this sentinel;
+# any other return value means the main loop should _pause() so output
+# (e.g. a guard-failure error) stays visible before the next console.clear().
+NO_PAUSE = object()
+
+
 def _pause():
     console.print()
     questionary.press_any_key_to_continue(_("nav.press_any_key")).ask()
@@ -917,7 +923,13 @@ def _do_sync():
     _dlog("SYNC", "Manual sync started", type=sync_type)
     console.print()
     is_full = sync_type == "full"
-    counts = full_sync(client) if is_full else incremental_sync(client)
+    try:
+        counts = full_sync(client) if is_full else incremental_sync(client)
+    except RuntimeError as e:
+        import debug_log
+        debug_log.error("SYNC", "Manual sync failed", exc=e, type=sync_type)
+        console.print(f"[red]{_esc(str(e))}[/red]")
+        return
     _render_sync_report(counts, is_full)
 
 
@@ -1411,6 +1423,14 @@ def _run_report(weeks: int, generate_routine: bool = False) -> bool:
     # ── suggested routine ─────────────────────────────────────────────────────
     routine = result.get("routine", {})
     if routine:
+        from ai.routine_schema import validate_routine_args
+        routine, _val_errors = validate_routine_args(routine)
+        if routine is None:
+            import debug_log
+            debug_log.error("AI", "Report routine rejected by validation",
+                            errors="; ".join(_val_errors)[:300])
+            console.print(_("chat.routine_invalid"))
+    if routine:
         console.rule(_("coach.suggested_routine_rule", title=routine.get("title")))
         console.print(f"  [dim]{routine.get('notes')}[/dim]\n")
         for ex in routine.get("exercises", []):
@@ -1449,7 +1469,7 @@ def _run_report(weeks: int, generate_routine: bool = False) -> bool:
 
 def _do_chat():
     if not _require_ai():
-        return
+        return  # None ⇒ main loop pauses, so the error stays visible
     weeks_str = questionary.select(
         _("chat.context_prompt"),
         choices=[
@@ -1462,11 +1482,12 @@ def _do_chat():
         style=STYLE,
     ).ask()
     if not weeks_str:
-        return
+        return NO_PAUSE
     weeks = int(weeks_str)
     _dlog("AI", "Chat requested", weeks=weeks)
     from ai.coach import start_enhanced_chat
     start_enhanced_chat(weeks=weeks)
+    return NO_PAUSE
 
 
 # ── settings & reset ─────────────────────────────────────────────────────────
@@ -2209,6 +2230,7 @@ def _do_preferences_settings() -> None:
         on_str = _("settings.on")
         off_str = _("settings.off")
 
+        import debug_log
         lines = [
             _("settings.prefs.units_label", units=units),
             _("settings.prefs.checkin_label", days=checkin_days),
@@ -2216,6 +2238,8 @@ def _do_preferences_settings() -> None:
             _("settings.prefs.stale_hours_label", hours=stale_hours),
             _("settings.prefs.stats_window_label", window=default_weeks),
             _("settings.prefs.ui_language_label", lang=ui_lang_name),
+            _("settings.prefs.export_dir_label", path=_esc(str(config.export_dir()))),
+            _("settings.prefs.logs_dir_label", path=_esc(str(debug_log.logs_dir()))),
         ]
         console.print(Panel("\n".join(lines), title=_("settings.prefs.title"), border_style="cyan", padding=(0, 2)))
 
@@ -2228,6 +2252,7 @@ def _do_preferences_settings() -> None:
                 questionary.Choice(_("settings.prefs.stale_hours_choice", hours=stale_hours),                value="stale_hours"),
                 questionary.Choice(_("settings.prefs.stats_window_choice", window=default_weeks),            value="stats_window"),
                 questionary.Choice(_("settings.prefs.ui_language_choice", lang=ui_lang_name),                value="ui_language"),
+                questionary.Choice(_("settings.prefs.dirs_choice"),                                         value="dirs"),
                 questionary.Separator("  ───"),
                 questionary.Choice(_("nav.back"), value="back"),
             ],
@@ -2312,6 +2337,57 @@ def _do_preferences_settings() -> None:
                 new_name = dict(_UI_LANGUAGES).get(new_code, new_code)
                 console.print(_("settings.prefs.ui_language_saved", lang=new_name))
 
+        elif action == "dirs":
+            _do_dirs_settings()
+
+
+def _do_dirs_settings() -> None:
+    """Configure the export and logs folders (global — stored in .env)."""
+    import debug_log
+    which = questionary.select(
+        _("settings.prefs.dirs_prompt"),
+        choices=[
+            questionary.Choice(_("settings.prefs.dirs_export_choice",
+                                 path=_esc(str(config.export_dir()))), value="EXPORT_DIR"),
+            questionary.Choice(_("settings.prefs.dirs_logs_choice",
+                                 path=_esc(str(debug_log.logs_dir()))), value="LOGS_DIR"),
+            questionary.Choice(_("nav.back"), value=None),
+        ],
+        style=STYLE,
+    ).ask()
+    if not which:
+        return
+
+    current = config.EXPORT_DIR if which == "EXPORT_DIR" else config.LOGS_DIR
+    raw = questionary.path(
+        _("settings.prefs.dirs_path_prompt"),
+        default=current,
+        style=STYLE,
+    ).ask()
+    if raw is None:
+        return
+
+    value = raw.strip()
+    if value:
+        target = Path(value).expanduser()
+        if not target.is_absolute():
+            console.print(_("settings.prefs.dirs_not_absolute"))
+            return
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            console.print(f"[red]{_esc(str(e))}[/red]")
+            return
+        value = str(target)
+
+    config.set_env_values({which: value})
+    config.reload_env()
+    _dlog("SETTING", f"{which} changed", value=value or "(default)")
+    if value:
+        console.print(_("settings.prefs.dirs_saved", name=which, path=_esc(value)))
+    else:
+        console.print(_("settings.prefs.dirs_reset", name=which))
+
 
 _EXPORT_KINDS = {
     "memories":     ["chat_memories"],
@@ -2356,8 +2432,11 @@ def _export_data(kind: str, dest_dir: Optional[Path] = None) -> tuple[Path, int]
             "month": get_token_usage_month(),
         }
 
-    out_dir = dest_dir or (config.DB_PATH.parent / "exports")
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = dest_dir or config.export_dir()
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise RuntimeError(f"Could not create the export folder at {out_dir}: {e}") from e
     path = out_dir / f"lifter-export-{kind}-{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.json"
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
     return path, total
@@ -2445,7 +2524,7 @@ def _import_data(path: Path, payload: Optional[dict] = None) -> dict:
 
 
 def _do_import_data() -> None:
-    exports_dir = config.DB_PATH.parent / "exports"
+    exports_dir = config.export_dir()
     candidates = sorted(
         exports_dir.glob("lifter-export-*.json"),
         key=lambda p: p.stat().st_mtime, reverse=True,
@@ -2579,7 +2658,7 @@ def _do_developer_settings() -> None:
         lines = [
             _("settings.dev.version_label", version=_app_version()),
             _("settings.dev.debug_label", state=on_str if debug_on else off_str),
-            _("settings.dev.logs_dir_label", path=_esc(str(debug_log.LOGS_DIR))),
+            _("settings.dev.logs_dir_label", path=_esc(str(debug_log.logs_dir()))),
             _("settings.dev.db_label", path=_esc(db_desc)),
             _("settings.dev.hevy_sync_label", status=_sync_status_str("last_sync_result")),
             _("settings.dev.fit_sync_label", status=_sync_status_str("fit_last_sync_result")),
@@ -2619,7 +2698,7 @@ def _do_developer_settings() -> None:
             slim = get_pref("ai_chat_slim") != "0"
             include_routines = get_pref("ai_include_routines") != "0"
             ctx = _build_context(8, slim=slim, include_routine=include_routines)
-            out_dir = config.DB_PATH.parent / "exports"
+            out_dir = config.export_dir()
             out_dir.mkdir(parents=True, exist_ok=True)
             path = out_dir / f"lifter-ai-context-{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.md"
             path.write_text(ctx, encoding="utf-8")
@@ -2647,13 +2726,13 @@ def _do_developer_settings() -> None:
             debug_log.enable(new_val)
             _dlog("SETTING", "debug_logging changed", value="on" if new_val else "off")
             if new_val:
-                console.print(_("settings.dev.debug_enabled", logs_dir=debug_log.LOGS_DIR))
+                console.print(_("settings.dev.debug_enabled", logs_dir=debug_log.logs_dir()))
             else:
                 console.print(_("settings.dev.debug_disabled"))
             questionary.press_any_key_to_continue(_("nav.press_any_key")).ask()
 
         elif action == "clear_logs":
-            log_files = sorted(debug_log.LOGS_DIR.glob("debug-*.log"))
+            log_files = sorted(debug_log.logs_dir().glob("debug-*.log"))
             if questionary.confirm(
                 _("settings.dev.clear_logs_confirm", count=len(log_files)), default=False, style=STYLE
             ).ask():
@@ -2926,8 +3005,13 @@ def _check_stale_sync() -> None:
             _dlog("SYNC", "User accepted Hevy sync prompt")
             client = _require_hevy()
             if client:
-                counts = incremental_sync(client)
-                console.print(_("sync.hevy_done", updated=counts["updated"], deleted=counts["deleted"]))
+                try:
+                    counts = incremental_sync(client)
+                    console.print(_("sync.hevy_done", updated=counts["updated"], deleted=counts["deleted"]))
+                except Exception as e:
+                    import debug_log
+                    debug_log.error("SYNC", "Hevy sync (stale prompt) failed", exc=e)
+                    console.print(_("sync.auto_sync_hevy_failed", error=e))
         else:
             _dlog("SYNC", "User declined Hevy sync prompt")
 
@@ -3029,7 +3113,37 @@ ACTIONS = {
     "settings": _do_settings,
 }
 
-_NO_PAUSE = {"chat"}
+
+def _run_action(choice: str, action) -> object:
+    """Run a menu action behind the app-wide safety net.
+
+    Error-handling convention: RuntimeError carries a user-ready message
+    (raised by the Hevy/Fit/AI layers); anything else is a bug — shown as a
+    generic panel and recorded with a full traceback via debug_log.error().
+    Returns the action's result (NO_PAUSE or None).
+    """
+    import debug_log
+    try:
+        return action()
+    except (KeyboardInterrupt, EOFError):
+        return None
+    except RuntimeError as e:
+        debug_log.error("APP", f"Action '{choice}' failed", exc=e)
+        console.print(f"[red]{_esc(str(e))}[/red]")
+        return None
+    except Exception as e:
+        debug_log.error("APP", f"Unhandled error in '{choice}'", exc=e)
+        hint = ""
+        if isinstance(e, sqlite3.OperationalError) and any(
+            word in str(e).lower() for word in ("locked", "malformed")
+        ):
+            hint = "\n" + _("error.db_hint")
+        console.print(Panel(
+            _("error.unexpected", exc_type=type(e).__name__,
+              log_dir=_esc(str(debug_log.logs_dir()))) + hint,
+            border_style="red", padding=(0, 2),
+        ))
+        return None
 
 
 def _build_menu() -> tuple:
@@ -3197,11 +3311,18 @@ def main():
           provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL)
     from db.goals import maybe_rollover_tokens
     maybe_rollover_tokens()   # reset monthly token counter if the period rolled over
-    _check_goals_and_checkin()
-    _check_body_checkin()
-    _check_stale_sync()
-    _check_goal_celebrations()
-    _check_auto_report()
+    try:
+        _check_goals_and_checkin()
+        _check_body_checkin()
+        _check_stale_sync()
+        _check_goal_celebrations()
+        _check_auto_report()
+    except (KeyboardInterrupt, EOFError):
+        pass
+    except Exception as e:
+        # A broken startup check must never keep the user from the menu.
+        debug_log.error("APP", "Startup check failed", exc=e)
+        console.print(_("error.startup_check_failed", exc_type=type(e).__name__))
 
     while True:
         console.clear()
@@ -3225,10 +3346,9 @@ def main():
         set_pref("last_menu_action", choice)
         console.clear()
         action = ACTIONS.get(choice)
-        if action:
-            action()
+        result = _run_action(choice, action) if action else None
 
-        if choice not in _NO_PAUSE:
+        if result is not NO_PAUSE:
             _pause()
 
 

@@ -1,5 +1,6 @@
 """Profile management for multi-user support."""
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -26,8 +27,45 @@ def _read() -> dict:
 
 
 def _write(data: dict) -> None:
-    PROFILES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    PROFILES_FILE.write_text(json.dumps(data, indent=2))
+    try:
+        PROFILES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic replace so a failed write can't leave a corrupt profiles.json.
+        tmp = PROFILES_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, indent=2))
+        os.replace(tmp, PROFILES_FILE)
+    except OSError as e:
+        raise RuntimeError(
+            f"Could not save profiles file at {PROFILES_FILE}: {e}"
+        ) from e
+
+
+def _read_profile_cfg(slug: str) -> dict:
+    """Read a profile's profile.json, rebuilding a minimal one if corrupt."""
+    cfg_file = PROFILES_DIR / slug / "profile.json"
+    if cfg_file.exists():
+        try:
+            cfg = json.loads(cfg_file.read_text())
+            if isinstance(cfg, dict):
+                return cfg
+        except (OSError, json.JSONDecodeError) as e:
+            try:
+                import debug_log
+                debug_log.error("PROFILE", "profile.json corrupt — rebuilding",
+                                slug=slug, error=str(e)[:200])
+            except Exception:
+                pass
+    return {"name": get_profile_name(slug), "slug": slug}
+
+
+def _write_profile_cfg(slug: str, cfg: dict) -> None:
+    cfg_file = PROFILES_DIR / slug / "profile.json"
+    try:
+        cfg_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cfg_file.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(cfg, indent=2))
+        os.replace(tmp, cfg_file)
+    except OSError as e:
+        raise RuntimeError(f"Could not save profile file at {cfg_file}: {e}") from e
 
 
 def list_profiles() -> list[dict]:
@@ -73,11 +111,10 @@ def create_profile(name: str, hevy_api_key: str = "") -> dict:
 
 
 def rename_profile(slug: str, new_name: str) -> None:
-    cfg_file = PROFILES_DIR / slug / "profile.json"
-    if cfg_file.exists():
-        cfg = json.loads(cfg_file.read_text())
+    if (PROFILES_DIR / slug / "profile.json").exists():
+        cfg = _read_profile_cfg(slug)
         cfg["name"] = new_name
-        cfg_file.write_text(json.dumps(cfg, indent=2))
+        _write_profile_cfg(slug, cfg)
 
     data = _read()
     old_name = next((p["name"] for p in data["profiles"] if p["slug"] == slug), slug)
@@ -141,10 +178,6 @@ def get_profile_name(slug: str) -> str:
 
 def update_profile_key(slug: str, hevy_api_key: str) -> None:
     """Update the Hevy API key stored in a profile's profile.json."""
-    cfg_file = PROFILES_DIR / slug / "profile.json"
-    if cfg_file.exists():
-        cfg = json.loads(cfg_file.read_text())
-    else:
-        cfg = {"name": get_profile_name(slug), "slug": slug}
+    cfg = _read_profile_cfg(slug)
     cfg["hevy_api_key"] = hevy_api_key
-    cfg_file.write_text(json.dumps(cfg, indent=2))
+    _write_profile_cfg(slug, cfg)

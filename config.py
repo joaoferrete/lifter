@@ -58,11 +58,18 @@ def _load_globals() -> None:
     global HEVY_API_KEY, DEFAULT_LANGUAGE, DB_PATH, AI_PROVIDER, AI_MODEL, \
         GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENROUTER_API_KEY, GROQ_API_KEY, \
         GITHUB_TOKEN, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, \
-        AWS_SESSION_TOKEN, AWS_BEARER_TOKEN_BEDROCK, _ENV_AI_PROVIDER, _ENV_AI_MODEL
+        AWS_SESSION_TOKEN, AWS_BEARER_TOKEN_BEDROCK, _ENV_AI_PROVIDER, _ENV_AI_MODEL, \
+        EXPORT_DIR, LOGS_DIR
 
     HEVY_API_KEY = os.environ.get("HEVY_API_KEY", "")
     DEFAULT_LANGUAGE = os.environ.get("DEFAULT_LANGUAGE", "en")
     DB_PATH = PROFILE_DB_PATH or _resolve_db_path(os.environ.get("DB_PATH"))
+
+    # Optional overrides for where exports and logs are written (global,
+    # shared across profiles). Empty = built-in defaults: exports next to the
+    # active profile's DB, logs under paths.LOGS_DIR.
+    EXPORT_DIR = os.environ.get("EXPORT_DIR", "").strip()
+    LOGS_DIR = os.environ.get("LOGS_DIR", "").strip()
 
     AI_PROVIDER = os.environ.get("AI_PROVIDER", "gemini").lower()
     # gemini | claude | openrouter | groq | github | bedrock
@@ -152,6 +159,15 @@ def set_env_values(updates: dict[str, str], env_file: Path | None = None) -> Non
     tmp.write_text("".join(lines), encoding="utf-8")
     tmp.chmod(0o600)
     os.replace(tmp, target)
+
+
+def export_dir() -> Path:
+    """Directory exports are written to (and imports discovered in): the
+    EXPORT_DIR .env override when set, else exports/ next to the active
+    profile's database."""
+    if EXPORT_DIR:
+        return Path(EXPORT_DIR).expanduser()
+    return DB_PATH.parent / "exports"
 
 
 def default_model_for(provider: str) -> str:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lifter-cli"
-version = "0.4.1"
+version = "0.4.2"
 description = "Interactive terminal client for Hevy workouts: analytics, goal tracking, Google Fit sync, and an AI coach"
 readme = "README.md"
 requires-python = ">=3.11"

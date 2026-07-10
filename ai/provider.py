@@ -158,6 +158,26 @@ class ToolCall:
 class ChatResponse:
     text: str | None
     tool_calls: list[ToolCall] = field(default_factory=list)
+    # Normalized across providers: "max_tokens" | "end" | "tool_use" | raw | None.
+    stop_reason: str | None = None
+
+
+def _norm_stop_reason(raw) -> str | None:
+    """Map provider-specific stop/finish reasons onto a common vocabulary.
+
+    Uses str() + substring matching so SDK enums (e.g. Gemini's
+    FinishReason.MAX_TOKENS) and plain strings both normalize safely.
+    """
+    if raw is None:
+        return None
+    s = str(raw).lower()
+    if "max_tokens" in s or s.endswith("length"):
+        return "max_tokens"
+    if "tool" in s:
+        return "tool_use"
+    if "stop" in s or "end" in s:
+        return "end"
+    return s
 
 
 # ── Gemini ────────────────────────────────────────────────────────────────────
@@ -269,7 +289,9 @@ class GeminiChatSession:
                 getattr(um, "prompt_token_count", 0) or 0,
                 getattr(um, "candidates_token_count", 0) or 0,
             )
-        return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls)
+        finish = getattr(response.candidates[0], "finish_reason", None) if response.candidates else None
+        return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls,
+                            stop_reason=_norm_stop_reason(finish))
 
 
 # ── Claude (Anthropic direct) ─────────────────────────────────────────────────
@@ -350,7 +372,8 @@ class ClaudeChatSession(_WindowedChat):
                 texts.append(block.text)
             elif block.type == "tool_use":
                 tool_calls.append(ToolCall(id=block.id, name=block.name, args=block.input))
-        return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls)
+        return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls,
+                            stop_reason=_norm_stop_reason(getattr(response, "stop_reason", None)))
 
 
 # ── OpenAI-compatible (OpenRouter / Groq / GitHub Models) ────────────────────
@@ -434,9 +457,9 @@ class OpenAICompatibleChatSession(_WindowedChat):
         if response.usage:
             _track_usage(response.usage.prompt_tokens, response.usage.completion_tokens)
         self._maybe_window()
-        return self._parse(msg)
+        return self._parse(msg, getattr(response.choices[0], "finish_reason", None))
 
-    def _parse(self, msg) -> ChatResponse:
+    def _parse(self, msg, finish_reason=None) -> ChatResponse:
         texts, tool_calls = [], []
         if msg.content:
             texts.append(msg.content)
@@ -446,7 +469,8 @@ class OpenAICompatibleChatSession(_WindowedChat):
             except Exception:
                 args = {}
             tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, args=args))
-        return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls)
+        return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls,
+                            stop_reason=_norm_stop_reason(finish_reason))
 
 
 # ── Amazon Bedrock (Claude via Anthropic SDK) ─────────────────────────────────
@@ -569,7 +593,8 @@ class BedrockChatSession(_WindowedChat):
                 texts.append(block.text)
             elif block.type == "tool_use":
                 tool_calls.append(ToolCall(id=block.id, name=block.name, args=block.input))
-        return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls)
+        return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls,
+                            stop_reason=_norm_stop_reason(getattr(response, "stop_reason", None)))
 
 
 # ── Amazon Bedrock (non-Claude models via boto3 Converse API) ─────────────────
@@ -697,7 +722,8 @@ class BedrockConverseChatSession(_WindowedChat):
             elif "toolUse" in item:
                 tu = item["toolUse"]
                 tool_calls.append(ToolCall(id=tu["toolUseId"], name=tu["name"], args=tu["input"]))
-        return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls)
+        return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls,
+                            stop_reason=_norm_stop_reason(response.get("stopReason")))
 
 
 # ── factory + one-shot streaming ──────────────────────────────────────────────

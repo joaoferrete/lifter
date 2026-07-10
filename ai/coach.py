@@ -46,13 +46,11 @@ def _readline_prompt(markup: str) -> str:
 def _friendly_error(e: Exception) -> str:
     """Return a user-friendly error message for AI provider exceptions."""
     try:
-        from debug_log import log
+        import debug_log
         import config as _cfg
-        import traceback as _tb
         _status = getattr(e, "status_code", None) or getattr(e, "code", None)
-        log("ERROR", f"{type(e).__name__}: {str(e)[:200]}",
-            provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL,
-            status=_status, traceback=_tb.format_exc().splitlines()[-1])
+        debug_log.error("AI", f"{type(e).__name__}: {str(e)[:200]}", exc=e,
+                        provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL, status=_status)
     except Exception:
         pass
 
@@ -714,9 +712,26 @@ def _show_exercise_benefits(exercises: list) -> None:
         ))
 
 
+def _reject_invalid_routine(errors: list[str]) -> dict:
+    """Tool result for garbage routine args — tells the model exactly what to fix."""
+    import debug_log
+    debug_log.error("AI", "Invalid routine tool args rejected", errors="; ".join(errors)[:300])
+    console.print(_("chat.routine_invalid"))
+    return {
+        "success": False,
+        "error": ("Invalid routine data: " + "; ".join(errors)[:500]
+                  + ". Regenerate the routine with valid fields (shorter notes if needed)."),
+    }
+
+
 def _show_and_confirm_routine(routine: dict) -> dict:
     """Show the proposed routine, ask for confirmation, push if approved. Returns tool result."""
     from hevy.client import HevyClient
+    from ai.routine_schema import validate_routine_args
+
+    routine, errors = validate_routine_args(routine)
+    if routine is None:
+        return _reject_invalid_routine(errors)
 
     lines = [f"[bold]{routine.get('title')}[/bold]"]
     if routine.get("notes"):
@@ -776,13 +791,14 @@ def _show_and_confirm_routine_update(fc_args: dict) -> dict:
     """Show the proposed routine update, ask for confirmation, push if approved."""
     from hevy.client import HevyClient
     from db.store import upsert_routine
+    from ai.routine_schema import validate_routine_args
 
-    routine_id = str(fc_args.get("routine_id", ""))
-    new_routine = {
-        "title": fc_args.get("title"),
-        "notes": fc_args.get("notes"),
-        "exercises": fc_args.get("exercises", []),
-    }
+    validated, errors = validate_routine_args(fc_args, require_routine_id=True)
+    if validated is None:
+        return _reject_invalid_routine(errors)
+
+    routine_id = validated["routine_id"]
+    new_routine = {k: v for k, v in validated.items() if k != "routine_id"}
 
     # Look up current routine name from DB for reference
     current_routines = get_routines_with_exercises()
@@ -1214,6 +1230,12 @@ def _tool_action_log_entry(name: str, args: dict, result: dict) -> str | None:
 
 # ── enhanced chat ─────────────────────────────────────────────────────────────
 
+# Routine tool calls carry per-exercise notes and easily exceed the 4096-token
+# default. A few OpenAI-compat models cap completions below 8192 and return a
+# 400 (surfaced by _friendly_error) — lower this if that bites.
+_CHAT_MAX_TOKENS = 8192
+
+
 def start_enhanced_chat(weeks: int = 8) -> None:
     """Interactive chat with tool calling, goal management, and memory persistence."""
     from debug_log import log as _log
@@ -1242,6 +1264,7 @@ def start_enhanced_chat(weeks: int = 8) -> None:
     session = create_chat_session(
         system=system,
         tools=[_PUSH_ROUTINE_TOOL, _UPDATE_ROUTINE_TOOL, _MANAGE_GOALS_TOOL, _FIND_EXERCISES_TOOL],
+        max_tokens=_CHAT_MAX_TOKENS,
     )
 
     console.rule(_("chat.rule_title"))
@@ -1300,6 +1323,8 @@ def start_enhanced_chat(weeks: int = 8) -> None:
             console.print(Markdown(response.text))
             console.print()
             conversation_log.append({"role": "assistant", "content": response.text})
+        if response.stop_reason == "max_tokens" and not response.tool_calls:
+            console.print(_("chat.response_truncated"))
 
         # ── weak-model nudge ─────────────────────────────────────────────────
         if response.text and not response.tool_calls:
@@ -1322,25 +1347,38 @@ def start_enhanced_chat(weeks: int = 8) -> None:
         while response.tool_calls and _tool_rounds < 8:
             _tool_rounds += 1
             tool_results: list[tuple] = []
-            for tc in response.tool_calls:
-                _log("AI", f"Tool call: {tc.name}")
-                if tc.name == "push_routine":
-                    result = _show_and_confirm_routine(dict(tc.args))
-                elif tc.name == "update_routine":
-                    result = _show_and_confirm_routine_update(dict(tc.args))
-                elif tc.name == "manage_goals":
-                    result = _handle_manage_goals(dict(tc.args))
-                elif tc.name == "find_exercises":
-                    result = _handle_find_exercises(dict(tc.args))
-                else:
-                    result = {"error": f"Unknown tool: {tc.name}"}
-                tool_results.append((tc, result))
+            if response.stop_reason == "max_tokens":
+                # Truncated tool arguments are unusable (JSON fragments leak into
+                # field values) — never dispatch them; ask the model to retry.
+                _log("AI", "Tool call truncated at max_tokens",
+                     tools=",".join(tc.name for tc in response.tool_calls))
+                console.print(_("chat.response_truncated"))
+                tool_results = [
+                    (tc, {"success": False, "error":
+                          "Your response was cut off at the token limit, so the tool "
+                          "arguments were incomplete. Retry with more concise exercise notes."})
+                    for tc in response.tool_calls
+                ]
+            else:
+                for tc in response.tool_calls:
+                    _log("AI", f"Tool call: {tc.name}")
+                    if tc.name == "push_routine":
+                        result = _show_and_confirm_routine(dict(tc.args))
+                    elif tc.name == "update_routine":
+                        result = _show_and_confirm_routine_update(dict(tc.args))
+                    elif tc.name == "manage_goals":
+                        result = _handle_manage_goals(dict(tc.args))
+                    elif tc.name == "find_exercises":
+                        result = _handle_find_exercises(dict(tc.args))
+                    else:
+                        result = {"error": f"Unknown tool: {tc.name}"}
+                    tool_results.append((tc, result))
 
-                # Durable decisions (routines, goals — including declines) feed
-                # the end-of-chat memory extraction.
-                entry = _tool_action_log_entry(tc.name, dict(tc.args), result)
-                if entry:
-                    conversation_log.append({"role": "assistant", "content": entry})
+                    # Durable decisions (routines, goals — including declines) feed
+                    # the end-of-chat memory extraction.
+                    entry = _tool_action_log_entry(tc.name, dict(tc.args), result)
+                    if entry:
+                        conversation_log.append({"role": "assistant", "content": entry})
 
             try:
                 with console.status(_("chat.thinking_short"), spinner="dots"):
@@ -1357,6 +1395,8 @@ def start_enhanced_chat(weeks: int = 8) -> None:
                 console.print(Markdown(response.text))
                 console.print()
                 conversation_log.append({"role": "assistant", "content": response.text})
+            if response.stop_reason == "max_tokens" and not response.tool_calls:
+                console.print(_("chat.response_truncated"))
 
     try:
         readline.write_history_file(_CHAT_HISTORY_FILE)
