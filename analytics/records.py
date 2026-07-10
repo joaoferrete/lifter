@@ -136,10 +136,12 @@ def body_measurement_trend(weeks: int = 12) -> dict:
 
 def compute_bmi(weight_kg: float | str | None, height_cm: float | str | None) -> float | None:
     """Body Mass Index (kg/m²) rounded to 1 decimal, or None if inputs missing."""
+    if weight_kg is None or height_cm is None:
+        return None
     try:
         w = float(weight_kg)
         h = float(height_cm)
-    except (TypeError, ValueError):
+    except ValueError:
         return None
     if w <= 0 or h <= 0:
         return None
@@ -148,9 +150,11 @@ def compute_bmi(weight_kg: float | str | None, height_cm: float | str | None) ->
 
 def bmi_category(bmi: float | str | None) -> str | None:
     """WHO BMI category key (underweight/normal/overweight/obese)."""
+    if bmi is None:
+        return None
     try:
         b = float(bmi)
-    except (TypeError, ValueError):
+    except ValueError:
         return None
     if b < 18.5:
         return "underweight"
