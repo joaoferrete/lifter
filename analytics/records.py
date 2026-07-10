@@ -3,8 +3,44 @@
 import pandas as pd
 
 from analytics.common import df_with_time
-from analytics.e1rm import NORMAL_SET_FILTER_SQL, e1rm
+from analytics.e1rm import NORMAL_SET_FILTER_SQL, e1rm, e1rm_sql
 from db.store import query
+
+
+def current_e1rm_kg(template_id: str) -> float:
+    """Best estimated 1RM (kg, 1 decimal) across all normal sets of an exercise; 0 when none."""
+    rows = query(
+        f"""SELECT MAX({e1rm_sql()}) as e1rm
+           FROM workout_sets ws WHERE ws.exercise_template_id = ?
+           AND {NORMAL_SET_FILTER_SQL}""",
+        (template_id,),
+    )
+    return round(rows[0]["e1rm"], 1) if rows and rows[0]["e1rm"] else 0
+
+
+def workout_best_sets(workout_id: str) -> list[dict]:
+    """All normal sets of a workout with their e1RM, ordered by exercise position then e1RM desc."""
+    return query(
+        f"""SELECT we.title, we.exercise_template_id,
+                  ws.weight_kg, ws.reps,
+                  {e1rm_sql()} as e1rm
+           FROM workout_exercises we
+           JOIN workout_sets ws ON ws.workout_exercise_id = we.id
+           WHERE we.workout_id = ? AND {NORMAL_SET_FILTER_SQL}
+           ORDER BY we.idx, e1rm DESC""",
+        (workout_id,),
+    )
+
+
+def max_e1rm_excluding_workout(template_id: str, workout_id: str) -> float | None:
+    """Best e1RM for an exercise across all workouts except `workout_id` (PR check)."""
+    rows = query(
+        f"""SELECT MAX({e1rm_sql()}) as top
+           FROM workout_sets ws WHERE ws.exercise_template_id = ?
+           AND {NORMAL_SET_FILTER_SQL} AND ws.workout_id != ?""",
+        (template_id, workout_id),
+    )
+    return rows[0]["top"] if rows else None
 
 
 def all_time_records() -> list[dict]:

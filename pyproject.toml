@@ -153,5 +153,6 @@ module = [
     "http_retry",
     "ai.*",
     "ui.*",
+    "commands.*",
 ]
 disallow_untyped_defs = true

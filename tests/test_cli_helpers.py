@@ -325,15 +325,18 @@ def test_run_action_swallows_keyboard_interrupt(monkeypatch):
 
 def test_do_chat_guard_failure_pauses(monkeypatch):
     import cli
+    import commands.coach as coach_cmd
 
+    # _do_chat looks _require_ai up on cli at call time
     monkeypatch.setattr(cli, "_require_ai", lambda: False)
     # None ⇒ the main loop pauses, keeping the error visible
-    assert cli._do_chat() is None
+    assert coach_cmd._do_chat() is None
 
 
 def test_do_chat_session_skips_pause(monkeypatch, tmp_db):
     import ai.coach as coach_mod
     import cli
+    import commands.coach as coach_cmd
 
     monkeypatch.setattr(cli, "_require_ai", lambda: True)
 
@@ -341,7 +344,7 @@ def test_do_chat_session_skips_pause(monkeypatch, tmp_db):
         def ask(self):
             return 8
 
-    monkeypatch.setattr(cli.questionary, "select", lambda *a, **k: FakeAsk())
+    monkeypatch.setattr(coach_cmd.questionary, "select", lambda *a, **k: FakeAsk())
     monkeypatch.setattr(coach_mod, "start_enhanced_chat", lambda weeks: None)
 
-    assert cli._do_chat() is cli.NO_PAUSE
+    assert coach_cmd._do_chat() is cli.NO_PAUSE

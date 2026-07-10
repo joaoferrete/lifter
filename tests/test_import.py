@@ -1,11 +1,11 @@
-"""Tests for the Developer Settings data import (restore) helper."""
+"""Tests for the db.export data import (restore) helper."""
 
 import json
 import sqlite3
 
 import pytest
 
-import cli
+from db.export import export_data, import_data, read_import_payload
 from db.goals import save_goal
 from db.memories import count_memories, get_all_memories, save_memory
 from db.store import query
@@ -18,7 +18,7 @@ def test_full_round_trip_restores_data_and_fks(tmp_db, tmp_path):
     save_goal(type="lift", description="Bench 100kg", target=100, unit="kg")
     save_memory("Prefers dumbbells")
 
-    export_path, _ = cli._export_data("full", dest_dir=tmp_path)
+    export_path, _ = export_data("full", dest_dir=tmp_path)
 
     # mutate: extra memory, workout gone
     save_memory("This one must disappear on restore")
@@ -27,7 +27,7 @@ def test_full_round_trip_restores_data_and_fks(tmp_db, tmp_path):
     delete_workout("wk-1", db_path=tmp_db)
     assert query("SELECT COUNT(*) AS n FROM workouts")[0]["n"] == 0
 
-    summary = cli._import_data(export_path)
+    summary = import_data(export_path)
 
     assert summary["kind"] == "full"
     assert summary["skipped_tables"] == []
@@ -46,13 +46,13 @@ def test_full_round_trip_restores_data_and_fks(tmp_db, tmp_path):
 
 def test_partial_import_replaces_only_its_table(tmp_db, tmp_path):
     save_memory("Memory from backup")
-    export_path, _ = cli._export_data("memories", dest_dir=tmp_path)
+    export_path, _ = export_data("memories", dest_dir=tmp_path)
 
     seed_exercise_template(tmp_db)
     seed_workout(tmp_db, "wk-keep", days_ago=1)
     save_memory("Newer memory, will be replaced")
 
-    summary = cli._import_data(export_path)
+    summary = import_data(export_path)
 
     assert summary["imported"] == {"chat_memories": 1}
     assert count_memories() == 1
@@ -64,17 +64,17 @@ def test_invalid_payloads_raise(tmp_db, tmp_path):
     wrong_app = tmp_path / "wrong.json"
     wrong_app.write_text(json.dumps({"app": "other", "tables": {}}))
     with pytest.raises(ValueError):
-        cli._read_import_payload(wrong_app)
+        read_import_payload(wrong_app)
 
     malformed = tmp_path / "broken.json"
     malformed.write_text("{not json")
     with pytest.raises(ValueError):
-        cli._read_import_payload(malformed)
+        read_import_payload(malformed)
 
     no_tables = tmp_path / "no_tables.json"
     no_tables.write_text(json.dumps({"app": "lifter", "kind": "full"}))
     with pytest.raises(ValueError):
-        cli._read_import_payload(no_tables)
+        read_import_payload(no_tables)
 
 
 def test_schema_drift_skips_unknown_tables_and_columns(tmp_db, tmp_path):
@@ -97,7 +97,7 @@ def test_schema_drift_skips_unknown_tables_and_columns(tmp_db, tmp_path):
     path = tmp_path / "drift.json"
     path.write_text(json.dumps(payload))
 
-    summary = cli._import_data(path)
+    summary = import_data(path)
 
     assert summary["skipped_tables"] == ["table_from_the_future"]
     assert summary["skipped_columns"] == {"chat_memories": ["future_column"]}
@@ -121,7 +121,7 @@ def test_failed_import_rolls_back_everything(tmp_db, tmp_path):
     path.write_text(json.dumps(payload))
 
     with pytest.raises(sqlite3.IntegrityError):
-        cli._import_data(path)
+        import_data(path)
 
     assert count_memories() == 1
     assert get_all_memories()[0]["summary"] == "Pre-existing memory"

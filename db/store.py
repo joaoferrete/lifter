@@ -384,6 +384,31 @@ def query(sql: str, params: tuple = (), db_path: Path | None = None) -> list[dic
         return [dict(r) for r in rows]
 
 
+def workout_exercise_titles(workout_id: str, db_path: Path | None = None) -> list[str]:
+    """Distinct exercise titles of a workout (used for set-less workout cards)."""
+    rows = query(
+        "SELECT DISTINCT we.title FROM workout_exercises we WHERE we.workout_id = ?", (workout_id,), db_path=db_path
+    )
+    return [r["title"] for r in rows]
+
+
+def header_counts(db_path: Path | None = None) -> dict:
+    """Aggregate counts + latest workout time for the main-menu header."""
+    total = (query("SELECT COUNT(*) as n FROM workouts", db_path=db_path) or [{"n": 0}])[0]["n"]
+    week_count = (
+        query("SELECT COUNT(*) as n FROM workouts WHERE start_time >= datetime('now', '-7 days')", db_path=db_path)
+        or [{"n": 0}]
+    )[0]["n"]
+    routines = (query("SELECT COUNT(*) as n FROM routines", db_path=db_path) or [{"n": 0}])[0]["n"]
+    lw_row = query("SELECT MAX(start_time) as t FROM workouts", db_path=db_path)
+    return {
+        "workouts": total,
+        "week_workouts": week_count,
+        "routines": routines,
+        "last_workout_at": lw_row[0]["t"] if lw_row else None,
+    }
+
+
 def upsert_routine(routine: dict, db_path: Path | None = None) -> None:
     with open_conn(db_path) as conn:
         conn.execute(

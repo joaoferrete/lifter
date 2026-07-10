@@ -41,44 +41,44 @@ def test_get_height_cm_roundtrip(tmp_db):
 
 
 def test_parse_height_metric(tmp_db):
-    import cli
     from db.goals import set_pref
+    from ui.format import parse_height_to_cm
 
     set_pref("units", "kg")
-    assert cli._parse_height_to_cm("178") == 178.0
-    assert cli._parse_height_to_cm("") is None
-    assert cli._parse_height_to_cm("abc") is None
+    assert parse_height_to_cm("178") == 178.0
+    assert parse_height_to_cm("") is None
+    assert parse_height_to_cm("abc") is None
 
 
 def test_parse_height_imperial(tmp_db):
-    import cli
     from db.goals import set_pref
+    from ui.format import parse_height_to_cm
 
     set_pref("units", "lbs")
-    assert cli._parse_height_to_cm("5'10") == 177.8
-    assert cli._parse_height_to_cm("5'10\"") == 177.8
-    assert cli._parse_height_to_cm("70") == 177.8  # plain inches
+    assert parse_height_to_cm("5'10") == 177.8
+    assert parse_height_to_cm("5'10\"") == 177.8
+    assert parse_height_to_cm("70") == 177.8  # plain inches
 
 
 def test_fmt_height_units(tmp_db):
-    import cli
     from db.goals import set_pref
+    from ui.format import fmt_height
 
     set_pref("units", "kg")
-    assert cli._fmt_height(178) == "178 cm"
+    assert fmt_height(178) == "178 cm"
     set_pref("units", "lbs")
-    assert cli._fmt_height(178) == "5'10\""
+    assert fmt_height(178) == "5'10\""
 
 
 # ── manual entry preserves same-day fields ────────────────────────────────────
 
 
 def test_save_body_today_merges_same_day(tmp_db):
-    import cli
+    from commands.body import _save_body_today
     from db.store import query
 
-    cli._save_body_today(weight_kg=80.0, fat_percent=18.0)
-    cli._save_body_today(fat_percent=17.0)  # weight must be preserved
+    _save_body_today(weight_kg=80.0, fat_percent=18.0)
+    _save_body_today(fat_percent=17.0)  # weight must be preserved
     row = query("SELECT weight_kg, fat_percent FROM body_measurements ORDER BY date DESC LIMIT 1")[0]
     assert row["weight_kg"] == 80.0
     assert row["fat_percent"] == 17.0
