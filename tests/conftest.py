@@ -108,13 +108,15 @@ def tmp_db(db_path, monkeypatch) -> Path:
     except Exception:
         pass
 
-    # ── ai.coach ─────────────────────────────────────────────────────────────
+    # ── ai.context / ai.tools ────────────────────────────────────────────────
     try:
-        import ai.coach as coach_mod
+        import ai.context as ai_context_mod
+        import ai.tools as ai_tools_mod
 
-        monkeypatch.setattr(coach_mod, "query", _query)
-        _orig_grwe = coach_mod.get_routines_with_exercises
-        monkeypatch.setattr(coach_mod, "get_routines_with_exercises", lambda: _orig_grwe(db_path=db_path))
+        _orig_grwe = ai_context_mod.get_routines_with_exercises
+        for ai_mod in (ai_context_mod, ai_tools_mod):
+            monkeypatch.setattr(ai_mod, "query", _query)
+            monkeypatch.setattr(ai_mod, "get_routines_with_exercises", lambda: _orig_grwe(db_path=db_path))
     except Exception:
         pass
 

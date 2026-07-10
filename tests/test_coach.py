@@ -320,7 +320,7 @@ def test_build_context_omitting_routine_keeps_analytics(tmp_db):
 
 
 def test_show_and_confirm_routine_update_calls_hevy_update(tmp_db):
-    from ai.coach import _show_and_confirm_routine_update
+    from ai.tools import _show_and_confirm_routine_update
 
     seed_exercise_template(tmp_db)
     seed_routine(tmp_db, "r-upd", title="Old Title")
@@ -347,7 +347,7 @@ def test_show_and_confirm_routine_update_calls_hevy_update(tmp_db):
 
 
 def test_show_and_confirm_routine_update_upserts_to_local_db(tmp_db):
-    from ai.coach import _show_and_confirm_routine_update
+    from ai.tools import _show_and_confirm_routine_update
     from db.store import get_routines_with_exercises
 
     seed_exercise_template(tmp_db)
@@ -373,7 +373,7 @@ def test_show_and_confirm_routine_update_upserts_to_local_db(tmp_db):
 
 
 def test_show_and_confirm_routine_update_declined_returns_failure(tmp_db):
-    from ai.coach import _show_and_confirm_routine_update
+    from ai.tools import _show_and_confirm_routine_update
 
     seed_exercise_template(tmp_db)
     seed_routine(tmp_db, "r-decline", title="Existing")
@@ -413,7 +413,7 @@ def _fake_stream(responses):
 
 
 def test_split_transcript_short_conversation_single_chunk():
-    from ai.coach import _split_transcript
+    from ai.memory import _split_transcript
 
     msgs = [_msg("user", "I hate leg press"), _msg("assistant", "Noted!")]
     chunks = _split_transcript(msgs)
@@ -421,7 +421,7 @@ def test_split_transcript_short_conversation_single_chunk():
 
 
 def test_split_transcript_splits_at_message_boundaries():
-    from ai.coach import _split_transcript
+    from ai.memory import _split_transcript
 
     msgs = [_msg("user", f"message number {i} " + "x" * 500) for i in range(30)]
     chunks = _split_transcript(msgs, chunk_chars=2000)
@@ -437,7 +437,7 @@ def test_split_transcript_splits_at_message_boundaries():
 
 
 def test_split_transcript_oversized_message_own_truncated_chunk():
-    from ai.coach import _split_transcript
+    from ai.memory import _split_transcript
 
     msgs = [_msg("user", "short one"), _msg("user", "y" * 9000), _msg("user", "another short")]
     chunks = _split_transcript(msgs, chunk_chars=6000)
@@ -450,12 +450,12 @@ def test_split_transcript_oversized_message_own_truncated_chunk():
 def test_extract_single_chunk_one_call_budget_eight(tmp_db):
     import json as _json
 
-    from ai.coach import _extract_and_save_memories
+    from ai.memory import _extract_and_save_memories
     from db.memories import count_memories
 
     ten_items = _json.dumps([f"Detailed insight number {i} about training habits" for i in range(10)])
     fake, calls = _fake_stream([ten_items])
-    with patch("ai.coach.stream_complete", side_effect=fake):
+    with patch("ai.memory.stream_complete", side_effect=fake):
         saved = _extract_and_save_memories(
             [
                 _msg("user", "I can only train mondays and thursdays because of my job " * 3),
@@ -468,13 +468,13 @@ def test_extract_single_chunk_one_call_budget_eight(tmp_db):
 
 
 def test_extract_multi_chunk_covers_transcript_end(tmp_db):
-    from ai.coach import _extract_and_save_memories
+    from ai.memory import _extract_and_save_memories
 
     sentinel = "SENTINEL-shoulder-impingement-on-overhead-press"
     log = [_msg("user", f"turn {i}: " + "blah " * 300) for i in range(6)]
     log.append(_msg("user", f"by the way, I have {sentinel} since last week"))
     fake, calls = _fake_stream(["[]"] * 10)
-    with patch("ai.coach.stream_complete", side_effect=fake):
+    with patch("ai.memory.stream_complete", side_effect=fake):
         _extract_and_save_memories(log)
     assert len(calls) > 1
     assert any(sentinel in c["prompt"] for c in calls)
@@ -483,13 +483,13 @@ def test_extract_multi_chunk_covers_transcript_end(tmp_db):
 def test_extract_chunk_failure_isolated(tmp_db):
     import json as _json
 
-    from ai.coach import _extract_and_save_memories
+    from ai.memory import _extract_and_save_memories
     from db.memories import count_memories
 
     log = [_msg("user", f"turn {i}: " + "blah " * 300) for i in range(4)]
     ok = _json.dumps(["User trains fasted in the mornings before work"])
     fake, _calls = _fake_stream([RuntimeError("api down"), ok, ok, ok])
-    with patch("ai.coach.stream_complete", side_effect=fake):
+    with patch("ai.memory.stream_complete", side_effect=fake):
         saved = _extract_and_save_memories(log)
     assert saved >= 1
     assert count_memories() >= 1
@@ -498,12 +498,12 @@ def test_extract_chunk_failure_isolated(tmp_db):
 def test_exact_dedupe_skips_consolidation(tmp_db):
     import json as _json
 
-    from ai.coach import _extract_and_save_memories
+    from ai.memory import _extract_and_save_memories
 
     same = _json.dumps(["User prefers dumbbell bench over barbell bench press"])
     log = [_msg("user", f"turn {i}: " + "blah " * 700) for i in range(3)]
     fake, calls = _fake_stream([same, same, same])
-    with patch("ai.coach.stream_complete", side_effect=fake):
+    with patch("ai.memory.stream_complete", side_effect=fake):
         saved = _extract_and_save_memories(log)
     # 3 chunks → 3 extraction calls, dedupe to 1, under budget → no 4th call
     assert len(calls) == 3
@@ -513,7 +513,7 @@ def test_exact_dedupe_skips_consolidation(tmp_db):
 def test_consolidation_called_when_over_budget(tmp_db):
     import json as _json
 
-    from ai.coach import _extract_and_save_memories
+    from ai.memory import _extract_and_save_memories
 
     log = [_msg("user", f"turn {i}: " + "blah " * 700) for i in range(3)]
     chunk_resp = [
@@ -521,7 +521,7 @@ def test_consolidation_called_when_over_budget(tmp_db):
     ]
     consolidated = _json.dumps([f"merged final insight number {i} for the athlete" for i in range(12)])
     fake, calls = _fake_stream([*chunk_resp, consolidated])
-    with patch("ai.coach.stream_complete", side_effect=fake):
+    with patch("ai.memory.stream_complete", side_effect=fake):
         saved = _extract_and_save_memories(log)
     assert len(calls) == 4  # 3 chunks + 1 consolidation
     assert "Candidates:" in calls[-1]["prompt"]
@@ -531,7 +531,7 @@ def test_consolidation_called_when_over_budget(tmp_db):
 def test_consolidation_failure_falls_back_to_first_n(tmp_db):
     import json as _json
 
-    from ai.coach import _extract_and_save_memories
+    from ai.memory import _extract_and_save_memories
     from db.memories import get_all_memories
 
     log = [_msg("user", f"turn {i}: " + "blah " * 700) for i in range(3)]
@@ -539,7 +539,7 @@ def test_consolidation_failure_falls_back_to_first_n(tmp_db):
         _json.dumps([f"chunk{c} distinct insight number {i} about training" for i in range(6)]) for c in range(3)
     ]
     fake, _calls = _fake_stream([*chunk_resp, RuntimeError("boom")])
-    with patch("ai.coach.stream_complete", side_effect=fake):
+    with patch("ai.memory.stream_complete", side_effect=fake):
         saved = _extract_and_save_memories(log)
     assert saved == 12  # first-12 of the 18 merged
     assert len(get_all_memories()) == 12
@@ -548,7 +548,7 @@ def test_consolidation_failure_falls_back_to_first_n(tmp_db):
 def test_saved_counter_counts_only_db_writes(tmp_db):
     import json as _json
 
-    from ai.coach import _extract_and_save_memories
+    from ai.memory import _extract_and_save_memories
     from db.memories import count_memories
 
     items = _json.dumps(
@@ -558,7 +558,7 @@ def test_saved_counter_counts_only_db_writes(tmp_db):
         ]
     )
     fake, _ = _fake_stream([items])
-    with patch("ai.coach.stream_complete", side_effect=fake):
+    with patch("ai.memory.stream_complete", side_effect=fake):
         saved = _extract_and_save_memories(
             [
                 _msg("user", "I sleep six hours a night, work is rough " * 5),
@@ -572,7 +572,7 @@ def test_saved_counter_counts_only_db_writes(tmp_db):
 
 
 def test_tool_action_push_routine_success():
-    from ai.coach import _tool_action_log_entry
+    from ai.memory import _tool_action_log_entry
 
     entry = _tool_action_log_entry(
         "push_routine",
@@ -583,7 +583,7 @@ def test_tool_action_push_routine_success():
 
 
 def test_tool_action_push_routine_declined():
-    from ai.coach import _tool_action_log_entry
+    from ai.memory import _tool_action_log_entry
 
     entry = _tool_action_log_entry(
         "push_routine",
@@ -594,7 +594,7 @@ def test_tool_action_push_routine_declined():
 
 
 def test_tool_action_update_routine():
-    from ai.coach import _tool_action_log_entry
+    from ai.memory import _tool_action_log_entry
 
     ok = _tool_action_log_entry("update_routine", {"title": "Legs", "exercises": [{}]}, {"success": True})
     declined = _tool_action_log_entry(
@@ -605,7 +605,7 @@ def test_tool_action_update_routine():
 
 
 def test_tool_action_manage_goals():
-    from ai.coach import _tool_action_log_entry
+    from ai.memory import _tool_action_log_entry
 
     ok = _tool_action_log_entry(
         "manage_goals",
@@ -622,7 +622,7 @@ def test_tool_action_manage_goals():
 
 
 def test_tool_action_skips_lookups_and_errors():
-    from ai.coach import _tool_action_log_entry
+    from ai.memory import _tool_action_log_entry
 
     assert _tool_action_log_entry("find_exercises", {"query": "bike"}, {"count": 3}) is None
     assert (
@@ -638,7 +638,7 @@ def test_tool_action_skips_lookups_and_errors():
 
 
 def test_show_and_confirm_routine_rejects_garbage_args(tmp_db):
-    from ai.coach import _show_and_confirm_routine
+    from ai.tools import _show_and_confirm_routine
 
     def _fail_if_called(*a, **k):
         raise AssertionError("confirm must not be reached for invalid args")
@@ -662,14 +662,14 @@ def test_show_and_confirm_routine_rejects_garbage_args(tmp_db):
 
 def test_show_and_confirm_routine_rejects_empty_args(tmp_db):
     # OpenAI-compat turns unparseable tool arguments into {}
-    from ai.coach import _show_and_confirm_routine
+    from ai.tools import _show_and_confirm_routine
 
     result = _show_and_confirm_routine({})
     assert result["success"] is False
 
 
 def test_show_and_confirm_routine_update_rejects_and_preserves_db(tmp_db):
-    from ai.coach import _show_and_confirm_routine_update
+    from ai.tools import _show_and_confirm_routine_update
     from db.store import get_routines_with_exercises
 
     seed_exercise_template(tmp_db)
@@ -692,7 +692,7 @@ def test_show_and_confirm_routine_update_rejects_and_preserves_db(tmp_db):
 
 
 def test_show_and_confirm_routine_normalizes_before_push(tmp_db):
-    from ai.coach import _show_and_confirm_routine
+    from ai.tools import _show_and_confirm_routine
 
     seed_exercise_template(tmp_db)
     mock_client = MagicMock()
@@ -724,7 +724,7 @@ def test_show_and_confirm_routine_normalizes_before_push(tmp_db):
 
 
 def test_chat_truncated_tool_call_not_dispatched(tmp_db, monkeypatch):
-    import ai.coach as coach_mod
+    import ai.chat as chat_mod
     from ai.provider import ChatResponse, ToolCall
 
     submitted = []
@@ -755,17 +755,17 @@ def test_chat_truncated_tool_call_not_dispatched(tmp_db, monkeypatch):
         except StopIteration:
             raise EOFError from None
 
-    monkeypatch.setattr(coach_mod, "create_chat_session", lambda **k: FakeSession())
+    monkeypatch.setattr(chat_mod, "create_chat_session", lambda **k: FakeSession())
     monkeypatch.setattr("builtins.input", fake_input)
-    monkeypatch.setattr(coach_mod, "_extract_and_save_memories", lambda log: 0)
-    monkeypatch.setattr(coach_mod, "_missed_tool_call_nudge", lambda text: None)
+    monkeypatch.setattr(chat_mod, "_extract_and_save_memories", lambda log: 0)
+    monkeypatch.setattr(chat_mod, "_missed_tool_call_nudge", lambda text: None)
 
     def _fail_if_called(*a, **k):
         raise AssertionError("truncated tool call must not reach the handler")
 
-    monkeypatch.setattr(coach_mod, "_show_and_confirm_routine", _fail_if_called)
+    monkeypatch.setattr(chat_mod, "_show_and_confirm_routine", _fail_if_called)
 
-    coach_mod.start_enhanced_chat(weeks=4)
+    chat_mod.start_enhanced_chat(weeks=4)
 
     assert len(submitted) == 1
     tc, result = submitted[0]

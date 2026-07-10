@@ -151,5 +151,6 @@ module = [
     "hevy.*",
     "fit.*",
     "http_retry",
+    "ai.*",
 ]
 disallow_untyped_defs = true
