@@ -2,6 +2,7 @@
 
 import pandas as pd
 
+from analytics.common import weeks_denominator
 from db.store import query
 
 
@@ -61,7 +62,7 @@ def workout_frequency(weeks: int | str = 8) -> dict:
     return {
         "total_workouts": total,
         "weeks_covered": weeks,
-        "avg_per_week": round(total / weeks, 1),
+        "avg_per_week": round(total / weeks_denominator(weeks), 1),
         "avg_duration_minutes": round(avg_duration, 0),
         "longest_streak_days": max_streak,
         "rest_day_avg": round(rest_avg, 1),
@@ -105,9 +106,5 @@ def muscle_group_frequency(weeks: int = 8) -> dict[str, float]:
         return {}
 
     df = pd.DataFrame(rows)
-    df["start_time"] = pd.to_datetime(df["start_time"], utc=True)
-    df["week"] = df["start_time"].dt.tz_convert(None).dt.to_period("W")
-
-    total_weeks = df["week"].nunique() or 1
-    counts = df.groupby("muscle").size() / total_weeks
+    counts = df.groupby("muscle").size() / weeks_denominator(weeks)
     return dict(counts.round(2).sort_values(ascending=False))

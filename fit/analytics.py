@@ -66,8 +66,8 @@ def recovery_score(days: int = 3) -> dict | None:
     sleep_hours = sleep.get("avg_hours", 0)
     sleep_pts = min(sleep_hours / 8 * 50, 50)
 
-    # HR component (0-50): lower resting HR = better recovery
-    # baseline assumed at 65 bpm; every bpm below = +1pt (capped)
+    # HR component (0-50): lower resting HR = better recovery.
+    # Full 50 pts at ≤50 bpm, minus 1 pt per bpm above that (floored at 0).
     rhr = activity.get("resting_hr")
     hr_pts = max(0, min(50, 50 - (rhr - 50))) if rhr else 25  # neutral if no data
 

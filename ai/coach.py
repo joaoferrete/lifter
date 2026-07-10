@@ -15,6 +15,7 @@ import paths
 from ai.context import goals_context_for_ai, memories_as_context
 from ai.provider import complete_json, create_chat_session, provider_label, stream_complete
 from ai.sanitize import ANTI_INJECTION_PREAMBLE, sanitize_for_prompt
+from analytics.e1rm import NORMAL_SET_FILTER_SQL, e1rm_sql
 from analytics.frequency import muscle_group_frequency, workout_frequency
 from analytics.progression import detect_plateaus, top_progressions
 from analytics.records import body_measurement_trend, recent_prs
@@ -277,16 +278,14 @@ def _build_context(weeks: int = 8, slim: bool = False, include_routine: bool = T
 
             # Best normal set per exercise in this workout
             ex_rows = query(
-                """SELECT we.title,
+                f"""SELECT we.title,
                           ws.weight_kg,
                           ws.reps,
-                          ws.weight_kg * (1 + ws.reps / 30.0) AS e1rm
+                          {e1rm_sql()} AS e1rm
                    FROM workout_exercises we
                    JOIN workout_sets ws ON ws.workout_exercise_id = we.id
                    WHERE we.workout_id = ?
-                     AND ws.type = 'normal'
-                     AND ws.weight_kg IS NOT NULL
-                     AND ws.reps IS NOT NULL AND ws.reps > 0
+                     AND {NORMAL_SET_FILTER_SQL}
                    ORDER BY we.idx, e1rm DESC""",
                 (w["id"],),
             )

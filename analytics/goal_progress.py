@@ -43,12 +43,13 @@ def _compute_goal_progress() -> list[dict]:
 
         try:
             if goal["type"] == "lift_pr":
+                from analytics.e1rm import NORMAL_SET_FILTER_SQL, e1rm_sql
+
                 rows = query(
-                    """SELECT MAX(ws.weight_kg * (1 + ws.reps / 30.0)) as e1rm
+                    f"""SELECT MAX({e1rm_sql()}) as e1rm
                        FROM workout_sets ws
                        WHERE ws.exercise_template_id = ?
-                         AND ws.type = 'normal'
-                         AND ws.weight_kg IS NOT NULL AND ws.reps IS NOT NULL""",
+                         AND {NORMAL_SET_FILTER_SQL}""",
                     (goal["exercise_template_id"],),
                 )
                 current = float(rows[0]["e1rm"] or 0) if rows else 0.0

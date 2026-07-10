@@ -2,19 +2,15 @@
 
 import pandas as pd
 
+from analytics.common import df_with_time
+from analytics.e1rm import NORMAL_SET_FILTER_SQL, e1rm
 from db.store import query
-
-
-def _e1rm(weight_kg: float, reps: int) -> float:
-    if reps == 1:
-        return weight_kg
-    return weight_kg * (1 + reps / 30)
 
 
 def all_time_records() -> list[dict]:
     """Best set (highest e1RM) ever recorded per exercise."""
     rows = query(
-        """
+        f"""
         SELECT
             et.title AS exercise,
             ws.exercise_template_id,
@@ -24,10 +20,7 @@ def all_time_records() -> list[dict]:
         FROM workout_sets ws
         JOIN workouts w ON w.id = ws.workout_id
         JOIN exercise_templates et ON et.id = ws.exercise_template_id
-        WHERE ws.type = 'normal'
-          AND ws.weight_kg IS NOT NULL
-          AND ws.reps IS NOT NULL
-          AND ws.reps > 0
+        WHERE {NORMAL_SET_FILTER_SQL}
         """
     )
 
@@ -35,7 +28,7 @@ def all_time_records() -> list[dict]:
         return []
 
     df = pd.DataFrame(rows)
-    df["e1rm"] = df.apply(lambda r: _e1rm(r["weight_kg"], r["reps"]), axis=1)
+    df["e1rm"] = df.apply(lambda r: e1rm(r["weight_kg"], r["reps"]), axis=1)
     best = df.sort_values("e1rm", ascending=False).groupby("exercise").first().reset_index()
 
     return [
@@ -53,7 +46,7 @@ def all_time_records() -> list[dict]:
 def recent_prs(days: int = 30) -> list[dict]:
     """PRs set in the last N days (e1RM higher than any prior session for that exercise)."""
     rows = query(
-        """
+        f"""
         SELECT
             et.title AS exercise,
             ws.exercise_template_id,
@@ -63,10 +56,7 @@ def recent_prs(days: int = 30) -> list[dict]:
         FROM workout_sets ws
         JOIN workouts w ON w.id = ws.workout_id
         JOIN exercise_templates et ON et.id = ws.exercise_template_id
-        WHERE ws.type = 'normal'
-          AND ws.weight_kg IS NOT NULL
-          AND ws.reps IS NOT NULL
-          AND ws.reps > 0
+        WHERE {NORMAL_SET_FILTER_SQL}
         ORDER BY w.start_time
         """
     )
@@ -74,9 +64,8 @@ def recent_prs(days: int = 30) -> list[dict]:
     if not rows:
         return []
 
-    df = pd.DataFrame(rows)
-    df["start_time"] = pd.to_datetime(df["start_time"], utc=True)
-    df["e1rm"] = df.apply(lambda r: _e1rm(r["weight_kg"], r["reps"]), axis=1)
+    df = df_with_time(rows)
+    df["e1rm"] = df.apply(lambda r: e1rm(r["weight_kg"], r["reps"]), axis=1)
 
     # Track running max per exercise and find where a new max was set
     df = df.sort_values("start_time")
@@ -145,7 +134,7 @@ def body_measurement_trend(weeks: int = 12) -> dict:
 # ── BMI ─────────────────────────────────────────────────────────────────────
 
 
-def compute_bmi(weight_kg, height_cm) -> float | None:
+def compute_bmi(weight_kg: float | str | None, height_cm: float | str | None) -> float | None:
     """Body Mass Index (kg/m²) rounded to 1 decimal, or None if inputs missing."""
     try:
         w = float(weight_kg)
@@ -157,7 +146,7 @@ def compute_bmi(weight_kg, height_cm) -> float | None:
     return round(w / (h / 100) ** 2, 1)
 
 
-def bmi_category(bmi) -> str | None:
+def bmi_category(bmi: float | str | None) -> str | None:
     """WHO BMI category key (underweight/normal/overweight/obese)."""
     try:
         b = float(bmi)

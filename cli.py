@@ -14,6 +14,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 import config
+from analytics.e1rm import NORMAL_SET_FILTER_SQL, e1rm_sql
 from analytics.frequency import muscle_group_frequency, workout_frequency
 from analytics.goal_progress import compute_goal_progress
 from analytics.progression import detect_plateaus, exercise_progression, top_progressions
@@ -434,9 +435,9 @@ def _wizard_lift_prs() -> None:
 
         template_id = id_by_name[name]
         rows = query(
-            """SELECT MAX(ws.weight_kg * (1 + ws.reps / 30.0)) as e1rm
+            f"""SELECT MAX({e1rm_sql()}) as e1rm
                FROM workout_sets ws WHERE ws.exercise_template_id = ?
-               AND ws.type='normal' AND ws.weight_kg IS NOT NULL""",
+               AND {NORMAL_SET_FILTER_SQL}""",
             (template_id,),
         )
         current_e1rm_kg = round(rows[0]["e1rm"], 1) if rows and rows[0]["e1rm"] else 0
@@ -749,13 +750,12 @@ def _render_workout_cards(workout_ids: list[str]) -> None:
 
         duration = _fmt_duration(w.get("start_time", ""), w.get("end_time", ""))
         exercises = query(
-            """SELECT we.title, we.exercise_template_id,
+            f"""SELECT we.title, we.exercise_template_id,
                       ws.weight_kg, ws.reps,
-                      ws.weight_kg * (1 + ws.reps / 30.0) as e1rm
+                      {e1rm_sql()} as e1rm
                FROM workout_exercises we
                JOIN workout_sets ws ON ws.workout_exercise_id = we.id
-               WHERE we.workout_id = ? AND ws.type = 'normal'
-                 AND ws.weight_kg IS NOT NULL AND ws.reps IS NOT NULL AND ws.reps > 0
+               WHERE we.workout_id = ? AND {NORMAL_SET_FILTER_SQL}
                ORDER BY we.idx, e1rm DESC""",
             (wid,),
         )
@@ -768,9 +768,9 @@ def _render_workout_cards(workout_ids: list[str]) -> None:
         lines = []
         for name, ex in best.items():
             prev = query(
-                """SELECT MAX(ws.weight_kg * (1 + ws.reps / 30.0)) as top
+                f"""SELECT MAX({e1rm_sql()}) as top
                    FROM workout_sets ws WHERE ws.exercise_template_id = ?
-                   AND ws.type='normal' AND ws.weight_kg IS NOT NULL AND ws.workout_id != ?""",
+                   AND {NORMAL_SET_FILTER_SQL} AND ws.workout_id != ?""",
                 (ex["exercise_template_id"], wid),
             )
             is_pr = ex["e1rm"] > (prev[0]["top"] or 0) if prev else False

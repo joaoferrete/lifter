@@ -78,6 +78,7 @@ def tmp_db(db_path, monkeypatch) -> Path:
         "analytics.progression",
         "analytics.frequency",
         "analytics.records",
+        "analytics.common",
     ):
         mod = importlib.import_module(mod_name)
         monkeypatch.setattr(mod, "query", _query)

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- e1RM for 1-rep sets is now the raw weight everywhere. The SQL paths (goal
+  progress, workout cards, wizard) applied the Epley multiplier to true
+  singles, inflating them ~3.3% versus the analytics views.
+- Sets/week, sessions/week and weekly tonnage averages now divide by the
+  requested window (clamped to training age) instead of weeks-with-data —
+  sparse training was sharply inflated in stats, goal progress and the data
+  fed to the AI coach.
+- SQLite connections are now closed after every operation (previously one
+  connection leaked per query).
 - Google auth token refresh now runs with a real 20 s timeout (assigning
   `Session.timeout` was a no-op).
 
