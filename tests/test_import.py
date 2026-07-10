@@ -1,6 +1,7 @@
 """Tests for the Developer Settings data import (restore) helper."""
 
 import json
+import sqlite3
 
 import pytest
 
@@ -119,7 +120,7 @@ def test_failed_import_rolls_back_everything(tmp_db, tmp_path):
     path = tmp_path / "bad.json"
     path.write_text(json.dumps(payload))
 
-    with pytest.raises(Exception):
+    with pytest.raises(sqlite3.IntegrityError):
         cli._import_data(path)
 
     assert count_memories() == 1

@@ -56,9 +56,9 @@ def _patch_sync(monkeypatch, sync_mod, calls=None):
     calls.setdefault("sync_results", [])
     monkeypatch.setattr(sync_mod, "init_db", lambda: None)
     monkeypatch.setattr(sync_mod, "upsert_workout", lambda w: calls["workouts"].append(w["id"]))
-    monkeypatch.setattr(sync_mod, "delete_workout", lambda wid: calls["deleted"].append(wid))
+    monkeypatch.setattr(sync_mod, "delete_workout", calls["deleted"].append)
     monkeypatch.setattr(sync_mod, "upsert_exercise_template", lambda t: calls["templates"].append(t["id"]))
-    monkeypatch.setattr(sync_mod, "upsert_body_measurement", lambda m: calls["body_measurements"].append(m))
+    monkeypatch.setattr(sync_mod, "upsert_body_measurement", calls["body_measurements"].append)
     monkeypatch.setattr(sync_mod, "upsert_routine", lambda r: calls["routines"].append(r["id"]))
     monkeypatch.setattr(sync_mod, "delete_stale_routines", lambda ids: None)
     monkeypatch.setattr(sync_mod, "set_sync_state", lambda k, v: calls["sync_states"].update({k: v}))
@@ -132,11 +132,10 @@ def test_full_sync_sets_last_sync_state(monkeypatch):
 def test_incremental_sync_falls_back_to_full_when_no_last_sync(monkeypatch):
     import hevy.sync as sync_mod
 
-    calls = _patch_sync(monkeypatch, sync_mod)
+    _patch_sync(monkeypatch, sync_mod)
     monkeypatch.setattr(sync_mod, "get_sync_state", lambda k: None)
 
     full_sync_calls = []
-    original_full = sync_mod.full_sync
 
     def mock_full(client):
         full_sync_calls.append(True)
@@ -239,7 +238,7 @@ def test_full_sync_calls_delete_stale_routines(monkeypatch):
     _patch_sync(monkeypatch, sync_mod)
 
     stale_calls = []
-    monkeypatch.setattr(sync_mod, "delete_stale_routines", lambda ids: stale_calls.append(ids))
+    monkeypatch.setattr(sync_mod, "delete_stale_routines", stale_calls.append)
 
     mock_client = MagicMock()
     mock_client.get_workout_count.return_value = 0
@@ -259,7 +258,7 @@ def test_full_sync_passes_empty_set_to_delete_stale_when_no_routines(monkeypatch
     _patch_sync(monkeypatch, sync_mod)
 
     stale_calls = []
-    monkeypatch.setattr(sync_mod, "delete_stale_routines", lambda ids: stale_calls.append(ids))
+    monkeypatch.setattr(sync_mod, "delete_stale_routines", stale_calls.append)
 
     mock_client = MagicMock()
     mock_client.get_workout_count.return_value = 0

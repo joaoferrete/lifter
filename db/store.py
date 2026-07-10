@@ -447,26 +447,26 @@ def get_routines_with_exercises(db_path: Path | None = None) -> list[dict]:
     routines_map: dict = {}
     exercises_map: dict = {}
     for row in rows:
-        row = dict(row)
-        rid = row["id"]
+        rec = dict(row)
+        rid = rec["id"]
         if rid not in routines_map:
-            routines_map[rid] = {"id": rid, "title": row["title"], "notes": row["notes"], "exercises": []}
-        re_id = row["re_id"]
+            routines_map[rid] = {"id": rid, "title": rec["title"], "notes": rec["notes"], "exercises": []}
+        re_id = rec["re_id"]
         if re_id is None:
             continue
         if re_id not in exercises_map:
             ex: dict = {
                 "id": re_id,
-                "idx": row["re_idx"],
-                "title": row["ex_title"],
-                "notes": row["ex_notes"],
-                "rest_seconds": row["rest_seconds"],
+                "idx": rec["re_idx"],
+                "title": rec["ex_title"],
+                "notes": rec["ex_notes"],
+                "rest_seconds": rec["rest_seconds"],
                 "sets": [],
             }
             exercises_map[re_id] = ex
             routines_map[rid]["exercises"].append(ex)
-        if row["set_type"] is not None:
+        if rec["set_type"] is not None:
             exercises_map[re_id]["sets"].append(
-                {"type": row["set_type"], "weight_kg": row["weight_kg"], "reps": row["reps"]}
+                {"type": rec["set_type"], "weight_kg": rec["weight_kg"], "reps": rec["reps"]}
             )
     return list(routines_map.values())

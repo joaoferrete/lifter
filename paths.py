@@ -12,6 +12,7 @@ Setting LIFTER_HOME forces all three into a single directory (useful for
 tests, portable installs, and development).
 """
 
+import contextlib
 import os
 import shutil
 from collections.abc import Mapping
@@ -96,10 +97,8 @@ def migrate_legacy_layout() -> list[str]:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(dst))
             if is_secret:
-                try:
+                with contextlib.suppress(OSError):
                     dst.chmod(0o600)
-                except OSError:
-                    pass
             moved.append(f"{src} -> {dst}")
         except OSError:
             continue

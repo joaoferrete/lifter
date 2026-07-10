@@ -69,10 +69,7 @@ def recovery_score(days: int = 3) -> dict | None:
     # HR component (0-50): lower resting HR = better recovery
     # baseline assumed at 65 bpm; every bpm below = +1pt (capped)
     rhr = activity.get("resting_hr")
-    if rhr:
-        hr_pts = max(0, min(50, 50 - (rhr - 50)))
-    else:
-        hr_pts = 25  # neutral if no data
+    hr_pts = max(0, min(50, 50 - (rhr - 50))) if rhr else 25  # neutral if no data
 
     score = int(sleep_pts + hr_pts)
     label = "Excellent" if score >= 80 else "Good" if score >= 65 else "Fair" if score >= 45 else "Poor"

@@ -367,7 +367,12 @@ class ClaudeChatSession(_WindowedChat):
         return self._call()
 
     def _call(self) -> ChatResponse:
-        kwargs: dict = dict(model=AI_MODEL, system=self._system, messages=self._messages, max_tokens=self._max_tokens)
+        kwargs: dict = {
+            "model": AI_MODEL,
+            "system": self._system,
+            "messages": self._messages,
+            "max_tokens": self._max_tokens,
+        }
         if self._tools:
             kwargs["tools"] = self._tools
         response = self._client.messages.create(**kwargs)
@@ -459,7 +464,7 @@ class OpenAICompatibleChatSession(_WindowedChat):
         return self._call()
 
     def _call(self) -> ChatResponse:
-        kwargs: dict = dict(model=AI_MODEL, messages=self._messages, max_tokens=self._max_tokens)
+        kwargs: dict = {"model": AI_MODEL, "messages": self._messages, "max_tokens": self._max_tokens}
         if self._tools:
             kwargs["tools"] = self._tools
         response = self._client.chat.completions.create(**kwargs)
@@ -602,7 +607,12 @@ class BedrockChatSession(_WindowedChat):
         return self._call()
 
     def _call(self) -> ChatResponse:
-        kwargs: dict = dict(model=AI_MODEL, system=self._system, messages=self._messages, max_tokens=self._max_tokens)
+        kwargs: dict = {
+            "model": AI_MODEL,
+            "system": self._system,
+            "messages": self._messages,
+            "max_tokens": self._max_tokens,
+        }
         if self._tools:
             kwargs["tools"] = self._tools
         response = self._client.messages.create(**kwargs)

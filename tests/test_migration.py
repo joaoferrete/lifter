@@ -74,7 +74,7 @@ def test_nothing_to_migrate(sandbox):
 
 
 def test_existing_destination_is_never_overwritten(sandbox):
-    legacy, home = sandbox
+    legacy, _home = sandbox
     (legacy / "profiles.json").write_text("OLD")
     paths.PROFILES_FILE.parent.mkdir(parents=True)
     paths.PROFILES_FILE.write_text("NEW")
@@ -87,7 +87,7 @@ def test_existing_destination_is_never_overwritten(sandbox):
 
 
 def test_secret_files_end_up_0600(sandbox):
-    legacy, home = sandbox
+    legacy, _home = sandbox
     (legacy / ".env").write_text("KEY=v\n")
     os.chmod(legacy / ".env", 0o644)
 

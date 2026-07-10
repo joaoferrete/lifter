@@ -1,5 +1,6 @@
 """AI coaching — analyzes workout data, generates suggestions, manages goals."""
 
+import contextlib
 import json
 import re
 import readline
@@ -1483,10 +1484,8 @@ def start_enhanced_chat(weeks: int = 8) -> None:
             if response.stop_reason == "max_tokens" and not response.tool_calls:
                 console.print(_("chat.response_truncated"))
 
-    try:
+    with contextlib.suppress(OSError):
         readline.write_history_file(_CHAT_HISTORY_FILE)
-    except OSError:
-        pass
 
     # ── log session totals ────────────────────────────────────────────────────
     _log("AI", "Chat session ended", turns=len([m for m in conversation_log if m["role"] == "user"]))

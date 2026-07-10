@@ -77,7 +77,7 @@ def test_json_fragment_in_title_rejected():
 def test_dict_title_rejected():
     args = _valid_args()
     args["title"] = {"nested": "junk"}
-    routine, errors = validate_routine_args(args)
+    routine, _errors = validate_routine_args(args)
     assert routine is None
 
 
@@ -91,14 +91,14 @@ def test_empty_args_rejected():
 def test_exercises_as_string_rejected():
     args = _valid_args()
     args["exercises"] = "not a list"
-    routine, errors = validate_routine_args(args)
+    routine, _errors = validate_routine_args(args)
     assert routine is None
 
 
 def test_empty_exercises_rejected_for_push():
     args = _valid_args()
     args["exercises"] = []
-    routine, errors = validate_routine_args(args)
+    routine, _errors = validate_routine_args(args)
     assert routine is None
 
 
@@ -121,7 +121,7 @@ def test_missing_routine_id_rejected_when_required():
 def test_non_numeric_weight_rejected():
     args = _valid_args()
     args["exercises"][0]["sets"][0]["weight_kg"] = "heavy-ish"
-    routine, errors = validate_routine_args(args)
+    routine, _errors = validate_routine_args(args)
     assert routine is None
 
 

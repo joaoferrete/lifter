@@ -81,6 +81,7 @@ def test_env_file_not_tracked_by_git():
         capture_output=True,
         text=True,
         cwd=PROJECT_ROOT,
+        check=False,
     )
     assert result.stdout.strip() == "", ".env must not be tracked by git"
 
@@ -94,6 +95,7 @@ def test_db_file_not_tracked_by_git():
         text=True,
         cwd=PROJECT_ROOT,
         shell=False,
+        check=False,
     )
     assert "hevy.db" not in result.stdout
 

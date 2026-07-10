@@ -488,7 +488,7 @@ def test_extract_chunk_failure_isolated(tmp_db):
 
     log = [_msg("user", f"turn {i}: " + "blah " * 300) for i in range(4)]
     ok = _json.dumps(["User trains fasted in the mornings before work"])
-    fake, calls = _fake_stream([RuntimeError("api down"), ok, ok, ok])
+    fake, _calls = _fake_stream([RuntimeError("api down"), ok, ok, ok])
     with patch("ai.coach.stream_complete", side_effect=fake):
         saved = _extract_and_save_memories(log)
     assert saved >= 1
@@ -520,7 +520,7 @@ def test_consolidation_called_when_over_budget(tmp_db):
         _json.dumps([f"chunk{c} distinct insight number {i} about training" for i in range(6)]) for c in range(3)
     ]
     consolidated = _json.dumps([f"merged final insight number {i} for the athlete" for i in range(12)])
-    fake, calls = _fake_stream(chunk_resp + [consolidated])
+    fake, calls = _fake_stream([*chunk_resp, consolidated])
     with patch("ai.coach.stream_complete", side_effect=fake):
         saved = _extract_and_save_memories(log)
     assert len(calls) == 4  # 3 chunks + 1 consolidation
@@ -538,7 +538,7 @@ def test_consolidation_failure_falls_back_to_first_n(tmp_db):
     chunk_resp = [
         _json.dumps([f"chunk{c} distinct insight number {i} about training" for i in range(6)]) for c in range(3)
     ]
-    fake, calls = _fake_stream(chunk_resp + [RuntimeError("boom")])
+    fake, _calls = _fake_stream([*chunk_resp, RuntimeError("boom")])
     with patch("ai.coach.stream_complete", side_effect=fake):
         saved = _extract_and_save_memories(log)
     assert saved == 12  # first-12 of the 18 merged
@@ -753,7 +753,7 @@ def test_chat_truncated_tool_call_not_dispatched(tmp_db, monkeypatch):
         try:
             return next(inputs)
         except StopIteration:
-            raise EOFError
+            raise EOFError from None
 
     monkeypatch.setattr(coach_mod, "create_chat_session", lambda **k: FakeSession())
     monkeypatch.setattr("builtins.input", fake_input)

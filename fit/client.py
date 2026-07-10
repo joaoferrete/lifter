@@ -25,12 +25,12 @@ class FitClient:
         try:
             if not self._creds.valid:
                 self._creds.refresh(self._refresh)
-        except RefreshError:
+        except RefreshError as e:
             self._disconnect()
             raise RuntimeError(
                 "Google Fit token expired and could not be refreshed.\n"
                 "Go to Menu → Google Fit → Connect to re-authenticate."
-            )
+            ) from e
         return {"Authorization": f"Bearer {self._creds.token}"}
 
     def _check(self, resp: httpx.Response, operation: str) -> None:

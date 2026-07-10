@@ -1,5 +1,6 @@
 """hevy — interactive personal Hevy workout client."""
 
+import contextlib
 import json
 import sqlite3
 from datetime import UTC, datetime
@@ -226,7 +227,7 @@ def _fmt_height(cm_val) -> str:
     if _get_units() == "lbs":  # imperial → feet'inches"
         total_in = cm / 2.54
         feet = int(total_in // 12)
-        inches = int(round(total_in - feet * 12))
+        inches = round(total_in - feet * 12)
         if inches == 12:  # rounding spill-over
             feet += 1
             inches = 0
@@ -703,7 +704,7 @@ def _render_goals_progress() -> None:
         start = g.get("start")
         unit = g.get("unit", "")
 
-        def _fmt_val(v) -> str:
+        def _fmt_val(v, unit=unit) -> str:
             return _fmt_weight(v) if unit == "kg" else f"{v}{unit}" if unit else f"{v}"
 
         if current is not None and target is not None:
@@ -929,7 +930,7 @@ def _show_header() -> None:
         pass
 
     # Build lines
-    line1_parts = [lw_str] + streak_parts + [routines_str]
+    line1_parts = [lw_str, *streak_parts, routines_str]
     line1 = "  ·  ".join(line1_parts)
 
     line2 = (
@@ -1376,11 +1377,10 @@ def _do_goals():
             _render_goals_progress()
     elif action == "update":
         run_goals_wizard(is_update=True)
-    elif action == "reset":
-        if questionary.confirm(_("goals.clear_confirm"), default=False, style=STYLE).ask():
-            clear_goals()
-            _dlog("GOAL", "Goals cleared and wizard restarted")
-            run_goals_wizard()
+    elif action == "reset" and questionary.confirm(_("goals.clear_confirm"), default=False, style=STYLE).ask():
+        clear_goals()
+        _dlog("GOAL", "Goals cleared and wizard restarted")
+        run_goals_wizard()
 
 
 def _do_coach():
@@ -2135,10 +2135,8 @@ def _do_data_reset():
             # Remove the WAL/SHM sidecars too — leftover WAL pages still hold
             # wiped data and could be replayed into the recreated database.
             for suffix in ("", "-wal", "-shm"):
-                try:
+                with contextlib.suppress(FileNotFoundError):
                     os.remove(f"{DB_PATH}{suffix}")
-                except FileNotFoundError:
-                    pass
             init_db()  # callers up the menu chain read prefs immediately
 
             from render_cache import invalidate
@@ -2257,7 +2255,7 @@ def _do_profiles_menu() -> None:
                 import os as _os
                 import sys as _sys
 
-                _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
+                _os.execv(_sys.executable, [_sys.executable, *_sys.argv])
 
         elif action == "create":
             slug = _do_create_profile_flow()
@@ -2267,7 +2265,7 @@ def _do_profiles_menu() -> None:
                 import os as _os
                 import sys as _sys
 
-                _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
+                _os.execv(_sys.executable, [_sys.executable, *_sys.argv])
 
         elif action == "rename":
             if active_slug:
@@ -2315,10 +2313,8 @@ def _do_profile_settings() -> None:
     if active_slug:
         cfg_file = PROFILES_DIR / active_slug / "profile.json"
         if cfg_file.exists():
-            try:
+            with contextlib.suppress(Exception):
                 hevy_key = _json.loads(cfg_file.read_text()).get("hevy_api_key", "")
-            except Exception:
-                pass
     masked_key = (hevy_key[:4] + "…" + hevy_key[-4:]) if len(hevy_key) > 8 else ("set" if hevy_key else "not set")
 
     from analytics.records import get_height_cm
@@ -2607,7 +2603,7 @@ def _read_import_payload(path: Path) -> dict:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
-        raise ValueError(str(e)[:120])
+        raise ValueError(str(e)[:120]) from e
     if not isinstance(payload, dict) or payload.get("app") != "lifter":
         raise ValueError("missing app == 'lifter' marker")
     tables = payload.get("tables")
@@ -3064,11 +3060,10 @@ def _do_fit():
             return
         _render_fit_dashboard()
 
-    elif action == "disconnect":
-        if questionary.confirm(_("fit.disconnect_confirm"), default=False, style=STYLE).ask():
-            disconnect()
-            _dlog("SETTING", "Google Fit disconnected")
-            console.print(_("fit.disconnected"))
+    elif action == "disconnect" and questionary.confirm(_("fit.disconnect_confirm"), default=False, style=STYLE).ask():
+        disconnect()
+        _dlog("SETTING", "Google Fit disconnected")
+        console.print(_("fit.disconnected"))
 
 
 def _fit_setup() -> None:
