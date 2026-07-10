@@ -1,0 +1,52 @@
+name: Bug report
+description: Something in lifter is broken or behaves unexpectedly
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: |
+        1. Open Menu → Stats
+        2. Select "8 weeks"
+        3. The app crashes with ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output / logs
+      description: |
+        Paste any traceback or error message. If Developer Settings → Debug logging
+        is enabled, relevant lines from the log file help a lot.
+      render: text
+
+  - type: input
+    id: version
+    attributes:
+      label: lifter version
+      description: Output of `lifter --version`
+      placeholder: "0.4.2"
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version and OS
+      placeholder: "Python 3.12 on Ubuntu 24.04"
+
+  - type: dropdown
+    id: provider
+    attributes:
+      label: AI provider (if AI-related)
+      options:
+        - Not AI-related
+        - Gemini
+        - Claude (Anthropic)
+        - OpenRouter
+        - Groq
+        - GitHub Models
+        - Amazon Bedrock

@@ -28,18 +28,21 @@ Security issues should be reported privately — see [SECURITY.md](SECURITY.md).
 ```bash
 git clone https://github.com/joaoferrete/lifter.git
 cd lifter
-pip install -r requirements-dev.txt
+pip install -e '.[dev]'
 cp .env.example .env
 # Fill in your API keys in .env
 ```
 
-`requirements-dev.txt` adds these tools on top of the runtime dependencies:
+The `dev` extra (declared in `pyproject.toml`, the single source of truth for
+dependencies) adds these tools on top of the runtime dependencies:
 
 | Package | Purpose |
 |---|---|
 | `pytest` + `pytest-cov` | Test runner and coverage reporting |
-| `ruff` | Linter and formatter |
+| `ruff` | Linter **and** formatter (`ruff check` / `ruff format`) |
+| `mypy` | Static type checker |
 | `pip-audit` | Dependency vulnerability scanner |
+| `build` + `twine` | Packaging and distribution checks |
 
 ## Project architecture
 
@@ -120,8 +123,10 @@ pytest tests/ -v --cov=. --cov-report=term-missing
 # Run a single test file
 pytest tests/test_hevy_sync.py -v
 
-# Run the linter (same flags as CI)
-ruff check . --ignore E501,E402,F401 --exclude tests/
+# Lint, format and type-check (exactly what CI runs; config lives in pyproject.toml)
+ruff check .
+ruff format .
+mypy .
 
 # Commit using conventional commits
 git commit -m "feat: add support for X"
@@ -142,54 +147,26 @@ Types: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`, `security`
 
 ## CI checks
 
-Every PR must pass all four checks before it can be merged:
+Every PR must pass all checks before it can be merged:
 
 | Check | What it runs |
 |---|---|
-| **Tests** | `pytest` on Python 3.11 and 3.12 |
-| **Lint** | `ruff check` (excluding tests/) |
-| **Dependency audit** | `pip-audit` against `requirements.txt` |
+| **Tests** | `pytest` with coverage on Python 3.11 and 3.12 |
+| **Lint & format** | `ruff check .` and `ruff format --check .` (tests included) |
+| **Type check** | `mypy .` |
+| **Build** | `python -m build` + `twine check` + wheel/sdist content verification |
+| **Dependency audit** | `pip-audit` against the project dependencies |
 | **Secret hygiene** | Scans `.env.example`, git-tracked files, and commit history |
 
-Run them locally before pushing to catch issues early.
+Run them locally before pushing to catch issues early (`make lint typecheck test`).
 
 ## Pull requests
 
 1. Push your branch and open a PR against `main`
-2. Fill in the PR template that GitHub loads automatically (see below)
-3. All four CI checks must pass
+2. Fill in the PR template that GitHub loads automatically from
+   [`.github/pull_request_template.md`](.github/pull_request_template.md)
+3. All CI checks must pass
 4. One approval required before merge
-
-### PR template
-
-When you open a PR on GitHub, the description is pre-filled with this template:
-
-```markdown
-## What changed
-<!-- 1–3 bullet points. Focus on what, not how. -->
-
-## Why
-<!-- Link to an issue (#123) or a brief motivation. -->
-
-## How to test
-<!-- Steps a reviewer can follow to verify the change. -->
-
-## Type of change
-- [ ] Bug fix
-- [ ] New feature / integration
-- [ ] Refactor
-- [ ] Documentation
-- [ ] Security fix
-
-## Checklist
-- [ ] `pytest tests/ -v` passes locally
-- [ ] `ruff check . --ignore E501,E402,F401 --exclude tests/` passes
-- [ ] Tests added or updated for any logic touching the DB or analytics
-- [ ] No sensitive files committed
-- [ ] No new dependencies added without justification
-```
-
-The template is stored at [`.github/pull_request_template.md`](.github/pull_request_template.md) — GitHub loads it automatically for every new PR.
 
 ## Releases
 
@@ -256,10 +233,68 @@ The UI translation layer lives in `i18n.py` and reads JSON files from `locales/`
 
 ## Code style
 
-- Python 3.11+
-- No type annotations required but encouraged for public functions
-- No comments that just restate what the code does
-- Tests required for any logic that touches the DB or analytics
+All lint/format/type configuration lives in `pyproject.toml` — CI runs the
+tools with no extra flags, so what passes locally passes in CI.
+
+### Formatting & linting
+
+- Python 3.11+, formatted with `ruff format` (line length 120). Run it before
+  committing; CI rejects unformatted code.
+- `ruff check .` must pass. The rule set includes bugbear (`B`), pyupgrade
+  (`UP`), simplify (`SIM`), comprehensions (`C4`), import sorting (`I`) and
+  the pylint `PLC`/`PLE`/`PLW` groups. Tests are linted too.
+- Lazy in-function imports are allowed only to keep CLI startup fast or to
+  break an import cycle — prefer top-level imports everywhere else.
+- No comments that just restate what the code does.
+
+### Type checking
+
+- `mypy .` must pass. The baseline checks untyped functions
+  (`check_untyped_defs`); modules listed as strict in `pyproject.toml`
+  (`disallow_untyped_defs`) must stay strict, and **new modules are born
+  strict** — add them to the strict list in the same PR.
+- Annotate public functions. `dict`/`list` annotations should carry value
+  types where practical (`dict[str, Any]` over bare `dict`).
+
+### i18n
+
+- **Every user-facing string goes through `i18n._()`** — no hardcoded English
+  in prompts, panels, or menu output. Add each new key to **both**
+  `locales/en.json` and `locales/pt_BR.json`; `tests/test_i18n_parity.py`
+  fails the build on asymmetry.
+- AI prompt copy (system prompts, tool descriptions) is intentionally English
+  and does not go through `_()`; the model is told the answer language
+  separately.
+
+### Layering
+
+Dependencies point downward only:
+
+```
+cli / ui / commands   →   ai, analytics, hevy, fit, db, config, i18n
+ai                    →   analytics, db, hevy, fit, config
+analytics             →   db (store only), config
+hevy / fit            →   db (store only), config
+db                    →   config, paths, debug_log
+```
+
+- `db/` must not import `ai/`, `analytics/`, or `render_cache` — prompt
+  formatting and progress math live above the storage layer.
+- `analytics/` must not import `db.goals` — pass preferences in as parameters.
+- UI concerns (Rich markup, questionary prompts, i18n strings) belong in the
+  CLI layer, never in `db/`, `analytics/`, `hevy/`, or `fit/`.
+
+### Error handling
+
+- Never `except Exception: pass` silently — if an exception is deliberately
+  swallowed, record a breadcrumb with `debug_log.error(...)` (or `log(...)`
+  for expected noise) so failures are diagnosable.
+- Tests required for any logic that touches the DB or analytics.
+
+### Future ideas
+
+New-feature ideas discovered while working on something else go into the
+local, untracked `FUTURE_IDEAS.md` (gitignored) — not into the PR.
 
 ## Error handling conventions
 

@@ -1,4 +1,6 @@
 .env
+.env.*
+!.env.example
 hevy.db*
 *.db
 fit_credentials.json
@@ -23,3 +25,7 @@ coverage.xml
 htmlcov/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+
+# local scratch notes (future feature ideas — see CONTRIBUTING.md)
+FUTURE_IDEAS.md
