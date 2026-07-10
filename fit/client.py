@@ -7,17 +7,12 @@ FIT_BASE = "https://www.googleapis.com/fitness/v1/users/me"
 
 class FitClient:
     def __init__(self):
-        import requests as _requests
-        from google.auth.transport.requests import Request
-
-        from fit.auth import _token_file, disconnect, get_credentials
+        from fit.auth import _token_file, disconnect, get_credentials, refresh_transport
 
         self._token_file = _token_file()
         self._disconnect = disconnect
         self._creds = get_credentials()
-        _session = _requests.Session()
-        _session.timeout = 20
-        self._refresh = Request(session=_session)
+        self._refresh = refresh_transport()
 
     def _headers(self) -> dict:
         from google.auth.exceptions import RefreshError

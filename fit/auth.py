@@ -28,6 +28,22 @@ def _token_file() -> Path:
     return config.DB_PATH.parent / "fit_token.json"
 
 
+_REFRESH_TIMEOUT_S = 20
+
+
+def refresh_transport():
+    """google-auth HTTP transport with a real timeout applied to every call.
+
+    Setting `Session.timeout` does nothing in requests — the timeout must be
+    passed per request, which `google.auth.transport.requests.Request.__call__`
+    accepts as a keyword."""
+    import functools
+
+    from google.auth.transport.requests import Request
+
+    return functools.partial(Request(), timeout=_REFRESH_TIMEOUT_S)
+
+
 def _write_token(creds) -> None:
     tf = _token_file()
     try:
@@ -41,8 +57,6 @@ def _write_token(creds) -> None:
 
 def get_credentials():
     """Return valid Google credentials, running the OAuth flow if needed."""
-    import requests as _requests
-    from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
 
     tf = _token_file()
@@ -52,9 +66,7 @@ def get_credentials():
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            _session = _requests.Session()
-            _session.timeout = 20
-            creds.refresh(Request(session=_session))
+            creds.refresh(refresh_transport())
         else:
             creds_file = credentials_file()
             if not creds_file.exists():
