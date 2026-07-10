@@ -71,7 +71,54 @@ exclude_lines = [
 ]
 
 [tool.ruff]
-exclude = ["tests/"]
+line-length = 120
+target-version = "py311"
 
 [tool.ruff.lint]
-ignore = ["E501", "E402", "F401"]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort (import sorting)
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+    "C4",  # flake8-comprehensions
+    "RUF", # ruff-specific rules
+    "PLC", # pylint conventions
+    "PLE", # pylint errors
+    "PLW", # pylint warnings
+]
+ignore = [
+    # Long lines in string literals; ruff format enforces the 120 limit for code.
+    "E501",
+    # Lazy in-function imports are deliberate: they keep CLI startup fast and
+    # break import cycles. Prefer top-level imports where neither applies.
+    "PLC0415",
+    # The TUI intentionally uses typographic unicode (·, —, ✓) in output strings.
+    "RUF001", "RUF002", "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# config.py and debug_log.py are documented mutable-singleton modules.
+"config.py" = ["PLW0603"]
+"debug_log.py" = ["PLW0603"]
+
+[tool.mypy]
+python_version = "3.11"
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+exclude = ["^\\.venv/", "^build/", "^dist/"]
+
+[[tool.mypy.overrides]]
+module = [
+    "questionary.*",
+    "google.*",
+    "google_auth_oauthlib.*",
+    "pandas.*",
+    "boto3.*",
+    "botocore.*",
+]
+ignore_missing_imports = true
