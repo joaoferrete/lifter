@@ -237,7 +237,7 @@ def test_full_sync_calls_delete_stale_routines(monkeypatch):
 
     _patch_sync(monkeypatch, sync_mod)
 
-    stale_calls = []
+    stale_calls: list[set[str]] = []
     monkeypatch.setattr(sync_mod, "delete_stale_routines", stale_calls.append)
 
     mock_client = MagicMock()
@@ -257,7 +257,7 @@ def test_full_sync_passes_empty_set_to_delete_stale_when_no_routines(monkeypatch
 
     _patch_sync(monkeypatch, sync_mod)
 
-    stale_calls = []
+    stale_calls: list[set[str]] = []
     monkeypatch.setattr(sync_mod, "delete_stale_routines", stale_calls.append)
 
     mock_client = MagicMock()

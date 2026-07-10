@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from typing import Any
 
 from config import (
     AI_MODEL,
@@ -207,7 +208,8 @@ class GeminiChatSession:
         self._max_tokens = max_tokens
         self._keep_turns = _history_keep_turns()
         self._summary = ""
-        self._tool_obj = types.Tool(function_declarations=tools) if tools else None
+        # The genai SDK validates plain-dict declarations at runtime.
+        self._tool_obj = types.Tool(function_declarations=tools) if tools else None  # type: ignore[arg-type]
         self._chat = self._new_chat(system, [])
 
     def _new_chat(self, system: str, history: list):
@@ -809,7 +811,7 @@ def stream_complete(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOK
         import anthropic
 
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        cached_system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        cached_system: Any = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
         with client.messages.stream(
             model=AI_MODEL,
             system=cached_system,
@@ -827,8 +829,8 @@ def stream_complete(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOK
     elif AI_PROVIDER in _OPENAI_COMPAT:
         from openai import OpenAI
 
-        client = OpenAI(base_url=PROVIDER_BASE_URLS[AI_PROVIDER], api_key=get_provider_api_key())
-        stream = client.chat.completions.create(
+        oa_client = OpenAI(base_url=PROVIDER_BASE_URLS[AI_PROVIDER], api_key=get_provider_api_key())
+        oa_stream = oa_client.chat.completions.create(
             model=AI_MODEL,
             messages=[
                 {"role": "system", "content": system},
@@ -837,9 +839,9 @@ def stream_complete(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOK
             max_tokens=max_tokens,
             stream=True,
         )
-        for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+        for oa_chunk in oa_stream:
+            if oa_chunk.choices and oa_chunk.choices[0].delta.content:
+                yield oa_chunk.choices[0].delta.content
 
     elif AI_PROVIDER == "bedrock":
         if _is_bedrock_claude_model():
@@ -876,14 +878,14 @@ def stream_complete(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOK
         from google import genai
         from google.genai import types
 
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        for chunk in client.models.generate_content_stream(
+        genai_client = genai.Client(api_key=GEMINI_API_KEY)
+        for g_chunk in genai_client.models.generate_content_stream(
             model=AI_MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(system_instruction=system, temperature=0.4),
         ):
-            if chunk.text:
-                yield chunk.text
+            if g_chunk.text:
+                yield g_chunk.text
 
 
 def _loads_lenient(raw: str) -> dict:
@@ -906,7 +908,7 @@ def complete_json(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOKEN
         import anthropic
 
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        cached_system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        cached_system: Any = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
         response = client.messages.create(
             model=AI_MODEL,
             system=cached_system,
@@ -921,14 +923,14 @@ def complete_json(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOKEN
             response.usage.output_tokens,
             getattr(response.usage, "cache_read_input_tokens", 0) or 0,
         )
-        text = "".join(b.text for b in response.content if getattr(b, "type", None) == "text")
+        text = "".join(b.text for b in response.content if b.type == "text")
         return _loads_lenient("{" + text)
 
     if AI_PROVIDER in _OPENAI_COMPAT:
         from openai import OpenAI
 
-        client = OpenAI(base_url=PROVIDER_BASE_URLS[AI_PROVIDER], api_key=get_provider_api_key())
-        response = client.chat.completions.create(
+        oa_client = OpenAI(base_url=PROVIDER_BASE_URLS[AI_PROVIDER], api_key=get_provider_api_key())
+        oa_response = oa_client.chat.completions.create(
             model=AI_MODEL,
             messages=[
                 {"role": "system", "content": system},
@@ -937,9 +939,9 @@ def complete_json(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOKEN
             max_tokens=max_tokens,
             response_format={"type": "json_object"},
         )
-        if response.usage:
-            _track_usage(response.usage.prompt_tokens, response.usage.completion_tokens)
-        return _loads_lenient(response.choices[0].message.content or "")
+        if oa_response.usage:
+            _track_usage(oa_response.usage.prompt_tokens, oa_response.usage.completion_tokens)
+        return _loads_lenient(oa_response.choices[0].message.content or "")
 
     if AI_PROVIDER == "bedrock":
         if _is_bedrock_claude_model():
@@ -959,7 +961,7 @@ def complete_json(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOKEN
                 response.usage.output_tokens,
                 getattr(response.usage, "cache_read_input_tokens", 0) or 0,
             )
-            text = "".join(b.text for b in response.content if getattr(b, "type", None) == "text")
+            text = "".join(b.text for b in response.content if b.type == "text")
             return _loads_lenient("{" + text)
 
         client = _boto3_bedrock_client()
@@ -981,8 +983,8 @@ def complete_json(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOKEN
     from google import genai
     from google.genai import types
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    response = client.models.generate_content(
+    genai_client = genai.Client(api_key=GEMINI_API_KEY)
+    g_response = genai_client.models.generate_content(
         model=AI_MODEL,
         contents=prompt,
         config=types.GenerateContentConfig(
@@ -991,13 +993,13 @@ def complete_json(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOKEN
             response_mime_type="application/json",
         ),
     )
-    um = getattr(response, "usage_metadata", None)
+    um = getattr(g_response, "usage_metadata", None)
     if um:
         _track_usage(
             getattr(um, "prompt_token_count", 0) or 0,
             getattr(um, "candidates_token_count", 0) or 0,
         )
-    return _loads_lenient(response.text or "")
+    return _loads_lenient(g_response.text or "")
 
 
 def provider_label() -> str:

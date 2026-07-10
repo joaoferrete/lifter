@@ -288,12 +288,15 @@ def test_record_and_get_sync_result(tmp_db):
 
     record_sync_result("last_sync_result", True, "full: 5 workouts", db_path=tmp_db)
     res = get_sync_result("last_sync_result", db_path=tmp_db)
+    assert res is not None
     assert res["ok"] is True
     assert res["detail"] == "full: 5 workouts"
     assert "T" in res["when"]
 
     record_sync_result("last_sync_result", False, "HevyAPIError: 401", db_path=tmp_db)
-    assert get_sync_result("last_sync_result", db_path=tmp_db)["ok"] is False
+    res_fail = get_sync_result("last_sync_result", db_path=tmp_db)
+    assert res_fail is not None
+    assert res_fail["ok"] is False
 
 
 def test_get_sync_result_missing_or_corrupt(tmp_db):
@@ -310,4 +313,6 @@ def test_sync_result_detail_truncated(tmp_db):
     from db.store import get_sync_result, record_sync_result
 
     record_sync_result("last_sync_result", False, "x" * 500, db_path=tmp_db)
-    assert len(get_sync_result("last_sync_result", db_path=tmp_db)["detail"]) == 200
+    res = get_sync_result("last_sync_result", db_path=tmp_db)
+    assert res is not None
+    assert len(res["detail"]) == 200

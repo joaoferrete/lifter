@@ -40,7 +40,7 @@ def validate_routine_args(
         if not routine_id:
             errors.append("routine_id must be a non-empty string")
 
-    title = _clean_str(args.get("title"))
+    title = _clean_str(args.get("title")) or ""
     if not title:
         errors.append("title must be a non-empty string")
     elif _looks_like_json_fragment(title):

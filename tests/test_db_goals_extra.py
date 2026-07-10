@@ -216,6 +216,7 @@ def test_token_budget_status_pct_excludes_cache_read(tmp_db):
     set_token_budget(1000)
     add_token_usage(600, 300, cache_read_tokens=500)
     st = token_budget_status()
+    assert st is not None
     assert st["used"] == 900
     assert st["budget"] == 1000
     assert st["pct"] == 90.0

@@ -5,8 +5,11 @@ import pandas as pd
 from db.store import query
 
 
-def workout_frequency(weeks: int = 8) -> dict:
-    """Summary of training frequency and session duration."""
+def workout_frequency(weeks: int | str = 8) -> dict:
+    """Summary of training frequency and session duration.
+
+    Coerces string input defensively — callers historically pass "8"-style values.
+    """
     weeks = max(1, int(weeks))
     rows = query(
         """

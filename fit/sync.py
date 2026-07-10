@@ -51,9 +51,9 @@ def _local_tz_id() -> str | None:
 
     # Python 3.9+ zoneinfo: ZoneInfo objects have a .key attribute
     try:
-        tz_info = datetime.now().astimezone().tzinfo
-        if hasattr(tz_info, "key") and "/" in tz_info.key:
-            return tz_info.key
+        tz_key = getattr(datetime.now().astimezone().tzinfo, "key", "")
+        if "/" in tz_key:
+            return tz_key
     except Exception:
         pass
 

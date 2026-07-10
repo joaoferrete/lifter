@@ -26,6 +26,7 @@ def _valid_args() -> dict:
 def test_valid_routine_passes_and_normalizes():
     routine, errors = validate_routine_args(_valid_args())
     assert errors == []
+    assert routine is not None
     assert routine["title"] == "Push Day"
     ex = routine["exercises"][0]
     assert ex["exercise_template_id"] == "94B7239B"
@@ -38,6 +39,7 @@ def test_float_reps_coerced_to_int():
     args["exercises"][0]["sets"][0]["reps"] = 10.0
     routine, errors = validate_routine_args(args)
     assert errors == []
+    assert routine is not None
     assert routine["exercises"][0]["sets"][0]["reps"] == 10
 
 
@@ -46,6 +48,7 @@ def test_unit_suffix_strings_coerced():
     args["exercises"][0]["sets"][0]["weight_kg"] = "60kg"
     routine, errors = validate_routine_args(args)
     assert errors == []
+    assert routine is not None
     assert routine["exercises"][0]["sets"][0]["weight_kg"] == 60.0
 
 
@@ -54,6 +57,7 @@ def test_unknown_set_type_coerced_to_normal():
     args["exercises"][0]["sets"][0]["type"] = "working"
     routine, errors = validate_routine_args(args)
     assert errors == []
+    assert routine is not None
     assert routine["exercises"][0]["sets"][0]["type"] == "normal"
 
 
@@ -108,6 +112,7 @@ def test_empty_exercises_allowed_for_update():
         require_routine_id=True,
     )
     assert errors == []
+    assert routine is not None
     assert routine["routine_id"] == "r-1"
     assert routine["exercises"] == []
 
@@ -130,6 +135,7 @@ def test_long_notes_truncated_not_rejected():
     args["exercises"][0]["notes"] = "x" * 5000
     routine, errors = validate_routine_args(args)
     assert errors == []
+    assert routine is not None
     assert len(routine["exercises"][0]["notes"]) <= 1000
 
 
@@ -139,6 +145,7 @@ def test_wrapped_list_exercise_unwrapped():
     args["exercises"] = [args["exercises"]]
     routine, errors = validate_routine_args(args)
     assert errors == []
+    assert routine is not None
     assert routine["exercises"][0]["exercise_template_id"] == "94B7239B"
 
 

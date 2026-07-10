@@ -52,6 +52,29 @@ _PROVIDER_SYNC_NAMES: tuple[str, ...] = (
 # reload_env() can't repoint the app at the default database mid-session.
 PROFILE_DB_PATH: Path | None = None
 
+# Env-derived module globals, (re)populated by _load_globals() at import time
+# and on every reload_env(). Declared here so the module's public surface is
+# visible to readers and type checkers.
+HEVY_API_KEY: str
+DEFAULT_LANGUAGE: str
+DB_PATH: Path
+EXPORT_DIR: str
+LOGS_DIR: str
+AI_PROVIDER: str
+AI_MODEL: str
+GEMINI_API_KEY: str
+ANTHROPIC_API_KEY: str
+OPENROUTER_API_KEY: str
+GROQ_API_KEY: str
+GITHUB_TOKEN: str
+AWS_REGION: str
+AWS_ACCESS_KEY_ID: str
+AWS_SECRET_ACCESS_KEY: str
+AWS_SESSION_TOKEN: str
+AWS_BEARER_TOKEN_BEDROCK: str
+_ENV_AI_PROVIDER: str
+_ENV_AI_MODEL: str
+
 
 def _resolve_db_path(raw: str | None) -> Path:
     if raw and Path(raw).is_absolute():

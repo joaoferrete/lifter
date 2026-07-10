@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from typing import Any
 
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
@@ -40,7 +41,14 @@ def full_sync(client: HevyClient) -> dict:
     log("SYNC", "Hevy full sync started")
     init_db()
 
-    counts = {"workouts": 0, "templates": 0, "body_measurements": 0, "routines": 0, "updated_ids": [], "since": None}
+    counts: dict[str, Any] = {
+        "workouts": 0,
+        "templates": 0,
+        "body_measurements": 0,
+        "routines": 0,
+        "updated_ids": [],
+        "since": None,
+    }
 
     try:
         with Progress(
@@ -100,7 +108,7 @@ def incremental_sync(client: HevyClient) -> dict:
 
     since = last_sync
     log("SYNC", "Hevy incremental sync started", since=since)
-    counts = {
+    counts: dict[str, Any] = {
         "updated": 0,
         "deleted": 0,
         "templates": 0,

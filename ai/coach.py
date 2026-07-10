@@ -764,9 +764,10 @@ def _show_and_confirm_routine(routine: dict) -> dict:
     from ai.routine_schema import validate_routine_args
     from hevy.client import HevyClient
 
-    routine, errors = validate_routine_args(routine)
-    if routine is None:
+    validated, errors = validate_routine_args(routine)
+    if validated is None:
         return _reject_invalid_routine(errors)
+    routine = validated
 
     lines = [f"[bold]{routine.get('title')}[/bold]"]
     if routine.get("notes"):

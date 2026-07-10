@@ -155,6 +155,7 @@ def test_recovery_score_excellent_with_ideal_data(tmp_db):
     _insert_sleep(tmp_db, minutes=480)  # 8 h → full sleep pts
     _insert_daily(tmp_db, min_hr=50)  # 50 bpm → max HR pts
     result = recovery_score()
+    assert result is not None
     assert result["label"] == "Excellent"
     assert result["score"] >= 80
 
@@ -165,6 +166,7 @@ def test_recovery_score_poor_with_bad_data(tmp_db):
     _insert_sleep(tmp_db, minutes=180)  # 3 h
     _insert_daily(tmp_db, min_hr=90)  # high resting HR
     result = recovery_score()
+    assert result is not None
     assert result["label"] == "Poor"
     assert result["score"] < 45
 

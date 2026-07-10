@@ -5,8 +5,11 @@ import pandas as pd
 from db.store import query
 
 
-def weekly_volume(weeks: int = 8) -> pd.DataFrame:
-    """Return weekly tonnage (kg × reps) per primary muscle group for the last N weeks."""
+def weekly_volume(weeks: int | str = 8) -> pd.DataFrame:
+    """Return weekly tonnage (kg × reps) per primary muscle group for the last N weeks.
+
+    Coerces string input defensively — callers historically pass "8"-style values.
+    """
     weeks = max(1, int(weeks))
     rows = query(
         """

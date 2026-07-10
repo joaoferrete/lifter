@@ -1432,9 +1432,8 @@ def _run_report(weeks: int, generate_routine: bool = False) -> bool:
     hs = result.get("health_score")
     cs = result.get("combined_score")
     score_items = [(_("score.training"), ws), (_("score.health"), hs), (_("score.overall"), cs)]
-    score_items = [(lbl, v) for lbl, v in score_items if v is not None]
-    if score_items:
-        score_lines = [_fmt_score_bar(lbl, int(val), bar_width=16) for lbl, val in score_items]
+    score_lines = [_fmt_score_bar(lbl, int(val), bar_width=16) for lbl, val in score_items if val is not None]
+    if score_lines:
         console.print(
             Panel(
                 "\n".join(score_lines),
@@ -1561,15 +1560,16 @@ def _run_report(weeks: int, generate_routine: bool = False) -> bool:
 def _do_chat():
     if not _require_ai():
         return  # None ⇒ main loop pauses, so the error stays visible
+    week_choices = [
+        questionary.Choice(_("time.weeks", n=4), value=4),
+        questionary.Choice(_("time.weeks", n=8), value=8),
+        questionary.Choice(_("time.weeks", n=12), value=12),
+        questionary.Choice(_("chat.all_time"), value=16),
+    ]
     weeks_str = questionary.select(
         _("chat.context_prompt"),
-        choices=[
-            questionary.Choice(_("time.weeks", n=4), value=4),
-            questionary.Choice(_("time.weeks", n=8), value=8),
-            questionary.Choice(_("time.weeks", n=12), value=12),
-            questionary.Choice(_("chat.all_time"), value=16),
-        ],
-        default=8,
+        choices=week_choices,
+        default=week_choices[1],
         style=STYLE,
     ).ask()
     if not weeks_str:
@@ -1934,11 +1934,11 @@ def _do_ai_settings():
                 console.print(_("settings.ai.budget_saved", budget=f"{int(answer):,}"))
 
         elif action == "language":
-            choices = _AI_LANGUAGES + ([] if lang in _AI_LANGUAGES else [lang])
+            lang_choices = _AI_LANGUAGES + ([] if lang in _AI_LANGUAGES else [lang])
             new_lang = questionary.select(
                 _("settings.ai.language_prompt"),
-                choices=choices,
-                default=lang if lang in choices else choices[0],
+                choices=lang_choices,
+                default=lang if lang in lang_choices else lang_choices[0],
                 style=STYLE,
             ).ask()
             if new_lang:
