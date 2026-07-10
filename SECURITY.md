@@ -23,22 +23,21 @@ lifter is a local-first personal tool. The threat model is:
 
 | Asset | Where stored | Risk |
 |---|---|---|
-| Hevy API key | `.env` (local) | Anyone with read access to your machine |
-| Gemini / Claude / OpenRouter / Groq / GitHub API key | `.env` (local) | Same |
-| AWS credentials (Bedrock) | `.env` (local) | Same |
-| Google OAuth token | `profiles/{slug}/fit_token.json` (local) | Same — written with 0o600 permissions |
-| Google OAuth client secret | `fit_credentials.json` (local) | Same |
-| Workout / health data | `profiles/{slug}/hevy.db` (local SQLite) | Same |
-| Profile configuration | `profiles.json`, `profiles/{slug}/profile.json` (local) | Same |
+| Hevy API key | `~/.local/share/lifter/profiles/{slug}/profile.json` (local) | Anyone with read access to your machine |
+| Gemini / Claude / OpenRouter / Groq / GitHub API key | `~/.config/lifter/.env` (local, mode 600) | Same |
+| AWS credentials (Bedrock) | `~/.config/lifter/.env` (local, mode 600) | Same |
+| Google OAuth token | `~/.local/share/lifter/profiles/{slug}/fit_token.json` (local) | Same — written with 0o600 permissions |
+| Google OAuth client secret | `~/.config/lifter/fit_credentials.json` (local) | Same |
+| Workout / health data | `~/.local/share/lifter/profiles/{slug}/hevy.db` (local SQLite) | Same |
+| Profile configuration | `~/.local/share/lifter/profiles.json` and `profiles/{slug}/profile.json` (local) | Same |
 
 None of this data is transmitted to any server except the respective APIs (Hevy, Google Fit, and whichever AI provider is configured: Google AI, Anthropic, OpenRouter, Groq, GitHub Models, or AWS Bedrock).
 
 ## Best practices for users
 
-- Keep `.env`, `fit_credentials.json`, `profiles/`, `profiles.json`, and `*.db` out of version control (`.gitignore` covers this)
-- Run `chmod 600 .env` after every fresh clone
+- All secrets and data live outside the repository (in `~/.config/lifter/` and `~/.local/share/lifter/`), so a clone never contains them; the `.gitignore` additionally blocks legacy-layout files from being committed
 - Rotate API keys if you suspect they were exposed
-- Do not share your project directory with untrusted users
+- Do not share your home directory (`~/.config/lifter/`, `~/.local/share/lifter/`) with untrusted users
 
 ## Known limitations
 

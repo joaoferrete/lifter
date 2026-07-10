@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- pt_BR: the interface no longer mixes in English — goal descriptions,
+  "press any key" prompts, header stats, sync/streak lines, plateau lines,
+  Fit dashboard units and every remaining hardcoded string are localized.
+  Goal text is rebuilt from the goal's structured fields at display time,
+  so goals created before this release are localized too.
+- Goal wizards no longer crash on inputs like "1.2.3"; a cancelled name
+  prompt no longer greets "None"; stats no longer shows "None%" when body
+  fat was never recorded; "Auto-sync disabled" no longer shows a green
+  checkmark.
+- Cancelling a Gemini chat turn (Ctrl+C) no longer leaves the cancelled
+  message in the conversation history.
+- Bulk deletions (clear memories, clear goals) now ask for a double
+  confirmation, consistent with the full data wipe.
 - Sleep sessions from Google Fit on the same day are now summed (a nap no
   longer overwrites the night's sleep), and each session counts on the day
   the athlete woke up — a 23:30–07:00 night belongs to the morning's date.
@@ -32,12 +45,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Internal architecture: `cli.py` (3,500 lines) is decomposed into `ui/` and
+  `commands/` packages; `ai/coach.py` into focused context/prompts/tools/
+  chat/memory modules; duplicated provider sessions share a base class.
+  No behavior change intended beyond the fixes above.
 - Tooling: modern ruff rule set (bugbear, pyupgrade, simplify, isort, pylint
   groups) with `ruff format` enforcement, gradual mypy type checking, and CI
   jobs for formatting, type checking and packaging verification.
 - `pyproject.toml` is now the single source of truth for dependencies;
   `pip install -e '.[dev]'` replaces the old requirements files, and a
   `bedrock` extra installs the optional boto3 path.
+- Docs: README/SECURITY paths updated to the XDG layout, one canonical
+  upgrade instruction, `EXPORT_DIR`/`LOGS_DIR` documented, and the default
+  model names aligned with the code.
 
 ## [0.4.2] and earlier
 

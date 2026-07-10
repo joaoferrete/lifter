@@ -52,27 +52,43 @@ lifter/
 │   ├── client.py        API wrapper (all Hevy endpoints + payload sanitization)
 │   └── sync.py          Full + incremental sync via /v1/workouts/events
 ├── db/
-│   ├── store.py         SQLite schema + upsert helpers
-│   ├── goals.py         Goal CRUD, progress computation, user preferences
-│   └── memories.py      Chat memory: save/load/context
+│   ├── store.py         SQLite schema, connection lifecycle, upsert helpers
+│   ├── goals.py         Goal CRUD, typed preferences, token accounting
+│   ├── memories.py      Chat memory persistence
+│   └── export.py        Data export / import (backup & restore)
 ├── fit/
 │   ├── auth.py          Google OAuth (InstalledAppFlow, token persistence)
 │   ├── client.py        Google Fit REST API (aggregate + sessions)
 │   ├── sync.py          Sync sleep and daily stats
 │   └── analytics.py     Recovery score, sleep summary, activity summary
 ├── analytics/
+│   ├── common.py        Shared per-week denominator + DataFrame helpers
+│   ├── e1rm.py          Canonical estimated-1RM (Python + SQL fragment)
 │   ├── volume.py        Weekly tonnage per muscle group
 │   ├── progression.py   e1RM progression and plateau detection
 │   ├── frequency.py     Workout cadence and session duration
-│   └── records.py       Personal records, body measurement trends, BMI helpers
+│   ├── records.py       Personal records, body measurement trends, BMI helpers
+│   └── goal_progress.py Goal progress computation (goals domain service)
 ├── ai/
 │   ├── provider.py      Unified ChatSession abstraction (Gemini, Claude, OpenRouter, Groq, GitHub Models, Bedrock)
-│   ├── coach.py         Coaching report (with scores + distribution), chat loop, goal tools, memory extraction
+│   ├── coach.py         Facade: one-shot coaching report + public AI surface
+│   ├── context.py       Prompt-context assembly from stored data
+│   ├── prompts.py       Prompt copy and tool schemas (English by design)
+│   ├── tools.py         Tool-call handlers + confirmation UI
+│   ├── chat.py          Interactive chat loop
+│   ├── memory.py        End-of-chat memory extraction
+│   ├── errors.py        Provider-exception → friendly message mapping
+│   ├── routine_schema.py Validation gate for AI-generated routine args
 │   └── sanitize.py      Input sanitization and prompt-injection defence
-├── cli.py               Interactive menu (questionary + Rich)
+├── ui/                  Console/style, bar widgets, prompts, value formatting
+├── commands/            One module per menu domain (sync, stats, body, goals,
+│                        coach, fit, settings, profiles, startup)
+├── cli.py               Entry point: menu loop, ACTIONS dispatch, header
 ├── config.py            .env loader, runtime overrides, .env writer
+├── http_retry.py        Shared HTTP timeout + retry/backoff helper
 ├── paths.py             XDG path resolution + legacy-layout migration
 ├── profile_mgr.py       Multi-profile management (create, activate, switch, delete)
+├── render_cache.py      In-process memo cache for derived render data
 ├── debug_log.py         Structured debug logging (toggled via Settings → Developer)
 ├── i18n.py              Translation layer (reads locales/*.json)
 └── locales/             UI translations (shipped in the wheel as package data)
@@ -213,7 +229,7 @@ The UI translation layer lives in `i18n.py` and reads JSON files from `locales/`
    _SUPPORTED: set = {"en", "pt_BR", "fr"}   # add your code here
    ```
 
-3. **Add a display name** to `_UI_LANGUAGES` in `cli.py`:
+3. **Add a display name** to `_UI_LANGUAGES` in `commands/_shared.py`:
 
    ```python
    _UI_LANGUAGES = [
