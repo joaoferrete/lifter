@@ -1,10 +1,15 @@
 """Tests for the goals CRUD layer and progress computation."""
+
+from datetime import UTC
+
 import pytest
-from tests.conftest import seed_exercise_template, seed_workout, TEMPLATE_ID
+
+from tests.conftest import TEMPLATE_ID, seed_exercise_template, seed_workout
 
 
 def test_save_and_get_goal(tmp_db):
-    from db.goals import save_goal, get_goals
+    from db.goals import get_goals, save_goal
+
     save_goal(type="frequency", description="Train 4×/week", target=4.0, unit="sessions/wk")
     goals = get_goals()
     assert len(goals) == 1
@@ -14,7 +19,8 @@ def test_save_and_get_goal(tmp_db):
 
 
 def test_multiple_goals_returned_ordered(tmp_db):
-    from db.goals import save_goal, get_goals
+    from db.goals import get_goals, save_goal
+
     save_goal(type="custom", description="Goal A")
     save_goal(type="custom", description="Goal B")
     goals = get_goals()
@@ -22,7 +28,8 @@ def test_multiple_goals_returned_ordered(tmp_db):
 
 
 def test_delete_goal_removes_it(tmp_db):
-    from db.goals import save_goal, get_goals, delete_goal
+    from db.goals import delete_goal, get_goals, save_goal
+
     save_goal(type="custom", description="To be deleted")
     gid = get_goals()[0]["id"]
     delete_goal(gid)
@@ -30,7 +37,8 @@ def test_delete_goal_removes_it(tmp_db):
 
 
 def test_update_goal_fields(tmp_db):
-    from db.goals import save_goal, get_goals, update_goal_fields
+    from db.goals import get_goals, save_goal, update_goal_fields
+
     save_goal(type="lift_pr", description="Bench 100 kg", target=100.0, unit="kg")
     gid = get_goals()[0]["id"]
     update_goal_fields(gid, description="Bench 120 kg", target=120.0)
@@ -40,7 +48,8 @@ def test_update_goal_fields(tmp_db):
 
 
 def test_mark_goal_achieved_removes_from_active(tmp_db):
-    from db.goals import save_goal, get_goals, mark_goal_achieved
+    from db.goals import get_goals, mark_goal_achieved, save_goal
+
     save_goal(type="custom", description="Achieved goal")
     gid = get_goals()[0]["id"]
     mark_goal_achieved(gid)
@@ -48,7 +57,8 @@ def test_mark_goal_achieved_removes_from_active(tmp_db):
 
 
 def test_clear_goals(tmp_db):
-    from db.goals import save_goal, get_goals, clear_goals
+    from db.goals import clear_goals, get_goals, save_goal
+
     save_goal(type="custom", description="A")
     save_goal(type="custom", description="B")
     clear_goals()
@@ -57,6 +67,7 @@ def test_clear_goals(tmp_db):
 
 def test_pref_roundtrip(tmp_db):
     from db.goals import get_pref, set_pref
+
     assert get_pref("nonexistent") is None
     set_pref("display_name", "João")
     assert get_pref("display_name") == "João"
@@ -66,21 +77,24 @@ def test_pref_roundtrip(tmp_db):
 
 def test_should_ask_goals_first_time(tmp_db):
     from db.goals import should_ask_goals
+
     assert should_ask_goals() is True
 
 
 def test_should_ask_goals_false_after_marking(tmp_db):
-    from db.goals import should_ask_goals, mark_goals_asked
+    from db.goals import mark_goals_asked, should_ask_goals
+
     mark_goals_asked()
     assert should_ask_goals() is False
 
 
 def test_should_ask_goals_respects_goals_checkin_days_pref(tmp_db):
     """goals_checkin_days pref overrides the default 7-day threshold."""
-    from datetime import datetime, timezone, timedelta
-    from db.goals import should_ask_goals, set_pref
+    from datetime import datetime, timedelta
 
-    ten_days_ago = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    from db.goals import set_pref, should_ask_goals
+
+    ten_days_ago = (datetime.now(UTC) - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
     set_pref("goals_last_asked", ten_days_ago)
 
     # Default (7-day threshold): 10 days elapsed → should ask
@@ -101,37 +115,43 @@ def test_should_ask_goals_respects_goals_checkin_days_pref(tmp_db):
 
 def test_should_auto_report_first_time(tmp_db):
     from db.goals import should_auto_report
+
     assert should_auto_report() is True
 
 
 def test_should_auto_report_false_after_marking(tmp_db):
-    from db.goals import should_auto_report, mark_report_generated
+    from db.goals import mark_report_generated, should_auto_report
+
     mark_report_generated()
     assert should_auto_report() is False
 
 
 def test_should_auto_report_true_after_7_days(tmp_db):
-    from datetime import datetime, timezone, timedelta
-    from db.goals import should_auto_report, set_pref
+    from datetime import datetime, timedelta
 
-    eight_days_ago = (datetime.now(timezone.utc) - timedelta(days=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    from db.goals import set_pref, should_auto_report
+
+    eight_days_ago = (datetime.now(UTC) - timedelta(days=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
     set_pref("report_last_generated", eight_days_ago)
     assert should_auto_report() is True
 
-    three_days_ago = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    three_days_ago = (datetime.now(UTC) - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
     set_pref("report_last_generated", three_days_ago)
     assert should_auto_report() is False
 
 
 def test_should_auto_report_disabled_by_pref(tmp_db):
-    from db.goals import should_auto_report, set_pref
+    from db.goals import set_pref, should_auto_report
+
     set_pref("auto_report", "0")
     # Even with no prior report (would otherwise be due), disabled wins.
     assert should_auto_report() is False
 
 
 def test_compute_progress_frequency_goal(tmp_db):
-    from db.goals import save_goal, compute_goal_progress
+    from analytics.goal_progress import compute_goal_progress
+    from db.goals import save_goal
+
     seed_exercise_template(tmp_db)
     # Seed 3 workouts in the last 4 weeks (= 3 sessions)
     for i in range(3):
@@ -146,10 +166,13 @@ def test_compute_progress_frequency_goal(tmp_db):
 
 
 def test_compute_progress_lift_pr_goal(tmp_db):
-    from db.goals import save_goal, compute_goal_progress
+    from analytics.goal_progress import compute_goal_progress
+    from db.goals import save_goal
+
     seed_exercise_template(tmp_db, template_id=TEMPLATE_ID)
-    seed_workout(tmp_db, "pr-w1", template_id=TEMPLATE_ID,
-                 sets=[{"index": 0, "type": "normal", "weight_kg": 90.0, "reps": 5}])
+    seed_workout(
+        tmp_db, "pr-w1", template_id=TEMPLATE_ID, sets=[{"index": 0, "type": "normal", "weight_kg": 90.0, "reps": 5}]
+    )
 
     save_goal(
         type="lift_pr",
@@ -170,14 +193,17 @@ def test_compute_progress_lift_pr_goal(tmp_db):
 
 # ── token usage tracking ──────────────────────────────────────────────────────
 
+
 def test_get_token_usage_returns_zeros_when_empty(tmp_db):
     from db.goals import get_token_usage
+
     usage = get_token_usage()
     assert usage == {"input": 0, "output": 0, "cache_read": 0}
 
 
 def test_add_token_usage_increments_input_and_output(tmp_db):
     from db.goals import add_token_usage, get_token_usage
+
     add_token_usage(input_tokens=1000, output_tokens=250)
     usage = get_token_usage()
     assert usage["input"] == 1000
@@ -187,6 +213,7 @@ def test_add_token_usage_increments_input_and_output(tmp_db):
 
 def test_add_token_usage_is_cumulative(tmp_db):
     from db.goals import add_token_usage, get_token_usage
+
     add_token_usage(input_tokens=500, output_tokens=100)
     add_token_usage(input_tokens=300, output_tokens=50, cache_read_tokens=200)
     usage = get_token_usage()
@@ -197,6 +224,7 @@ def test_add_token_usage_is_cumulative(tmp_db):
 
 def test_add_token_usage_ignores_zero_values(tmp_db):
     from db.goals import add_token_usage, get_token_usage
+
     add_token_usage(input_tokens=100)
     add_token_usage()  # all zeros — should not create rows or crash
     usage = get_token_usage()
@@ -205,6 +233,7 @@ def test_add_token_usage_ignores_zero_values(tmp_db):
 
 def test_reset_token_usage_clears_counters(tmp_db):
     from db.goals import add_token_usage, get_token_usage, reset_token_usage
+
     add_token_usage(input_tokens=5000, output_tokens=1000, cache_read_tokens=3000)
     reset_token_usage()
     usage = get_token_usage()
@@ -213,15 +242,18 @@ def test_reset_token_usage_clears_counters(tmp_db):
 
 # ── monthly token counter ──────────────────────────────────────────────────────
 
+
 def test_add_token_usage_increments_month_and_total(tmp_db):
     from db.goals import add_token_usage, get_token_usage, get_token_usage_month
+
     add_token_usage(input_tokens=1000, output_tokens=250, cache_read_tokens=80)
     assert get_token_usage_month() == {"input": 1000, "output": 250, "cache_read": 80}
     assert get_token_usage() == {"input": 1000, "output": 250, "cache_read": 80}
 
 
 def test_month_counter_resets_on_period_rollover_but_total_kept(tmp_db):
-    from db.goals import add_token_usage, get_token_usage, get_token_usage_month, set_pref, get_pref
+    from db.goals import add_token_usage, get_pref, get_token_usage, get_token_usage_month, set_pref
+
     add_token_usage(input_tokens=1500, output_tokens=300, cache_read_tokens=50)
     # Force a stale period so the next access triggers a rollover.
     set_pref("ai_tokens_period_start", "2000-01-01")
@@ -233,6 +265,7 @@ def test_month_counter_resets_on_period_rollover_but_total_kept(tmp_db):
 
 def test_reset_token_usage_clears_month_and_total(tmp_db):
     from db.goals import add_token_usage, get_token_usage, get_token_usage_month, reset_token_usage
+
     add_token_usage(input_tokens=5000, output_tokens=1000, cache_read_tokens=3000)
     reset_token_usage()
     assert get_token_usage() == {"input": 0, "output": 0, "cache_read": 0}
@@ -241,24 +274,30 @@ def test_reset_token_usage_clears_month_and_total(tmp_db):
 
 def test_token_reset_day_config(tmp_db):
     from db.goals import get_token_reset_day, set_token_reset_day
+
     assert get_token_reset_day() == 1  # default
     set_token_reset_day(15)
     assert get_token_reset_day() == 15
     set_token_reset_day(99)  # clamped to 31
     assert get_token_reset_day() == 31
-    set_token_reset_day(0)   # clamped to 1
+    set_token_reset_day(0)  # clamped to 1
     assert get_token_reset_day() == 1
 
 
-@pytest.mark.parametrize("reset_day,today,expected", [
-    (1,  (2026, 6, 24), (2026, 6, 1)),    # plain start-of-month
-    (31, (2026, 2, 20), (2026, 1, 31)),   # day 31 clamps; period started prev month
-    (31, (2026, 2, 28), (2026, 2, 28)),   # last day of short month
-    (15, (2026, 3, 10), (2026, 2, 15)),   # before reset day -> previous month
-    (15, (2026, 3, 15), (2026, 3, 15)),   # on the reset day -> this month
-    (20, (2026, 1, 5),  (2025, 12, 20)),  # January wraps to December
-])
+@pytest.mark.parametrize(
+    "reset_day,today,expected",
+    [
+        (1, (2026, 6, 24), (2026, 6, 1)),  # plain start-of-month
+        (31, (2026, 2, 20), (2026, 1, 31)),  # day 31 clamps; period started prev month
+        (31, (2026, 2, 28), (2026, 2, 28)),  # last day of short month
+        (15, (2026, 3, 10), (2026, 2, 15)),  # before reset day -> previous month
+        (15, (2026, 3, 15), (2026, 3, 15)),  # on the reset day -> this month
+        (20, (2026, 1, 5), (2025, 12, 20)),  # January wraps to December
+    ],
+)
 def test_current_period_start(reset_day, today, expected):
     from datetime import date
+
     from db.goals import _current_period_start
+
     assert _current_period_start(reset_day, date(*today)) == date(*expected)

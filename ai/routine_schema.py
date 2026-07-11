@@ -11,6 +11,8 @@ silently drops what it can't fix: here garbage must be *rejected* so the model
 can be asked to regenerate.
 """
 
+from typing import Any
+
 VALID_SET_TYPES = {"warmup", "normal", "failure", "dropset"}
 
 _MAX_TITLE_LEN = 150
@@ -20,8 +22,11 @@ _MAX_NOTES_LEN = 1000
 _JSON_FRAGMENT_MARKERS = ("{", "}", "[", "]", '":', "':")
 
 
-def validate_routine_args(args: dict, *, require_routine_id: bool = False,
-                          ) -> tuple[dict | None, list[str]]:
+def validate_routine_args(
+    args: dict,
+    *,
+    require_routine_id: bool = False,
+) -> tuple[dict | None, list[str]]:
     """Validate tool args for push_routine / update_routine.
 
     Returns (normalized_routine, []) on success or (None, [error, ...]) when
@@ -37,7 +42,7 @@ def validate_routine_args(args: dict, *, require_routine_id: bool = False,
         if not routine_id:
             errors.append("routine_id must be a non-empty string")
 
-    title = _clean_str(args.get("title"))
+    title = _clean_str(args.get("title")) or ""
     if not title:
         errors.append("title must be a non-empty string")
     elif _looks_like_json_fragment(title):
@@ -45,7 +50,7 @@ def validate_routine_args(args: dict, *, require_routine_id: bool = False,
 
     raw_exercises = args.get("exercises")
     if raw_exercises is None and require_routine_id:
-        raw_exercises = []   # updates may touch only title/notes
+        raw_exercises = []  # updates may touch only title/notes
     if not isinstance(raw_exercises, list):
         errors.append("exercises must be a list")
         raw_exercises = []
@@ -73,7 +78,7 @@ def validate_routine_args(args: dict, *, require_routine_id: bool = False,
     return routine, []
 
 
-def _validate_exercise(raw, index: int) -> tuple[dict | None, list[str]]:
+def _validate_exercise(raw: object, index: int) -> tuple[dict | None, list[str]]:
     label = f"exercises[{index}]"
     # Some models wrap items as [[{...}]] instead of [{...}]
     if isinstance(raw, list):
@@ -124,7 +129,7 @@ def _validate_exercise(raw, index: int) -> tuple[dict | None, list[str]]:
     return ex, []
 
 
-def _validate_set(raw, label: str) -> tuple[dict | None, list[str]]:
+def _validate_set(raw: object, label: str) -> tuple[dict | None, list[str]]:
     if isinstance(raw, list):
         raw = raw[0] if raw and isinstance(raw[0], dict) else None
     if not isinstance(raw, dict):
@@ -144,9 +149,13 @@ def _validate_set(raw, label: str) -> tuple[dict | None, list[str]]:
             set_type = "normal"
 
     result: dict = {"type": set_type}
-    for field, kind in (("weight_kg", float), ("reps", int),
-                        ("duration_seconds", int), ("distance_meters", int),
-                        ("custom_metric", float)):
+    for field, kind in (
+        ("weight_kg", float),
+        ("reps", int),
+        ("duration_seconds", int),
+        ("distance_meters", int),
+        ("custom_metric", float),
+    ):
         if raw.get(field) is None:
             continue
         value, err = _num(raw[field], kind)
@@ -160,7 +169,7 @@ def _validate_set(raw, label: str) -> tuple[dict | None, list[str]]:
     return result, []
 
 
-def _clean_str(v) -> str | None:
+def _clean_str(v: object) -> str | None:
     if not isinstance(v, str):
         return None
     s = v.strip()
@@ -171,7 +180,7 @@ def _looks_like_json_fragment(s: str) -> bool:
     return any(marker in s for marker in _JSON_FRAGMENT_MARKERS)
 
 
-def _num(v, kind) -> tuple[int | float | None, str | None]:
+def _num(v: Any, kind: type) -> tuple[int | float | None, str | None]:
     """Coerce to int/float; strings may carry trailing units ('60kg', '90s')."""
     if v is None:
         return None, None

@@ -1,4 +1,5 @@
 """Tests for debug log rotation (count-based: keep the newest N daily files)."""
+
 from datetime import datetime, timedelta
 
 import debug_log
@@ -14,8 +15,9 @@ def _make_log(logs_dir, days_ago: int):
 def test_prune_keeps_newest_max_files(tmp_path, monkeypatch):
     monkeypatch.setattr(debug_log, "LOGS_DIR", tmp_path)
     # 20 files with gaps between dates — only the 14 newest survive
-    files = [_make_log(tmp_path, d) for d in (0, 1, 2, 5, 8, 9, 12, 20, 21, 30,
-                                              40, 45, 50, 60, 70, 80, 90, 120, 150, 200)]
+    files = [
+        _make_log(tmp_path, d) for d in (0, 1, 2, 5, 8, 9, 12, 20, 21, 30, 40, 45, 50, 60, 70, 80, 90, 120, 150, 200)
+    ]
 
     removed = debug_log.prune_old_logs()
 
@@ -59,6 +61,7 @@ def test_custom_max_files(tmp_path, monkeypatch):
 
 
 # ── error() — always-on error logging with tracebacks ─────────────────────────
+
 
 def _today_log(logs_dir):
     date = datetime.now().strftime("%Y-%m-%d")
@@ -112,12 +115,14 @@ def test_error_never_raises_on_unwritable_dir(tmp_path, monkeypatch):
 
 def test_logs_dir_env_override(tmp_path, monkeypatch):
     import config
+
     monkeypatch.setattr(config, "LOGS_DIR", str(tmp_path / "custom"))
     assert debug_log.logs_dir() == tmp_path / "custom"
 
 
 def test_logs_dir_relative_override_falls_back(tmp_path, monkeypatch):
     import config
+
     monkeypatch.setattr(config, "LOGS_DIR", "relative/path")
     monkeypatch.setattr(debug_log, "LOGS_DIR", tmp_path)
     assert debug_log.logs_dir() == tmp_path

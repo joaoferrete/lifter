@@ -9,15 +9,19 @@ swaps ``config.DB_PATH``) and the per-test isolated databases never read each
 other's cached values.
 """
 
-_store: dict = {}
+from collections.abc import Callable
+from typing import Any
+
+_store: dict[tuple[str, str], Any] = {}
 
 
 def _ns() -> str:
     import config
+
     return str(config.DB_PATH)
 
 
-def cached(key: str, producer):
+def cached(key: str, producer: Callable[[], Any]) -> Any:
     """Return the cached value for ``key``, computing it via ``producer()`` on a miss."""
     full = (_ns(), key)
     if full not in _store:

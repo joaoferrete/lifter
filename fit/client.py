@@ -1,34 +1,33 @@
 """Google Fit REST API client."""
+
 import httpx
-from datetime import datetime, timezone
+
+from http_retry import request_with_retry
 
 FIT_BASE = "https://www.googleapis.com/fitness/v1/users/me"
 
 
 class FitClient:
-    def __init__(self):
-        import requests as _requests
-        from fit.auth import get_credentials, disconnect, _token_file
-        from google.auth.transport.requests import Request
+    def __init__(self) -> None:
+        from fit.auth import _token_file, disconnect, get_credentials, refresh_transport
 
         self._token_file = _token_file()
         self._disconnect = disconnect
         self._creds = get_credentials()
-        _session = _requests.Session()
-        _session.timeout = 20
-        self._refresh = Request(session=_session)
+        self._refresh = refresh_transport()
 
     def _headers(self) -> dict:
         from google.auth.exceptions import RefreshError
+
         try:
             if not self._creds.valid:
                 self._creds.refresh(self._refresh)
-        except RefreshError:
+        except RefreshError as e:
             self._disconnect()
             raise RuntimeError(
                 "Google Fit token expired and could not be refreshed.\n"
                 "Go to Menu → Google Fit → Connect to re-authenticate."
-            )
+            ) from e
         return {"Authorization": f"Bearer {self._creds.token}"}
 
     def _check(self, resp: httpx.Response, operation: str) -> None:
@@ -46,22 +45,13 @@ class FitClient:
                 "during the OAuth setup. (error 403)"
             )
         if resp.status_code == 400:
-            raise RuntimeError(
-                f"Google Fit: bad request during {operation}. "
-                f"Detail: {resp.text[:300]} (error 400)"
-            )
+            raise RuntimeError(f"Google Fit: bad request during {operation}. Detail: {resp.text[:300]} (error 400)")
         if resp.status_code == 429:
             retry_after = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
             if retry_after:
-                raise RuntimeError(
-                    f"Google Fit rate limit reached. Try again in {retry_after} seconds. (error 429)"
-                )
-            raise RuntimeError(
-                "Google Fit rate limit reached. Please wait a moment and try again. (error 429)"
-            )
-        raise RuntimeError(
-            f"Google Fit error during {operation}: {resp.text[:200]} (error {resp.status_code})"
-        )
+                raise RuntimeError(f"Google Fit rate limit reached. Try again in {retry_after} seconds. (error 429)")
+            raise RuntimeError("Google Fit rate limit reached. Please wait a moment and try again. (error 429)")
+        raise RuntimeError(f"Google Fit error during {operation}: {resp.text[:200]} (error {resp.status_code})")
 
     def aggregate(
         self,
@@ -76,7 +66,9 @@ class FitClient:
         else:
             bucket = {"durationMillis": bucket_ms}
 
-        resp = httpx.post(
+        # The aggregate POST is a read — safe to retry like a GET.
+        resp = request_with_retry(
+            "POST",
             f"{FIT_BASE}/dataset:aggregate",
             headers=self._headers(),
             json={
@@ -85,7 +77,6 @@ class FitClient:
                 "startTimeMillis": start_ms,
                 "endTimeMillis": end_ms,
             },
-            timeout=30,
         )
         self._check(resp, "aggregate")
         return resp.json()
@@ -97,11 +88,11 @@ class FitClient:
             params: dict = {"startTime": start_iso, "endTime": end_iso, "activityType": 72}
             if page_token:
                 params["pageToken"] = page_token
-            resp = httpx.get(
+            resp = request_with_retry(
+                "GET",
                 f"{FIT_BASE}/sessions",
                 headers=self._headers(),
                 params=params,
-                timeout=30,
             )
             self._check(resp, "get_sleep_sessions")
             data = resp.json()

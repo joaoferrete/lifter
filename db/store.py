@@ -1,8 +1,9 @@
+import contextlib
 import json
 import sqlite3
-from datetime import datetime, timezone
+from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 import config
 
@@ -24,8 +25,30 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
 _conn = connect
 
 
+@contextlib.contextmanager
+def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+    """Commit/roll back AND close the connection on exit.
+
+    sqlite3's own context manager only commits or rolls back — it leaves the
+    connection open, leaking one handle per call. Wrap every connection in
+    this. Modules that own a monkeypatchable `_conn` factory use it as
+    `with transaction(_conn()) as conn:` so the factory stays patchable."""
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
+@contextlib.contextmanager
+def open_conn(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
+    """Open a connection via this module's `_conn` factory and always close it."""
+    with transaction(_conn(db_path)) as conn:
+        yield conn
+
+
 def init_db(db_path: Path | None = None) -> None:
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS workouts (
                 id          TEXT PRIMARY KEY,
@@ -182,7 +205,7 @@ def init_db(db_path: Path | None = None) -> None:
 
 
 def upsert_workout(workout: dict, db_path: Path | None = None) -> None:
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         conn.execute(
             """INSERT INTO workouts (id, title, description, routine_id, start_time, end_time, updated_at, created_at)
                VALUES (:id, :title, :description, :routine_id, :start_time, :end_time, :updated_at, :created_at)
@@ -241,12 +264,12 @@ def upsert_workout(workout: dict, db_path: Path | None = None) -> None:
 
 
 def delete_workout(workout_id: str, db_path: Path | None = None) -> None:
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         conn.execute("DELETE FROM workouts WHERE id=?", (workout_id,))
 
 
 def upsert_exercise_template(template: dict, db_path: Path | None = None) -> None:
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         conn.execute(
             """INSERT INTO exercise_templates
                (id, title, type, primary_muscle_group, secondary_muscle_groups, is_custom)
@@ -268,7 +291,7 @@ def upsert_exercise_template(template: dict, db_path: Path | None = None) -> Non
 
 
 def upsert_body_measurement(m: dict, db_path: Path | None = None) -> None:
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         conn.execute(
             """INSERT INTO body_measurements
                (date, weight_kg, lean_mass_kg, fat_percent,
@@ -289,23 +312,40 @@ def upsert_body_measurement(m: dict, db_path: Path | None = None) -> None:
                  abdomen=excluded.abdomen, waist=excluded.waist, hips=excluded.hips,
                  left_thigh=excluded.left_thigh, right_thigh=excluded.right_thigh,
                  left_calf=excluded.left_calf, right_calf=excluded.right_calf""",
-            {f: m.get(f) for f in [
-                "date", "weight_kg", "lean_mass_kg", "fat_percent",
-                "neck_cm", "shoulder_cm", "chest_cm",
-                "left_bicep_cm", "right_bicep_cm", "left_forearm_cm", "right_forearm_cm",
-                "abdomen", "waist", "hips", "left_thigh", "right_thigh", "left_calf", "right_calf",
-            ]},
+            {
+                f: m.get(f)
+                for f in [
+                    "date",
+                    "weight_kg",
+                    "lean_mass_kg",
+                    "fat_percent",
+                    "neck_cm",
+                    "shoulder_cm",
+                    "chest_cm",
+                    "left_bicep_cm",
+                    "right_bicep_cm",
+                    "left_forearm_cm",
+                    "right_forearm_cm",
+                    "abdomen",
+                    "waist",
+                    "hips",
+                    "left_thigh",
+                    "right_thigh",
+                    "left_calf",
+                    "right_calf",
+                ]
+            },
         )
 
 
 def get_sync_state(key: str, db_path: Path | None = None) -> str | None:
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         row = conn.execute("SELECT value FROM sync_state WHERE key=?", (key,)).fetchone()
         return row["value"] if row else None
 
 
 def set_sync_state(key: str, value: str, db_path: Path | None = None) -> None:
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         conn.execute(
             "INSERT INTO sync_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (key, value),
@@ -314,11 +354,17 @@ def set_sync_state(key: str, value: str, db_path: Path | None = None) -> None:
 
 def record_sync_result(key: str, ok: bool, detail: str = "", db_path: Path | None = None) -> None:
     """Persist the outcome of a sync attempt as JSON in sync_state."""
-    set_sync_state(key, json.dumps({
-        "ok": ok,
-        "when": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "detail": (detail or "")[:200],
-    }), db_path=db_path)
+    set_sync_state(
+        key,
+        json.dumps(
+            {
+                "ok": ok,
+                "when": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "detail": (detail or "")[:200],
+            }
+        ),
+        db_path=db_path,
+    )
 
 
 def get_sync_result(key: str, db_path: Path | None = None) -> dict | None:
@@ -333,13 +379,38 @@ def get_sync_result(key: str, db_path: Path | None = None) -> dict | None:
 
 
 def query(sql: str, params: tuple = (), db_path: Path | None = None) -> list[dict]:
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
 
+def workout_exercise_titles(workout_id: str, db_path: Path | None = None) -> list[str]:
+    """Distinct exercise titles of a workout (used for set-less workout cards)."""
+    rows = query(
+        "SELECT DISTINCT we.title FROM workout_exercises we WHERE we.workout_id = ?", (workout_id,), db_path=db_path
+    )
+    return [r["title"] for r in rows]
+
+
+def header_counts(db_path: Path | None = None) -> dict:
+    """Aggregate counts + latest workout time for the main-menu header."""
+    total = (query("SELECT COUNT(*) as n FROM workouts", db_path=db_path) or [{"n": 0}])[0]["n"]
+    week_count = (
+        query("SELECT COUNT(*) as n FROM workouts WHERE start_time >= datetime('now', '-7 days')", db_path=db_path)
+        or [{"n": 0}]
+    )[0]["n"]
+    routines = (query("SELECT COUNT(*) as n FROM routines", db_path=db_path) or [{"n": 0}])[0]["n"]
+    lw_row = query("SELECT MAX(start_time) as t FROM workouts", db_path=db_path)
+    return {
+        "workouts": total,
+        "week_workouts": week_count,
+        "routines": routines,
+        "last_workout_at": lw_row[0]["t"] if lw_row else None,
+    }
+
+
 def upsert_routine(routine: dict, db_path: Path | None = None) -> None:
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         conn.execute(
             """INSERT INTO routines (id, title, notes, folder_id, updated_at, created_at)
                VALUES (:id, :title, :notes, :folder_id, :updated_at, :created_at)
@@ -392,13 +463,13 @@ def upsert_routine(routine: dict, db_path: Path | None = None) -> None:
 
 
 def delete_routine(routine_id: str, db_path: Path | None = None) -> None:
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         conn.execute("DELETE FROM routines WHERE id=?", (routine_id,))
 
 
 def delete_stale_routines(keep_ids: set, db_path: Path | None = None) -> int:
     """Delete routines whose IDs are not in keep_ids. Returns count deleted."""
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         local_ids = {r[0] for r in conn.execute("SELECT id FROM routines").fetchall()}
         stale = local_ids - {str(i) for i in keep_ids}
         for sid in stale:
@@ -408,7 +479,7 @@ def delete_stale_routines(keep_ids: set, db_path: Path | None = None) -> int:
 
 def get_routines_with_exercises(db_path: Path | None = None) -> list[dict]:
     """Return all routines with their exercises and sets via a single JOIN query."""
-    with _conn(db_path) as conn:
+    with open_conn(db_path) as conn:
         rows = conn.execute(
             """SELECT r.id, r.title, r.notes,
                       re.id AS re_id, re.idx AS re_idx,
@@ -425,22 +496,26 @@ def get_routines_with_exercises(db_path: Path | None = None) -> list[dict]:
     routines_map: dict = {}
     exercises_map: dict = {}
     for row in rows:
-        row = dict(row)
-        rid = row["id"]
+        rec = dict(row)
+        rid = rec["id"]
         if rid not in routines_map:
-            routines_map[rid] = {"id": rid, "title": row["title"], "notes": row["notes"], "exercises": []}
-        re_id = row["re_id"]
+            routines_map[rid] = {"id": rid, "title": rec["title"], "notes": rec["notes"], "exercises": []}
+        re_id = rec["re_id"]
         if re_id is None:
             continue
         if re_id not in exercises_map:
             ex: dict = {
-                "id": re_id, "idx": row["re_idx"], "title": row["ex_title"],
-                "notes": row["ex_notes"], "rest_seconds": row["rest_seconds"], "sets": [],
+                "id": re_id,
+                "idx": rec["re_idx"],
+                "title": rec["ex_title"],
+                "notes": rec["ex_notes"],
+                "rest_seconds": rec["rest_seconds"],
+                "sets": [],
             }
             exercises_map[re_id] = ex
             routines_map[rid]["exercises"].append(ex)
-        if row["set_type"] is not None:
+        if rec["set_type"] is not None:
             exercises_map[re_id]["sets"].append(
-                {"type": row["set_type"], "weight_kg": row["weight_kg"], "reps": row["reps"]}
+                {"type": rec["set_type"], "weight_kg": rec["weight_kg"], "reps": rec["reps"]}
             )
     return list(routines_map.values())

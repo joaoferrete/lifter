@@ -1,20 +1,26 @@
 """AI provider abstraction — Gemini, Claude, OpenRouter, Groq, GitHub Models, Bedrock."""
+
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Iterator
+from typing import Any
 
 from config import (
-    AI_PROVIDER, AI_MODEL,
-    GEMINI_API_KEY, ANTHROPIC_API_KEY,
-    OPENROUTER_API_KEY, GROQ_API_KEY, GITHUB_TOKEN,
-    AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
+    AI_MODEL,
+    AI_PROVIDER,
+    ANTHROPIC_API_KEY,
+    AWS_ACCESS_KEY_ID,
     AWS_BEARER_TOKEN_BEDROCK,
-    PROVIDER_BASE_URLS, KNOWN_PROVIDERS,
+    AWS_REGION,
+    AWS_SECRET_ACCESS_KEY,
+    AWS_SESSION_TOKEN,
+    GEMINI_API_KEY,
+    KNOWN_PROVIDERS,
+    PROVIDER_BASE_URLS,
     get_provider_api_key,
 )
-
 
 # Default output-token ceiling. Per-task callers pass smaller values (e.g. memory
 # extraction, short JSON) so we don't reserve a large budget for tiny outputs.
@@ -29,6 +35,7 @@ def _history_keep_turns() -> int:
     """Configured number of recent user turns to keep verbatim (pref, default 12)."""
     try:
         from db.goals import get_pref
+
         raw = get_pref("ai_chat_history_turns")
         return max(0, int(raw)) if raw is not None else _DEFAULT_HISTORY_TURNS
     except Exception:
@@ -77,10 +84,10 @@ class _WindowedChat:
     def _set_history_messages(self, msgs: list) -> None:
         raise NotImplementedError
 
-    def _is_user_utterance(self, msg) -> bool:
+    def _is_user_utterance(self, msg: Any) -> bool:
         raise NotImplementedError
 
-    def _msg_text(self, msg) -> str:
+    def _msg_text(self, msg: Any) -> str:
         raise NotImplementedError
 
     def _set_summary_in_system(self, summary: str) -> None:
@@ -104,13 +111,13 @@ class _WindowedChat:
         self._set_history_messages(kept)
         try:
             from debug_log import log
-            log("AI", "chat history windowed",
-                keep_turns=keep, dropped_msgs=len(dropped), kept_msgs=len(kept))
+
+            log("AI", "chat history windowed", keep_turns=keep, dropped_msgs=len(dropped), kept_msgs=len(kept))
         except Exception:
             pass
 
 
-def _blocks_text(content) -> str:
+def _blocks_text(content: Any) -> str:
     """Best-effort text extraction from a string / list-of-blocks message body."""
     if isinstance(content, str):
         return content
@@ -118,9 +125,7 @@ def _blocks_text(content) -> str:
         out = []
         for it in content:
             if isinstance(it, dict):
-                if it.get("type") == "text" and it.get("text"):
-                    out.append(it["text"])
-                elif "text" in it and isinstance(it["text"], str):
+                if (it.get("type") == "text" and it.get("text")) or ("text" in it and isinstance(it["text"], str)):
                     out.append(it["text"])
             elif getattr(it, "type", None) == "text":
                 out.append(getattr(it, "text", "") or "")
@@ -134,15 +139,23 @@ def _track_usage(input_tokens: int = 0, output_tokens: int = 0, cache_read: int 
         return
     try:
         from db.goals import add_token_usage
+
         add_token_usage(input_tokens, output_tokens, cache_read)
     except Exception:
         pass
     try:
-        from debug_log import log
         import config as _cfg
-        log("AI", "Token usage",
-            provider=_cfg.AI_PROVIDER, model=_cfg.AI_MODEL,
-            input=input_tokens, output=output_tokens, cache_read=cache_read)
+        from debug_log import log
+
+        log(
+            "AI",
+            "Token usage",
+            provider=_cfg.AI_PROVIDER,
+            model=_cfg.AI_MODEL,
+            input=input_tokens,
+            output=output_tokens,
+            cache_read=cache_read,
+        )
     except Exception:
         pass
 
@@ -162,7 +175,7 @@ class ChatResponse:
     stop_reason: str | None = None
 
 
-def _norm_stop_reason(raw) -> str | None:
+def _norm_stop_reason(raw: Any) -> str | None:
     """Map provider-specific stop/finish reasons onto a common vocabulary.
 
     Uses str() + substring matching so SDK enums (e.g. Gemini's
@@ -182,11 +195,12 @@ def _norm_stop_reason(raw) -> str | None:
 
 # ── Gemini ────────────────────────────────────────────────────────────────────
 
+
 class GeminiChatSession:
-    def __init__(self, system: str, tools: list[dict] | None = None,
-                 max_tokens: int = _DEFAULT_MAX_TOKENS):
+    def __init__(self, system: str, tools: list[dict] | None = None, max_tokens: int = _DEFAULT_MAX_TOKENS):
         from google import genai
         from google.genai import types
+
         self._types = types
         self._client = genai.Client(api_key=GEMINI_API_KEY)
         # Kept so we can rebuild the chat with a trimmed history during windowing.
@@ -194,10 +208,11 @@ class GeminiChatSession:
         self._max_tokens = max_tokens
         self._keep_turns = _history_keep_turns()
         self._summary = ""
-        self._tool_obj = types.Tool(function_declarations=tools) if tools else None
+        # The genai SDK validates plain-dict declarations at runtime.
+        self._tool_obj = types.Tool(function_declarations=tools) if tools else None  # type: ignore[arg-type]
         self._chat = self._new_chat(system, [])
 
-    def _new_chat(self, system: str, history: list):
+    def _new_chat(self, system: str, history: list) -> Any:
         types = self._types
         return self._client.chats.create(
             model=AI_MODEL,
@@ -222,16 +237,14 @@ class GeminiChatSession:
         except Exception:
             return  # SDK doesn't expose history in the expected way — skip safely
 
-        def _is_user_utterance(c) -> bool:
+        def _is_user_utterance(c: Any) -> bool:
             if getattr(c, "role", None) != "user":
                 return False
             parts = getattr(c, "parts", None) or []
             return not any(getattr(p, "function_response", None) for p in parts)
 
-        def _text(c) -> str:
-            return " ".join(
-                getattr(p, "text", "") or "" for p in (getattr(c, "parts", None) or [])
-            )
+        def _text(c: Any) -> str:
+            return " ".join(getattr(p, "text", "") or "" for p in (getattr(c, "parts", None) or []))
 
         utterances = [i for i, c in enumerate(history) if _is_user_utterance(c)]
         if len(utterances) <= self._keep_turns:
@@ -248,8 +261,14 @@ class GeminiChatSession:
             return  # keep the existing chat if rebuild fails
         try:
             from debug_log import log
-            log("AI", "chat history windowed",
-                keep_turns=self._keep_turns, dropped_msgs=len(dropped), kept_msgs=len(kept))
+
+            log(
+                "AI",
+                "chat history windowed",
+                keep_turns=self._keep_turns,
+                dropped_msgs=len(dropped),
+                kept_msgs=len(kept),
+            )
         except Exception:
             pass
 
@@ -259,30 +278,46 @@ class GeminiChatSession:
         return result
 
     def discard_pending_user(self) -> None:
-        pass  # Gemini SDK owns history; rollback not supported
+        """Drop a dangling user turn after a cancelled send.
+
+        The Gemini SDK owns history, so this mirrors _maybe_window's approach:
+        read get_history() and rebuild the chat without the trailing user
+        utterance. Best-effort — any SDK-shape mismatch leaves the chat as-is."""
+        try:
+            history = list(self._chat.get_history())
+        except Exception:
+            return
+        if not history or getattr(history[-1], "role", None) != "user":
+            return  # the cancelled send never made it into history
+        new_system = self._base_system
+        if self._summary:
+            new_system = f"{self._base_system}\n\n## Summary of earlier conversation\n{self._summary}"
+        try:
+            self._chat = self._new_chat(new_system, history[:-1])
+        except Exception:
+            return  # keep the existing chat if rebuild fails
 
     def submit_tool_result(self, tool_call: ToolCall, result: dict) -> ChatResponse:
         return self.submit_tool_results([(tool_call, result)])
 
     def submit_tool_results(self, results: list[tuple[ToolCall, dict]]) -> ChatResponse:
-        parts = [
-            self._types.Part.from_function_response(name=tc.name, response=r)
-            for tc, r in results
-        ]
+        parts = [self._types.Part.from_function_response(name=tc.name, response=r) for tc, r in results]
         return self._parse(self._chat.send_message(parts))
 
-    def _parse(self, response) -> ChatResponse:
+    def _parse(self, response: Any) -> ChatResponse:
         texts, tool_calls = [], []
         parts = response.candidates[0].content.parts if response.candidates else []
         for part in parts:
             if part.text:
                 texts.append(part.text)
             if hasattr(part, "function_call") and part.function_call:
-                tool_calls.append(ToolCall(
-                    id=part.function_call.name,
-                    name=part.function_call.name,
-                    args=dict(part.function_call.args),
-                ))
+                tool_calls.append(
+                    ToolCall(
+                        id=part.function_call.name,
+                        name=part.function_call.name,
+                        args=dict(part.function_call.args),
+                    )
+                )
         um = getattr(response, "usage_metadata", None)
         if um:
             _track_usage(
@@ -290,27 +325,33 @@ class GeminiChatSession:
                 getattr(um, "candidates_token_count", 0) or 0,
             )
         finish = getattr(response.candidates[0], "finish_reason", None) if response.candidates else None
-        return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls,
-                            stop_reason=_norm_stop_reason(finish))
+        return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls, stop_reason=_norm_stop_reason(finish))
 
 
-# ── Claude (Anthropic direct) ─────────────────────────────────────────────────
+# ── Anthropic Messages API (direct and Bedrock share everything but the client) ─
 
-class ClaudeChatSession(_WindowedChat):
-    def __init__(self, system: str, tools: list[dict] | None = None,
-                 max_tokens: int = _DEFAULT_MAX_TOKENS):
-        import anthropic
-        self._client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+class _AnthropicMessagesSession(_WindowedChat):
+    """Chat session over Anthropic's Messages API.
+
+    ClaudeChatSession (direct) and BedrockChatSession differ only in how the
+    client is built — message shape, tool schema, windowing and parsing are
+    identical, so they live here once."""
+
+    def __init__(self, system: str, tools: list[dict] | None = None, max_tokens: int = _DEFAULT_MAX_TOKENS):
+        self._client = self._make_client()
         self._max_tokens = max_tokens
         self._base_system = system
         self._keep_turns = _history_keep_turns()
         self._summary = ""
         self._system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
         self._tools = [
-            {"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
-            for t in (tools or [])
+            {"name": t["name"], "description": t["description"], "input_schema": t["parameters"]} for t in (tools or [])
         ]
         self._messages: list[dict] = []
+
+    def _make_client(self) -> Any:
+        raise NotImplementedError
 
     # ── windowing adapters ────────────────────────────────────────────────────
     def _history_messages(self) -> list:
@@ -319,10 +360,10 @@ class ClaudeChatSession(_WindowedChat):
     def _set_history_messages(self, msgs: list) -> None:
         self._messages = msgs
 
-    def _is_user_utterance(self, msg) -> bool:
+    def _is_user_utterance(self, msg: Any) -> bool:
         return msg.get("role") == "user" and isinstance(msg.get("content"), str)
 
-    def _msg_text(self, msg) -> str:
+    def _msg_text(self, msg: Any) -> str:
         return _blocks_text(msg.get("content"))
 
     def _set_summary_in_system(self, summary: str) -> None:
@@ -341,18 +382,23 @@ class ClaudeChatSession(_WindowedChat):
         return self.submit_tool_results([(tool_call, result)])
 
     def submit_tool_results(self, results: list[tuple[ToolCall, dict]]) -> ChatResponse:
-        self._messages.append({
-            "role": "user",
-            "content": [
-                {"type": "tool_result", "tool_use_id": tc.id, "content": json.dumps(r)}
-                for tc, r in results
-            ],
-        })
+        self._messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": tc.id, "content": json.dumps(r)} for tc, r in results
+                ],
+            }
+        )
         return self._call()
 
     def _call(self) -> ChatResponse:
-        kwargs: dict = dict(model=AI_MODEL, system=self._system, messages=self._messages,
-                            max_tokens=self._max_tokens)
+        kwargs: dict = {
+            "model": AI_MODEL,
+            "system": self._system,
+            "messages": self._messages,
+            "max_tokens": self._max_tokens,
+        }
         if self._tools:
             kwargs["tools"] = self._tools
         response = self._client.messages.create(**kwargs)
@@ -365,25 +411,38 @@ class ClaudeChatSession(_WindowedChat):
         self._maybe_window()
         return self._parse(response)
 
-    def _parse(self, response) -> ChatResponse:
+    def _parse(self, response: Any) -> ChatResponse:
         texts, tool_calls = [], []
         for block in response.content:
             if block.type == "text":
                 texts.append(block.text)
             elif block.type == "tool_use":
                 tool_calls.append(ToolCall(id=block.id, name=block.name, args=block.input))
-        return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls,
-                            stop_reason=_norm_stop_reason(getattr(response, "stop_reason", None)))
+        return ChatResponse(
+            text="".join(texts) or None,
+            tool_calls=tool_calls,
+            stop_reason=_norm_stop_reason(getattr(response, "stop_reason", None)),
+        )
+
+
+class ClaudeChatSession(_AnthropicMessagesSession):
+    """Anthropic API directly."""
+
+    def _make_client(self) -> Any:
+        import anthropic
+
+        return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 
 # ── OpenAI-compatible (OpenRouter / Groq / GitHub Models) ────────────────────
 
+
 class OpenAICompatibleChatSession(_WindowedChat):
     """Works with any provider that speaks the OpenAI Chat Completions API."""
 
-    def __init__(self, system: str, tools: list[dict] | None = None,
-                 max_tokens: int = _DEFAULT_MAX_TOKENS):
+    def __init__(self, system: str, tools: list[dict] | None = None, max_tokens: int = _DEFAULT_MAX_TOKENS):
         from openai import OpenAI
+
         base_url = PROVIDER_BASE_URLS[AI_PROVIDER]
         api_key = get_provider_api_key()
         self._client = OpenAI(base_url=base_url, api_key=api_key)
@@ -392,11 +451,14 @@ class OpenAICompatibleChatSession(_WindowedChat):
         self._keep_turns = _history_keep_turns()
         self._summary = ""
         self._tools = [
-            {"type": "function", "function": {
-                "name": t["name"],
-                "description": t["description"],
-                "parameters": t["parameters"],
-            }}
+            {
+                "type": "function",
+                "function": {
+                    "name": t["name"],
+                    "description": t["description"],
+                    "parameters": t["parameters"],
+                },
+            }
             for t in (tools or [])
         ]
         self._messages: list[dict] = [{"role": "system", "content": system}]
@@ -408,10 +470,10 @@ class OpenAICompatibleChatSession(_WindowedChat):
     def _set_history_messages(self, msgs: list) -> None:
         self._messages = self._messages[:1] + msgs
 
-    def _is_user_utterance(self, msg) -> bool:
+    def _is_user_utterance(self, msg: Any) -> bool:
         return msg.get("role") == "user" and isinstance(msg.get("content"), str)
 
-    def _msg_text(self, msg) -> str:
+    def _msg_text(self, msg: Any) -> str:
         return _blocks_text(msg.get("content"))
 
     def _set_summary_in_system(self, summary: str) -> None:
@@ -437,7 +499,7 @@ class OpenAICompatibleChatSession(_WindowedChat):
         return self._call()
 
     def _call(self) -> ChatResponse:
-        kwargs: dict = dict(model=AI_MODEL, messages=self._messages, max_tokens=self._max_tokens)
+        kwargs: dict = {"model": AI_MODEL, "messages": self._messages, "max_tokens": self._max_tokens}
         if self._tools:
             kwargs["tools"] = self._tools
         response = self._client.chat.completions.create(**kwargs)
@@ -449,8 +511,11 @@ class OpenAICompatibleChatSession(_WindowedChat):
             msg_dict["content"] = msg.content
         if msg.tool_calls:
             msg_dict["tool_calls"] = [
-                {"id": tc.id, "type": "function",
-                 "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                }
                 for tc in msg.tool_calls
             ]
         self._messages.append(msg_dict)
@@ -459,23 +524,25 @@ class OpenAICompatibleChatSession(_WindowedChat):
         self._maybe_window()
         return self._parse(msg, getattr(response.choices[0], "finish_reason", None))
 
-    def _parse(self, msg, finish_reason=None) -> ChatResponse:
+    def _parse(self, msg: Any, finish_reason: Any = None) -> ChatResponse:
         texts, tool_calls = [], []
         if msg.content:
             texts.append(msg.content)
-        for tc in (msg.tool_calls or []):
+        for tc in msg.tool_calls or []:
             try:
                 args = json.loads(tc.function.arguments)
             except Exception:
                 args = {}
             tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, args=args))
-        return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls,
-                            stop_reason=_norm_stop_reason(finish_reason))
+        return ChatResponse(
+            text="".join(texts) or None, tool_calls=tool_calls, stop_reason=_norm_stop_reason(finish_reason)
+        )
 
 
 # ── Amazon Bedrock (Claude via Anthropic SDK) ─────────────────────────────────
 
-def _anthropic_bedrock_client():
+
+def _anthropic_bedrock_client() -> Any:
     """Build an AnthropicBedrock client for Claude-on-Bedrock.
 
     Two auth paths:
@@ -485,6 +552,7 @@ def _anthropic_bedrock_client():
       • AWS credentials via boto3 (needs: pip install 'anthropic[bedrock]').
     """
     import anthropic
+
     if AWS_BEARER_TOKEN_BEDROCK:
         # Bearer path: pass only the region + api_key — passing any aws_* arg
         # alongside api_key makes the SDK raise ValueError.
@@ -508,98 +576,28 @@ def _anthropic_bedrock_client():
     except Exception as exc:
         if "botocore" in str(exc) or "boto3" in str(exc):
             raise RuntimeError(
-                'Bedrock with AWS credentials requires the AWS SDK extras.\n'
+                "Bedrock with AWS credentials requires the AWS SDK extras.\n"
                 'Run: pip install "anthropic[bedrock]" — or use a bearer token '
                 "(AWS_BEARER_TOKEN_BEDROCK), which needs no extra install."
             ) from exc
         raise
 
 
-class BedrockChatSession(_WindowedChat):
+class BedrockChatSession(_AnthropicMessagesSession):
     """Claude-on-Bedrock via anthropic.AnthropicBedrock.
 
     Auth: a bearer token (AWS_BEARER_TOKEN_BEDROCK, no boto3 needed) or AWS
     credentials (pip install 'anthropic[bedrock]'). See _anthropic_bedrock_client.
     """
 
-    def __init__(self, system: str, tools: list[dict] | None = None,
-                 max_tokens: int = _DEFAULT_MAX_TOKENS):
-        self._max_tokens = max_tokens
-        self._base_system = system
-        self._keep_turns = _history_keep_turns()
-        self._summary = ""
-        self._client = _anthropic_bedrock_client()
-        self._system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
-        self._tools = [
-            {"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
-            for t in (tools or [])
-        ]
-        self._messages: list[dict] = []
-
-    # ── windowing adapters (same message shape as ClaudeChatSession) ──────────
-    def _history_messages(self) -> list:
-        return self._messages
-
-    def _set_history_messages(self, msgs: list) -> None:
-        self._messages = msgs
-
-    def _is_user_utterance(self, msg) -> bool:
-        return msg.get("role") == "user" and isinstance(msg.get("content"), str)
-
-    def _msg_text(self, msg) -> str:
-        return _blocks_text(msg.get("content"))
-
-    def _set_summary_in_system(self, summary: str) -> None:
-        text = f"{self._base_system}\n\n## Summary of earlier conversation\n{summary}"
-        self._system = [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
-
-    def send(self, user_message: str) -> ChatResponse:
-        self._messages.append({"role": "user", "content": user_message})
-        return self._call()
-
-    def discard_pending_user(self) -> None:
-        if self._messages and self._messages[-1].get("role") != "assistant":
-            self._messages.pop()
-
-    def submit_tool_result(self, tool_call: ToolCall, result: dict) -> ChatResponse:
-        return self.submit_tool_results([(tool_call, result)])
-
-    def submit_tool_results(self, results: list[tuple[ToolCall, dict]]) -> ChatResponse:
-        self._messages.append({
-            "role": "user",
-            "content": [
-                {"type": "tool_result", "tool_use_id": tc.id, "content": json.dumps(r)}
-                for tc, r in results
-            ],
-        })
-        return self._call()
-
-    def _call(self) -> ChatResponse:
-        kwargs: dict = dict(model=AI_MODEL, system=self._system, messages=self._messages,
-                            max_tokens=self._max_tokens)
-        if self._tools:
-            kwargs["tools"] = self._tools
-        response = self._client.messages.create(**kwargs)
-        self._messages.append({"role": "assistant", "content": response.content})
-        _track_usage(
-            response.usage.input_tokens,
-            response.usage.output_tokens,
-            getattr(response.usage, "cache_read_input_tokens", 0) or 0,
-        )
-        self._maybe_window()
-        texts, tool_calls = [], []
-        for block in response.content:
-            if block.type == "text":
-                texts.append(block.text)
-            elif block.type == "tool_use":
-                tool_calls.append(ToolCall(id=block.id, name=block.name, args=block.input))
-        return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls,
-                            stop_reason=_norm_stop_reason(getattr(response, "stop_reason", None)))
+    def _make_client(self) -> Any:
+        return _anthropic_bedrock_client()
 
 
 # ── Amazon Bedrock (non-Claude models via boto3 Converse API) ─────────────────
 
-def _boto3_bedrock_client():
+
+def _boto3_bedrock_client() -> Any:
     """boto3 bedrock-runtime client for non-Claude (Converse) models.
 
     Unlike the Claude path, the Converse API requires boto3/botocore. A bearer
@@ -633,8 +631,7 @@ def _boto3_bedrock_client():
 class BedrockConverseChatSession(_WindowedChat):
     """Non-Claude models on Bedrock (Gemma, Llama, etc.) via boto3 Converse API."""
 
-    def __init__(self, system: str, tools: list[dict] | None = None,
-                 max_tokens: int = _DEFAULT_MAX_TOKENS):
+    def __init__(self, system: str, tools: list[dict] | None = None, max_tokens: int = _DEFAULT_MAX_TOKENS):
         self._client = _boto3_bedrock_client()
         self._max_tokens = max_tokens
         self._base_system = system
@@ -664,16 +661,13 @@ class BedrockConverseChatSession(_WindowedChat):
     def _set_history_messages(self, msgs: list) -> None:
         self._messages = msgs
 
-    def _is_user_utterance(self, msg) -> bool:
+    def _is_user_utterance(self, msg: Any) -> bool:
         content = msg.get("content") or []
-        return msg.get("role") == "user" and not any(
-            isinstance(it, dict) and "toolResult" in it for it in content
-        )
+        return msg.get("role") == "user" and not any(isinstance(it, dict) and "toolResult" in it for it in content)
 
-    def _msg_text(self, msg) -> str:
+    def _msg_text(self, msg: Any) -> str:
         return " ".join(
-            it["text"] for it in (msg.get("content") or [])
-            if isinstance(it, dict) and isinstance(it.get("text"), str)
+            it["text"] for it in (msg.get("content") or []) if isinstance(it, dict) and isinstance(it.get("text"), str)
         )
 
     def _set_summary_in_system(self, summary: str) -> None:
@@ -691,13 +685,14 @@ class BedrockConverseChatSession(_WindowedChat):
         return self.submit_tool_results([(tool_call, result)])
 
     def submit_tool_results(self, results: list[tuple[ToolCall, dict]]) -> ChatResponse:
-        self._messages.append({
-            "role": "user",
-            "content": [
-                {"toolResult": {"toolUseId": tc.id, "content": [{"text": json.dumps(r)}]}}
-                for tc, r in results
-            ],
-        })
+        self._messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {"toolResult": {"toolUseId": tc.id, "content": [{"text": json.dumps(r)}]}} for tc, r in results
+                ],
+            }
+        )
         return self._call()
 
     def _call(self) -> ChatResponse:
@@ -722,8 +717,11 @@ class BedrockConverseChatSession(_WindowedChat):
             elif "toolUse" in item:
                 tu = item["toolUse"]
                 tool_calls.append(ToolCall(id=tu["toolUseId"], name=tu["name"], args=tu["input"]))
-        return ChatResponse(text="".join(texts) or None, tool_calls=tool_calls,
-                            stop_reason=_norm_stop_reason(response.get("stopReason")))
+        return ChatResponse(
+            text="".join(texts) or None,
+            tool_calls=tool_calls,
+            stop_reason=_norm_stop_reason(response.get("stopReason")),
+        )
 
 
 # ── factory + one-shot streaming ──────────────────────────────────────────────
@@ -746,14 +744,10 @@ def _ensure_known_provider() -> None:
     """Fail loudly on an unknown AI_PROVIDER instead of silently using Gemini."""
     if AI_PROVIDER not in KNOWN_PROVIDERS:
         valid = ", ".join(sorted(KNOWN_PROVIDERS))
-        raise RuntimeError(
-            f"Unknown AI_PROVIDER '{AI_PROVIDER}'. Set AI_PROVIDER in your .env to "
-            f"one of: {valid}."
-        )
+        raise RuntimeError(f"Unknown AI_PROVIDER '{AI_PROVIDER}'. Set AI_PROVIDER in your .env to one of: {valid}.")
 
 
-def create_chat_session(system: str, tools: list[dict] | None = None,
-                        max_tokens: int = _DEFAULT_MAX_TOKENS):
+def create_chat_session(system: str, tools: list[dict] | None = None, max_tokens: int = _DEFAULT_MAX_TOKENS) -> Any:
     _ensure_known_provider()
     if AI_PROVIDER == "claude":
         return ClaudeChatSession(system=system, tools=tools, max_tokens=max_tokens)
@@ -766,30 +760,64 @@ def create_chat_session(system: str, tools: list[dict] | None = None,
     return GeminiChatSession(system=system, tools=tools, max_tokens=max_tokens)
 
 
+def _anthropic_direct_client() -> Any:
+    import anthropic
+
+    return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+
+def _cached_system_block(system: str) -> Any:
+    return [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+
+
+def _anthropic_stream(client: Any, prompt: str, system: str, max_tokens: int) -> Iterator[str]:
+    """One-shot streaming over the Anthropic Messages API (direct or Bedrock)."""
+    with client.messages.stream(
+        model=AI_MODEL,
+        system=_cached_system_block(system),
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=max_tokens,
+    ) as stream:
+        yield from stream.text_stream
+        final = stream.get_final_message()
+        _track_usage(
+            final.usage.input_tokens,
+            final.usage.output_tokens,
+            getattr(final.usage, "cache_read_input_tokens", 0) or 0,
+        )
+
+
+def _anthropic_complete_json(client: Any, prompt: str, system: str, max_tokens: int) -> dict:
+    """One-shot JSON completion via an assistant '{' prefill (no native JSON mode)."""
+    response = client.messages.create(
+        model=AI_MODEL,
+        system=_cached_system_block(system),
+        messages=[
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": "{"},
+        ],
+        max_tokens=max_tokens,
+    )
+    _track_usage(
+        response.usage.input_tokens,
+        response.usage.output_tokens,
+        getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+    )
+    text = "".join(b.text for b in response.content if b.type == "text")
+    return _loads_lenient("{" + text)
+
+
 def stream_complete(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOKENS) -> Iterator[str]:
     """One-shot streaming completion with no session state or tool calls."""
     _ensure_known_provider()
     if AI_PROVIDER == "claude":
-        import anthropic
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        cached_system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
-        with client.messages.stream(
-            model=AI_MODEL, system=cached_system,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-        ) as stream:
-            yield from stream.text_stream
-            final = stream.get_final_message()
-            _track_usage(
-                final.usage.input_tokens,
-                final.usage.output_tokens,
-                getattr(final.usage, "cache_read_input_tokens", 0) or 0,
-            )
+        yield from _anthropic_stream(_anthropic_direct_client(), prompt, system, max_tokens)
 
     elif AI_PROVIDER in _OPENAI_COMPAT:
         from openai import OpenAI
-        client = OpenAI(base_url=PROVIDER_BASE_URLS[AI_PROVIDER], api_key=get_provider_api_key())
-        stream = client.chat.completions.create(
+
+        oa_client = OpenAI(base_url=PROVIDER_BASE_URLS[AI_PROVIDER], api_key=get_provider_api_key())
+        oa_stream = oa_client.chat.completions.create(
             model=AI_MODEL,
             messages=[
                 {"role": "system", "content": system},
@@ -798,26 +826,13 @@ def stream_complete(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOK
             max_tokens=max_tokens,
             stream=True,
         )
-        for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+        for oa_chunk in oa_stream:
+            if oa_chunk.choices and oa_chunk.choices[0].delta.content:
+                yield oa_chunk.choices[0].delta.content
 
     elif AI_PROVIDER == "bedrock":
         if _is_bedrock_claude_model():
-            client = _anthropic_bedrock_client()
-            cached_system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
-            with client.messages.stream(
-                model=AI_MODEL, system=cached_system,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=max_tokens,
-            ) as stream:
-                yield from stream.text_stream
-                final = stream.get_final_message()
-                _track_usage(
-                    final.usage.input_tokens,
-                    final.usage.output_tokens,
-                    getattr(final.usage, "cache_read_input_tokens", 0) or 0,
-                )
+            yield from _anthropic_stream(_anthropic_bedrock_client(), prompt, system, max_tokens)
         else:
             client = _boto3_bedrock_client()
             response = client.converse_stream(
@@ -835,13 +850,15 @@ def stream_complete(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOK
     else:
         from google import genai
         from google.genai import types
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        for chunk in client.models.generate_content_stream(
-            model=AI_MODEL, contents=prompt,
+
+        genai_client = genai.Client(api_key=GEMINI_API_KEY)
+        for g_chunk in genai_client.models.generate_content_stream(
+            model=AI_MODEL,
+            contents=prompt,
             config=types.GenerateContentConfig(system_instruction=system, temperature=0.4),
         ):
-            if chunk.text:
-                yield chunk.text
+            if g_chunk.text:
+                yield g_chunk.text
 
 
 def _loads_lenient(raw: str) -> dict:
@@ -861,29 +878,13 @@ def complete_json(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOKEN
     """
     _ensure_known_provider()
     if AI_PROVIDER == "claude":
-        import anthropic
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        cached_system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
-        response = client.messages.create(
-            model=AI_MODEL, system=cached_system,
-            messages=[
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": "{"},
-            ],
-            max_tokens=max_tokens,
-        )
-        _track_usage(
-            response.usage.input_tokens,
-            response.usage.output_tokens,
-            getattr(response.usage, "cache_read_input_tokens", 0) or 0,
-        )
-        text = "".join(b.text for b in response.content if getattr(b, "type", None) == "text")
-        return _loads_lenient("{" + text)
+        return _anthropic_complete_json(_anthropic_direct_client(), prompt, system, max_tokens)
 
     if AI_PROVIDER in _OPENAI_COMPAT:
         from openai import OpenAI
-        client = OpenAI(base_url=PROVIDER_BASE_URLS[AI_PROVIDER], api_key=get_provider_api_key())
-        response = client.chat.completions.create(
+
+        oa_client = OpenAI(base_url=PROVIDER_BASE_URLS[AI_PROVIDER], api_key=get_provider_api_key())
+        oa_response = oa_client.chat.completions.create(
             model=AI_MODEL,
             messages=[
                 {"role": "system", "content": system},
@@ -892,29 +893,13 @@ def complete_json(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOKEN
             max_tokens=max_tokens,
             response_format={"type": "json_object"},
         )
-        if response.usage:
-            _track_usage(response.usage.prompt_tokens, response.usage.completion_tokens)
-        return _loads_lenient(response.choices[0].message.content or "")
+        if oa_response.usage:
+            _track_usage(oa_response.usage.prompt_tokens, oa_response.usage.completion_tokens)
+        return _loads_lenient(oa_response.choices[0].message.content or "")
 
     if AI_PROVIDER == "bedrock":
         if _is_bedrock_claude_model():
-            client = _anthropic_bedrock_client()
-            cached_system = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
-            response = client.messages.create(
-                model=AI_MODEL, system=cached_system,
-                messages=[
-                    {"role": "user", "content": prompt},
-                    {"role": "assistant", "content": "{"},
-                ],
-                max_tokens=max_tokens,
-            )
-            _track_usage(
-                response.usage.input_tokens,
-                response.usage.output_tokens,
-                getattr(response.usage, "cache_read_input_tokens", 0) or 0,
-            )
-            text = "".join(b.text for b in response.content if getattr(b, "type", None) == "text")
-            return _loads_lenient("{" + text)
+            return _anthropic_complete_json(_anthropic_bedrock_client(), prompt, system, max_tokens)
 
         client = _boto3_bedrock_client()
         response = client.converse(
@@ -934,32 +919,34 @@ def complete_json(prompt: str, system: str, max_tokens: int = _DEFAULT_MAX_TOKEN
 
     from google import genai
     from google.genai import types
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    response = client.models.generate_content(
-        model=AI_MODEL, contents=prompt,
+
+    genai_client = genai.Client(api_key=GEMINI_API_KEY)
+    g_response = genai_client.models.generate_content(
+        model=AI_MODEL,
+        contents=prompt,
         config=types.GenerateContentConfig(
             system_instruction=system,
             temperature=0.4,
             response_mime_type="application/json",
         ),
     )
-    um = getattr(response, "usage_metadata", None)
+    um = getattr(g_response, "usage_metadata", None)
     if um:
         _track_usage(
             getattr(um, "prompt_token_count", 0) or 0,
             getattr(um, "candidates_token_count", 0) or 0,
         )
-    return _loads_lenient(response.text or "")
+    return _loads_lenient(g_response.text or "")
 
 
 def provider_label() -> str:
     labels = {
         "openrouter": "OpenRouter",
-        "groq":       "Groq",
-        "github":     "GitHub Models",
-        "bedrock":    "Amazon Bedrock",
-        "claude":     "Claude",
-        "gemini":     "Gemini",
+        "groq": "Groq",
+        "github": "GitHub Models",
+        "bedrock": "Amazon Bedrock",
+        "claude": "Claude",
+        "gemini": "Gemini",
     }
     name = labels.get(AI_PROVIDER, AI_PROVIDER.capitalize())
     return f"{name} ({AI_MODEL})"

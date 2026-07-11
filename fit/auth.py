@@ -1,7 +1,8 @@
 """Google OAuth flow for the Fitness API."""
+
 import os
-import stat
 from pathlib import Path
+from typing import Any
 
 import config
 import paths
@@ -28,23 +29,36 @@ def _token_file() -> Path:
     return config.DB_PATH.parent / "fit_token.json"
 
 
-def _write_token(creds) -> None:
+_REFRESH_TIMEOUT_S = 20
+
+
+def refresh_transport() -> Any:
+    """google-auth HTTP transport with a real timeout applied to every call.
+
+    Setting `Session.timeout` does nothing in requests — the timeout must be
+    passed per request, which `google.auth.transport.requests.Request.__call__`
+    accepts as a keyword."""
+    import functools
+
+    from google.auth.transport.requests import Request
+
+    return functools.partial(Request(), timeout=_REFRESH_TIMEOUT_S)
+
+
+def _write_token(creds: Any) -> None:
     tf = _token_file()
     try:
         tf.write_text(creds.to_json())
         tf.chmod(0o600)
     except OSError as e:
         raise RuntimeError(
-            f"Could not save the Google Fit token at {tf}: {e}\n"
-            "Check disk space and file permissions."
+            f"Could not save the Google Fit token at {tf}: {e}\nCheck disk space and file permissions."
         ) from e
 
 
-def get_credentials():
+def get_credentials() -> Any:
     """Return valid Google credentials, running the OAuth flow if needed."""
-    import requests as _requests
     from google.oauth2.credentials import Credentials
-    from google.auth.transport.requests import Request
 
     tf = _token_file()
     creds = None
@@ -53,9 +67,7 @@ def get_credentials():
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            _session = _requests.Session()
-            _session.timeout = 20
-            creds.refresh(Request(session=_session))
+            creds.refresh(refresh_transport())
         else:
             creds_file = credentials_file()
             if not creds_file.exists():
@@ -64,6 +76,7 @@ def get_credentials():
                     "Follow the setup instructions in the menu to create one."
                 )
             from google_auth_oauthlib.flow import InstalledAppFlow
+
             flow = InstalledAppFlow.from_client_secrets_file(str(creds_file), SCOPES)
             creds = flow.run_local_server(port=0, open_browser=True)
 
@@ -79,6 +92,7 @@ def is_connected() -> bool:
         return False
     try:
         from google.oauth2.credentials import Credentials
+
         creds = Credentials.from_authorized_user_file(str(tf), SCOPES)
         return creds is not None and (creds.valid or bool(creds.refresh_token))
     except Exception:

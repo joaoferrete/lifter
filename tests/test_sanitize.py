@@ -1,5 +1,6 @@
 """Tests for prompt injection prevention."""
-from ai.sanitize import sanitize_for_prompt, ANTI_INJECTION_PREAMBLE
+
+from ai.sanitize import ANTI_INJECTION_PREAMBLE, sanitize_for_prompt
 
 
 def test_passthrough_normal_text():

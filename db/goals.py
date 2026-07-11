@@ -1,26 +1,31 @@
 """User goals and preferences management."""
+
 import calendar
-from datetime import date, datetime, timezone
+import sqlite3
+from datetime import UTC, date, datetime
 
 from db.store import connect as _conn
+from db.store import transaction as _tx
 
 
 def _invalidate_render_cache() -> None:
     """Drop memoized render data after a goal mutation (see render_cache)."""
     from render_cache import invalidate
+
     invalidate()
 
 
 # ── preferences ───────────────────────────────────────────────────────────────
 
+
 def get_pref(key: str) -> str | None:
-    with _conn() as conn:
+    with _tx(_conn()) as conn:
         row = conn.execute("SELECT value FROM user_preferences WHERE key = ?", (key,)).fetchone()
         return row["value"] if row else None
 
 
 def set_pref(key: str, value: str) -> None:
-    with _conn() as conn:
+    with _tx(_conn()) as conn:
         conn.execute(
             "INSERT INTO user_preferences (key, value, updated_at) VALUES (?, ?, datetime('now'))"
             " ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
@@ -70,17 +75,15 @@ def _current_period_start(reset_day: int, today: date) -> date:
     return date(year, month, prev_day)
 
 
-def _maybe_rollover_month(conn) -> None:
+def _maybe_rollover_month(conn: sqlite3.Connection) -> None:
     """Wipe the month counters if we've crossed into a new period since last seen.
 
     Operates on an already-open connection. Never raises on logging failure."""
     reset_day = get_token_reset_day()
-    today = datetime.now(timezone.utc).astimezone().date()
+    today = datetime.now(UTC).astimezone().date()
     period_start = _current_period_start(reset_day, today).isoformat()
 
-    row = conn.execute(
-        "SELECT value FROM user_preferences WHERE key = ?", (_PERIOD_START_KEY,)
-    ).fetchone()
+    row = conn.execute("SELECT value FROM user_preferences WHERE key = ?", (_PERIOD_START_KEY,)).fetchone()
     stored = row["value"] if row else None
 
     if stored == period_start:
@@ -89,8 +92,14 @@ def _maybe_rollover_month(conn) -> None:
     if stored is not None:
         try:
             from debug_log import log
-            log("TOKENS", "monthly counters rolled over",
-                old_period=stored, new_period=period_start, reset_day=reset_day)
+
+            log(
+                "TOKENS",
+                "monthly counters rolled over",
+                old_period=stored,
+                new_period=period_start,
+                reset_day=reset_day,
+            )
         except Exception:
             pass
         conn.execute(
@@ -107,21 +116,21 @@ def _maybe_rollover_month(conn) -> None:
 
 def maybe_rollover_tokens() -> None:
     """Public entry point — run the monthly rollover check (e.g. at app startup)."""
-    with _conn() as conn:
+    with _tx(_conn()) as conn:
         _maybe_rollover_month(conn)
 
 
 def add_token_usage(input_tokens: int = 0, output_tokens: int = 0, cache_read_tokens: int = 0) -> None:
     """Atomically increment both the lifetime and current-month token counters."""
     pairs = [
-        ("ai_tokens_input",            input_tokens),
-        ("ai_tokens_output",           output_tokens),
-        ("ai_tokens_cache_read",       cache_read_tokens),
-        ("ai_tokens_month_input",      input_tokens),
-        ("ai_tokens_month_output",     output_tokens),
+        ("ai_tokens_input", input_tokens),
+        ("ai_tokens_output", output_tokens),
+        ("ai_tokens_cache_read", cache_read_tokens),
+        ("ai_tokens_month_input", input_tokens),
+        ("ai_tokens_month_output", output_tokens),
         ("ai_tokens_month_cache_read", cache_read_tokens),
     ]
-    with _conn() as conn:
+    with _tx(_conn()) as conn:
         _maybe_rollover_month(conn)
         for key, val in pairs:
             if val:
@@ -135,7 +144,7 @@ def add_token_usage(input_tokens: int = 0, output_tokens: int = 0, cache_read_to
                 )
 
 
-def _read_counters(conn, keys) -> dict:
+def _read_counters(conn: sqlite3.Connection, keys: tuple[str, ...]) -> dict[str, int]:
     rows = {
         r["key"]: int(r["value"] or 0)
         for r in conn.execute(
@@ -148,31 +157,31 @@ def _read_counters(conn, keys) -> dict:
 
 def get_token_usage() -> dict:
     """Return lifetime token usage counters as {input, output, cache_read}."""
-    with _conn() as conn:
+    with _tx(_conn()) as conn:
         _maybe_rollover_month(conn)
         rows = _read_counters(conn, _TOKEN_KEYS)
     return {
-        "input":      rows.get("ai_tokens_input", 0),
-        "output":     rows.get("ai_tokens_output", 0),
+        "input": rows.get("ai_tokens_input", 0),
+        "output": rows.get("ai_tokens_output", 0),
         "cache_read": rows.get("ai_tokens_cache_read", 0),
     }
 
 
 def get_token_usage_month() -> dict:
     """Return current-month token usage counters as {input, output, cache_read}."""
-    with _conn() as conn:
+    with _tx(_conn()) as conn:
         _maybe_rollover_month(conn)
         rows = _read_counters(conn, _TOKEN_MONTH_KEYS)
     return {
-        "input":      rows.get("ai_tokens_month_input", 0),
-        "output":     rows.get("ai_tokens_month_output", 0),
+        "input": rows.get("ai_tokens_month_input", 0),
+        "output": rows.get("ai_tokens_month_output", 0),
         "cache_read": rows.get("ai_tokens_month_cache_read", 0),
     }
 
 
 def reset_token_usage() -> None:
     """Zero out both the lifetime and current-month counters."""
-    with _conn() as conn:
+    with _tx(_conn()) as conn:
         conn.execute(
             "DELETE FROM user_preferences WHERE key IN (?,?,?,?,?,?)",
             _TOKEN_KEYS + _TOKEN_MONTH_KEYS,
@@ -211,6 +220,7 @@ def token_budget_status() -> dict | None:
 
 # ── goals CRUD ────────────────────────────────────────────────────────────────
 
+
 def save_goal(
     type: str,
     description: str,
@@ -221,43 +231,38 @@ def save_goal(
     muscle_group: str | None = None,
     start_value: float | None = None,
 ) -> None:
-    with _conn() as conn:
+    with _tx(_conn()) as conn:
         conn.execute(
             """INSERT INTO user_goals
                (type, description, target, unit, exercise_template_id,
                 exercise_name, muscle_group, start_value, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
-            (type, description, target, unit, exercise_template_id,
-             exercise_name, muscle_group, start_value),
+            (type, description, target, unit, exercise_template_id, exercise_name, muscle_group, start_value),
         )
     _invalidate_render_cache()
 
 
 def get_goals() -> list[dict]:
-    with _conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM user_goals WHERE achieved_at IS NULL ORDER BY id"
-        ).fetchall()
+    with _tx(_conn()) as conn:
+        rows = conn.execute("SELECT * FROM user_goals WHERE achieved_at IS NULL ORDER BY id").fetchall()
         return [dict(r) for r in rows]
 
 
 def get_all_goals() -> list[dict]:
-    with _conn() as conn:
+    with _tx(_conn()) as conn:
         rows = conn.execute("SELECT * FROM user_goals ORDER BY id DESC").fetchall()
         return [dict(r) for r in rows]
 
 
 def clear_goals() -> None:
-    with _conn() as conn:
+    with _tx(_conn()) as conn:
         conn.execute("DELETE FROM user_goals")
     _invalidate_render_cache()
 
 
 def mark_goal_achieved(goal_id: int) -> None:
-    with _conn() as conn:
-        conn.execute(
-            "UPDATE user_goals SET achieved_at = datetime('now') WHERE id = ?", (goal_id,)
-        )
+    with _tx(_conn()) as conn:
+        conn.execute("UPDATE user_goals SET achieved_at = datetime('now') WHERE id = ?", (goal_id,))
 
 
 def get_uncelebrated_achievements() -> list[dict]:
@@ -268,7 +273,7 @@ def get_uncelebrated_achievements() -> list[dict]:
     if last:
         sql += " AND achieved_at > ?"
         params = (last,)
-    with _conn() as conn:
+    with _tx(_conn()) as conn:
         rows = conn.execute(sql + " ORDER BY achieved_at", params).fetchall()
     return [dict(r) for r in rows]
 
@@ -281,14 +286,14 @@ def mark_achievements_celebrated() -> None:
     Python's ISO "T" separator, and mixing them breaks the lexicographic
     comparison in get_uncelebrated_achievements.
     """
-    with _conn() as conn:
+    with _tx(_conn()) as conn:
         row = conn.execute("SELECT MAX(achieved_at) AS m FROM user_goals").fetchone()
     if row and row["m"]:
         set_pref("goals_celebrated_at", row["m"])
 
 
 def delete_goal(goal_id: int) -> None:
-    with _conn() as conn:
+    with _tx(_conn()) as conn:
         conn.execute("DELETE FROM user_goals WHERE id = ?", (goal_id,))
     _invalidate_render_cache()
 
@@ -300,7 +305,7 @@ def update_goal_fields(
     unit: str | None = None,
     start_value: float | None = None,
 ) -> None:
-    with _conn() as conn:
+    with _tx(_conn()) as conn:
         if description is not None:
             conn.execute("UPDATE user_goals SET description = ? WHERE id = ?", (description, goal_id))
         if target is not None:
@@ -314,6 +319,7 @@ def update_goal_fields(
 
 # ── goals check-in timing ─────────────────────────────────────────────────────
 
+
 def should_ask_goals() -> bool:
     """True on first run or when more than N days have passed since last goals check-in."""
     last = get_pref("goals_last_asked")
@@ -322,16 +328,17 @@ def should_ask_goals() -> bool:
     try:
         days = int(get_pref("goals_checkin_days") or 7)
         dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
-        return (datetime.now(timezone.utc) - dt).days >= days
+        return (datetime.now(UTC) - dt).days >= days
     except Exception:
         return True
 
 
 def mark_goals_asked() -> None:
-    set_pref("goals_last_asked", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    set_pref("goals_last_asked", datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
 # ── auto coaching report timing ───────────────────────────────────────────────
+
 
 def should_auto_report() -> bool:
     """True when the 7-day auto coaching report is due (and not disabled)."""
@@ -342,160 +349,22 @@ def should_auto_report() -> bool:
         return True
     try:
         dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
-        return (datetime.now(timezone.utc) - dt).days >= 7
+        return (datetime.now(UTC) - dt).days >= 7
     except Exception:
         return True
 
 
 def mark_report_generated() -> None:
-    set_pref("report_last_generated", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    set_pref("report_last_generated", datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
-# ── progress computation ──────────────────────────────────────────────────────
-
-def compute_goal_progress() -> list[dict]:
-    """Compute current progress for every active goal. Marks achieved goals.
-
-    Memoized per active DB (invalidated on goal edits and sync) — this runs on
-    every menu/snapshot render and each goal triggers analytics queries."""
-    from render_cache import cached
-    return cached("goal_progress", _compute_goal_progress)
+# ── typed preference accessors ────────────────────────────────────────────────
 
 
-def _compute_goal_progress() -> list[dict]:
-    from db.store import query
-
-    goals = get_goals()
-    if not goals:
-        return []
-
-    results = []
-    newly_achieved: list[int] = []
-
-    for goal in goals:
-        result: dict = {
-            "id": goal["id"],
-            "type": goal["type"],
-            "description": goal["description"],
-            "target": goal["target"],
-            "unit": goal["unit"] or "",
-            "current": None,
-            "pct": 0.0,
-            "achieved": False,
-            "exercise_name": goal.get("exercise_name"),
-        }
-
-        try:
-            if goal["type"] == "lift_pr":
-                rows = query(
-                    """SELECT MAX(ws.weight_kg * (1 + ws.reps / 30.0)) as e1rm
-                       FROM workout_sets ws
-                       WHERE ws.exercise_template_id = ?
-                         AND ws.type = 'normal'
-                         AND ws.weight_kg IS NOT NULL AND ws.reps IS NOT NULL""",
-                    (goal["exercise_template_id"],),
-                )
-                current = float(rows[0]["e1rm"] or 0) if rows else 0.0
-                target = goal["target"] or 1.0
-                result["current"] = round(current, 1)
-                result["pct"] = min(current / target * 100, 100)
-                result["achieved"] = current >= target
-
-            elif goal["type"] == "frequency":
-                from analytics.frequency import workout_frequency
-                current = float(workout_frequency(4)["avg_per_week"])
-                target = goal["target"] or 1.0
-                result["current"] = round(current, 1)
-                result["pct"] = min(current / target * 100, 100)
-                result["achieved"] = current >= target
-
-            elif goal["type"] in ("weight_loss", "weight_gain"):
-                rows = query(
-                    "SELECT weight_kg FROM body_measurements WHERE weight_kg IS NOT NULL ORDER BY date DESC LIMIT 1"
-                )
-                if rows:
-                    current = float(rows[0]["weight_kg"])
-                    target = goal["target"] or current
-                    # Capture the baseline once if it was never stored (e.g. AI-created
-                    # goals), so progress isn't stuck at 0 with start == current forever.
-                    if goal["start_value"] is None:
-                        update_goal_fields(goal["id"], start_value=current)
-                        start = current
-                    else:
-                        start = float(goal["start_value"])
-                    result["current"] = current
-                    result["start"] = start
-                    # Compute even when the athlete moved the wrong way, so progress can
-                    # go negative (no max(0, ...) floor). Only cap the top at 100%.
-                    if start != target:
-                        if goal["type"] == "weight_loss":
-                            result["pct"] = min((start - current) / (start - target) * 100, 100)
-                            result["achieved"] = current <= target
-                        else:  # weight_gain
-                            result["pct"] = min((current - start) / (target - start) * 100, 100)
-                            result["achieved"] = current >= target
-
-            elif goal["type"] == "body_fat":
-                rows = query(
-                    "SELECT fat_percent FROM body_measurements WHERE fat_percent IS NOT NULL ORDER BY date DESC LIMIT 1"
-                )
-                if rows:
-                    current = float(rows[0]["fat_percent"])
-                    target = goal["target"] or current
-                    if goal["start_value"] is None:
-                        update_goal_fields(goal["id"], start_value=current)
-                        start = current
-                    else:
-                        start = float(goal["start_value"])
-                    result["current"] = current
-                    result["start"] = start
-                    if start != target:
-                        result["pct"] = min((start - current) / (start - target) * 100, 100)
-                        result["achieved"] = current <= target
-
-            elif goal["type"] == "volume":
-                from analytics.volume import sets_per_muscle_per_week
-                current = float(sets_per_muscle_per_week(4).get(goal["muscle_group"] or "", 0))
-                target = goal["target"] or 1.0
-                result["current"] = round(current, 1)
-                result["pct"] = min(current / target * 100, 100)
-                result["achieved"] = current >= target
-
-            elif goal["type"] == "custom":
-                result["pct"] = None  # no numeric progress; shown as text only
-
-        except Exception:
-            pass
-
-        if result["achieved"]:
-            newly_achieved.append(goal["id"])
-
-        results.append(result)
-
-    for gid in newly_achieved:
-        mark_goal_achieved(gid)
-
-    return results
-
-
-def goals_context_for_ai(weeks: int = 8) -> str:
-    """Return a text summary of goals + current progress for the AI system prompt."""
-    goals = get_goals()
-    if not goals:
-        return "No goals set."
-
-    progress = compute_goal_progress()
-    prog_by_id = {p["id"]: p for p in progress}
-
-    from ai.sanitize import sanitize_for_prompt
-    lines = ["## User goals"]
-    for g in goals:
-        p = prog_by_id.get(g["id"], {})
-        current = p.get("current")
-        pct = p.get("pct")
-        pct_str = f" ({pct:.0f}%)" if pct is not None else ""
-        current_str = f" — current: {current} {g.get('unit') or ''}" if current is not None else ""
-        safe_desc = sanitize_for_prompt(g["description"], max_len=150)
-        lines.append(f"  - {safe_desc}{current_str}{pct_str}")
-
-    return "\n".join(lines)
+def get_height_cm() -> float | None:
+    """The athlete's height in cm, stored per-profile in preferences."""
+    raw = get_pref("height_cm")
+    try:
+        return float(raw) if raw else None
+    except (TypeError, ValueError):
+        return None

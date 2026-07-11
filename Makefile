@@ -1,9 +1,12 @@
-.PHONY: install uninstall dev build check-dist publish-test clean-dist help
+.PHONY: install uninstall dev lint typecheck test build check-dist publish-test clean-dist help
 
 help:
 	@echo "install       Install lifter system-wide from this checkout (editable)"
 	@echo "uninstall     Remove the lifter command"
 	@echo "dev           Install with dev dependencies"
+	@echo "lint          Run ruff check + format check"
+	@echo "typecheck     Run mypy"
+	@echo "test          Run the test suite"
 	@echo "build         Build sdist + wheel into dist/"
 	@echo "check-dist    Build and verify the distributions (locales present, twine check)"
 	@echo "publish-test  Upload dist/ to TestPyPI (manual fallback; CI uses Trusted Publishing)"
@@ -16,7 +19,17 @@ uninstall:
 	pipx uninstall lifter-cli
 
 dev:
-	.venv/bin/pip install -r requirements-dev.txt
+	.venv/bin/pip install -e '.[dev]'
+
+lint:
+	.venv/bin/ruff check .
+	.venv/bin/ruff format --check .
+
+typecheck:
+	.venv/bin/mypy .
+
+test:
+	.venv/bin/pytest
 
 clean-dist:
 	rm -rf dist build *.egg-info

@@ -1,7 +1,2 @@
--r requirements.txt
-pytest>=8.0
-pytest-cov>=5.0
-ruff>=0.4
-pip-audit>=2.7
-build>=1.2
-twine>=5.0
+# Dev dependencies are declared in pyproject.toml under [project.optional-dependencies].
+-e .[dev]

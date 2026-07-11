@@ -114,7 +114,7 @@ source .venv/bin/activate   # on Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Activate the venv with `source .venv/bin/activate` each time you open a new terminal before running `python3 cli.py`. To deactivate, run `deactivate`.
+Activate the venv with `source .venv/bin/activate` each time you open a new terminal before running `python3 cli.py` (or install the global `lifter` command with `make install`). To deactivate, run `deactivate`.
 
 ### 2. Configure your AI provider key
 
@@ -230,7 +230,7 @@ AWS_REGION=us-east-1
 ### 5. Run the initial sync
 
 ```bash
-python3 cli.py
+lifter               # from a source checkout without `make install`: python3 cli.py
 ```
 
 The interactive menu opens. Select **Sync new workouts → Full** to download your entire Hevy history.
@@ -249,11 +249,10 @@ Data location is identical either way — user folders, not the project dir (see
 
 ### Update
 
-After pulling new changes:
-
-```bash
-pipx reinstall lifter-cli
-```
+`make install` uses an **editable** install, so after pulling new changes the
+`lifter` command already runs the updated code. Re-run `make install` only if
+dependencies changed. (PyPI installs update with `pipx upgrade lifter-cli` —
+see [Install](#install).)
 
 ### Uninstall
 
@@ -347,7 +346,7 @@ Samsung Health syncs to Google Fit by default on Android. Enable it in the Samsu
 
 ## Menu reference
 
-Run `python3 cli.py` to open the interactive menu.
+Run `lifter` to open the interactive menu.
 
 ```
   Sync new workouts
@@ -541,7 +540,7 @@ Everything here operates on the local per-profile data — nothing on Hevy or Go
 
 | Option | Description |
 |---|---|
-| **Export data** | JSON dumps to `profiles/{slug}/exports/` — coach insights, goals + token usage, body measurements, or a full database dump (all tables) |
+| **Export data** | JSON dumps to `~/.local/share/lifter/profiles/{slug}/exports/` — coach insights, goals + token usage, body measurements, or a full database dump (all tables) |
 | **Import data** | Restore a previous export: pick a file from `exports/` or type a path, review the preview (rows per table), confirm. Replaces the dumped tables atomically — any error rolls everything back |
 | **Preview AI context** | Writes the exact `<training_data>` block the chat sends to the AI provider to a `.md` file — fully local, no API call. Respects the privacy toggles |
 | **Database info** | Row counts per table, DB path and size |
@@ -564,17 +563,20 @@ Tip: run **Export data → Full database dump** before a reset — you can bring
 You can also reset individual pieces manually (replace `{slug}` with your profile slug, e.g. `default`):
 
 ```bash
+# Profile data lives under the XDG data dir (see "Where Lifter stores data")
+PROFILE=~/.local/share/lifter/profiles/{slug}
+
 # Delete the local database for a profile
-rm profiles/{slug}/hevy.db
+rm "$PROFILE"/hevy.db
 
 # Disconnect Google Fit for a profile (keeps DB data)
-rm profiles/{slug}/fit_token.json
+rm "$PROFILE"/fit_token.json
 
 # Force the next sync to re-download everything
-sqlite3 profiles/{slug}/hevy.db "UPDATE sync_state SET value='1970-01-01T00:00:00Z' WHERE key='last_sync';"
+sqlite3 "$PROFILE"/hevy.db "UPDATE sync_state SET value='1970-01-01T00:00:00Z' WHERE key='last_sync';"
 
 # Clear only coach memories
-sqlite3 profiles/{slug}/hevy.db "DELETE FROM chat_memories;"
+sqlite3 "$PROFILE"/hevy.db "DELETE FROM chat_memories;"
 ```
 
 ---
@@ -625,9 +627,13 @@ AWS_SESSION_TOKEN=        # optional, for temporary credentials
 
 # Google Fit
 GOOGLE_CREDENTIALS_FILE=fit_credentials.json   # path to downloaded OAuth JSON
+
+# Optional directory overrides (shared across profiles)
+# EXPORT_DIR=/home/you/lifter-exports   # where "Export data" writes (default: exports/ next to the profile DB)
+# LOGS_DIR=/home/you/lifter-logs        # where debug logs go (default: ~/.local/state/lifter/logs)
 ```
 
-### Per-profile config (`profiles/{slug}/profile.json`)
+### Per-profile config (`~/.local/share/lifter/profiles/{slug}/profile.json`)
 
 Each profile stores its own settings that are set through the in-app menus:
 
@@ -637,7 +643,7 @@ Each profile stores its own settings that are set through the in-app menus:
 | `slug` | URL-safe identifier used as the directory name |
 | `hevy_api_key` | API key for this profile's Hevy account |
 
-Profile databases live at `profiles/{slug}/hevy.db` and Google Fit tokens at `profiles/{slug}/fit_token.json`.
+Profile databases live at `~/.local/share/lifter/profiles/{slug}/hevy.db` and Google Fit tokens at `~/.local/share/lifter/profiles/{slug}/fit_token.json`.
 
 All in-app preferences are stored in the `user_preferences` table in each profile's database, not in `.env`. Notable keys: `units`, `auto_sync`, `sync_stale_hours`, `goals_checkin_days`, `default_stats_weeks`, `report_weeks`, `ui_language`, `ai_provider` / `ai_model` (per-profile override of `.env`), `ai_send_name` / `ai_send_body` (privacy), `ai_tokens_month_budget`, `memories_max`, `debug_logging`.
 

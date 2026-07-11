@@ -1,4 +1,5 @@
 """Tests for the one-time legacy-layout migration (paths.migrate_legacy_layout)."""
+
 import os
 import stat
 
@@ -73,7 +74,7 @@ def test_nothing_to_migrate(sandbox):
 
 
 def test_existing_destination_is_never_overwritten(sandbox):
-    legacy, home = sandbox
+    legacy, _home = sandbox
     (legacy / "profiles.json").write_text("OLD")
     paths.PROFILES_FILE.parent.mkdir(parents=True)
     paths.PROFILES_FILE.write_text("NEW")
@@ -86,7 +87,7 @@ def test_existing_destination_is_never_overwritten(sandbox):
 
 
 def test_secret_files_end_up_0600(sandbox):
-    legacy, home = sandbox
+    legacy, _home = sandbox
     (legacy / ".env").write_text("KEY=v\n")
     os.chmod(legacy / ".env", 0o644)
 
@@ -101,6 +102,7 @@ def test_one_failure_does_not_block_others(sandbox, monkeypatch):
     _populate_legacy(legacy, home)
 
     import shutil as _shutil
+
     orig_move = _shutil.move
 
     def flaky_move(src, dst):
@@ -112,8 +114,8 @@ def test_one_failure_does_not_block_others(sandbox, monkeypatch):
     moved = paths.migrate_legacy_layout()
 
     assert len(moved) == 5
-    assert (legacy / "profiles.json").exists()          # left for retry
-    assert paths.ENV_FILE.exists()                       # others proceeded
+    assert (legacy / "profiles.json").exists()  # left for retry
+    assert paths.ENV_FILE.exists()  # others proceeded
 
     # retry with move restored picks up the leftover
     monkeypatch.setattr(paths.shutil, "move", orig_move)

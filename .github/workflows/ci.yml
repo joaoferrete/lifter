@@ -26,7 +26,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements-dev.txt
+        run: pip install -e '.[dev]'
 
       - name: Run tests with coverage
         env:
@@ -44,6 +44,80 @@ jobs:
           file: coverage.xml
           fail_ci_if_error: false   # don't block CI if codecov is down
 
+  # ── Linting & formatting ──────────────────────────────────────────────────
+  lint:
+    name: Lint & format (ruff)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # Pinned so CI lint results can't change without a code change.
+      # Rule configuration lives in pyproject.toml — no flags here.
+      - name: Install ruff
+        run: pip install ruff==0.15.15
+
+      - name: ruff check
+        run: ruff check .
+
+      - name: ruff format --check
+        run: ruff format --check .
+
+  # ── Type checking ─────────────────────────────────────────────────────────
+  typecheck:
+    name: Type check (mypy)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e '.[dev]'
+
+      - name: Run mypy
+        run: mypy .
+
+  # ── Packaging check ───────────────────────────────────────────────────────
+  build:
+    name: Build & verify distributions
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build tooling
+        run: pip install build twine
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Verify wheel contains locale files
+        run: |
+          unzip -l dist/*.whl | grep -q "locales/en.json" || (echo "ERROR: locales/en.json missing from wheel" && exit 1)
+          unzip -l dist/*.whl | grep -q "locales/pt_BR.json" || (echo "ERROR: locales/pt_BR.json missing from wheel" && exit 1)
+
+      - name: Verify sdist contains no sensitive files
+        run: |
+          tar tzf dist/*.tar.gz | grep -E '\.env$|\.db$|fit_credentials' && (echo "ERROR: sensitive files leaked into sdist" && exit 1) || true
+
+      - name: twine check
+        run: twine check dist/*
+
   # ── Dependency vulnerability scan ────────────────────────────────────────
   security-deps:
     name: Dependency audit (pip-audit)
@@ -60,8 +134,8 @@ jobs:
       - name: Install pip-audit
         run: pip install pip-audit
 
-      - name: Audit dependencies for known CVEs
-        run: pip-audit -r requirements.txt --desc --format=columns
+      - name: Audit project dependencies for known CVEs
+        run: pip-audit --desc --format=columns .
 
   # ── Secret hygiene checks ─────────────────────────────────────────────────
   security-secrets:
@@ -101,29 +175,10 @@ jobs:
           echo "OK — no sensitive files tracked"
 
       - name: Scan git history for secrets (TruffleHog)
-        uses: trufflesecurity/trufflehog@main
+        uses: trufflesecurity/trufflehog@v3.95.9
         with:
           path: ./
           base: ${{ github.event.before || 'HEAD~1' }}
           head: HEAD
           extra_args: --only-verified
         continue-on-error: true   # informational; don't block merge
-
-  # ── Linting ───────────────────────────────────────────────────────────────
-  lint:
-    name: Lint (ruff)
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install ruff
-        run: pip install ruff
-
-      - name: Run ruff
-        run: ruff check . --ignore E501,E402,F401 --exclude tests/

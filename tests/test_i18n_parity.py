@@ -1,10 +1,9 @@
 """Locale files must stay key-synced — the translator falls back to English
 silently, so drift between en.json and pt_BR.json is invisible at runtime."""
+
 import json
 import string
 from pathlib import Path
-
-import pytest
 
 _LOCALES_DIR = Path(__file__).resolve().parent.parent / "locales"
 

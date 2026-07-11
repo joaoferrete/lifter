@@ -18,7 +18,9 @@
 
 ## Checklist
 - [ ] `pytest tests/ -v` passes locally
-- [ ] `ruff check . --ignore E501,E402,F401 --exclude tests/` passes
+- [ ] `ruff check .` and `ruff format --check .` pass
+- [ ] `mypy .` passes
 - [ ] Tests added or updated for any logic touching the DB or analytics
+- [ ] User-facing strings go through `i18n._()` with keys in both `locales/en.json` and `locales/pt_BR.json`
 - [ ] No sensitive files committed (`.env`, `*.db`, `fit_token.json`, `fit_credentials.json`)
 - [ ] No new dependencies added without justification in the PR description

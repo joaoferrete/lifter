@@ -1,10 +1,11 @@
-"""Tests for cli._check_stale_sync — startup stale-sync verification."""
-from datetime import datetime, timezone, timedelta
+"""Tests for commands.startup._check_stale_sync — startup stale-sync verification."""
+
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 
 def _ts(hours_ago):
-    dt = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+    dt = datetime.now(UTC) - timedelta(hours=hours_ago)
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -19,14 +20,21 @@ def _make_confirm(answers):
     return _confirm
 
 
-def _run(hevy_ts=None, fit_ts=None, fit_connected=False, confirm_answers=None, hevy_client=True,
-         fit_sync_raises=None):
+def _run(
+    hevy_ts=None,
+    fit_ts=None,
+    fit_connected=False,
+    confirm_answers=None,
+    hevy_client=True,
+    fit_sync_raises=None,
+    hevy_key="test-key",
+):
     """Execute _check_stale_sync with fully mocked dependencies.
 
-    Always disables auto_sync (patches cli.get_pref → None) so tests that
+    Always disables auto_sync (patches commands.startup.get_pref → None) so tests that
     exercise the prompt path are not affected by the value stored in the real DB.
     """
-    import cli
+    import commands.startup as startup
 
     incremental_calls = []
     fit_sync_calls = []
@@ -46,40 +54,57 @@ def _run(hevy_ts=None, fit_ts=None, fit_connected=False, confirm_answers=None, h
 
     mock_client = MagicMock() if hevy_client else None
 
-    with patch("db.store.get_sync_state", side_effect=_get_sync_state), \
-         patch("fit.auth.is_connected", return_value=fit_connected), \
-         patch("questionary.confirm", side_effect=_make_confirm(confirm_answers or [])), \
-         patch("cli._require_hevy", return_value=mock_client), \
-         patch("cli.incremental_sync", side_effect=_fake_incremental), \
-         patch("fit.sync.sync_fit", side_effect=_fake_sync_fit), \
-         patch("cli.get_pref", return_value=None), \
-         patch("cli.console"):
-        cli._check_stale_sync()
+    with (
+        patch("commands.startup.get_sync_state", side_effect=_get_sync_state),
+        patch("config.HEVY_API_KEY", hevy_key),
+        patch("fit.auth.is_connected", return_value=fit_connected),
+        patch("questionary.confirm", side_effect=_make_confirm(confirm_answers or [])),
+        patch("cli._require_hevy", return_value=mock_client),
+        patch("commands.startup.incremental_sync", side_effect=_fake_incremental),
+        patch("fit.sync.sync_fit", side_effect=_fake_sync_fit),
+        patch("commands.startup.get_pref", return_value=None),
+        patch("ui.format.get_pref", return_value=None),
+        patch("commands.startup.console"),
+    ):
+        startup._check_stale_sync()
 
     return {"incremental_calls": incremental_calls, "fit_sync_calls": fit_sync_calls}
 
 
 # ── no stale data ─────────────────────────────────────────────────────────────
 
+
 def test_fresh_hevy_no_prompt():
-    import cli
-    with patch("db.store.get_sync_state", return_value=_ts(1)), \
-         patch("fit.auth.is_connected", return_value=False), \
-         patch("cli.get_pref", return_value=None), \
-         patch("questionary.confirm") as mock_confirm, \
-         patch("cli.console"):
-        cli._check_stale_sync()
+    import commands.startup as startup
+
+    with (
+        patch("commands.startup.get_sync_state", return_value=_ts(1)),
+        patch("config.HEVY_API_KEY", "test-key"),
+        patch("fit.auth.is_connected", return_value=False),
+        patch("commands.startup.get_pref", return_value=None),
+        patch("ui.format.get_pref", return_value=None),
+        patch("questionary.confirm") as mock_confirm,
+        patch("commands.startup.console"),
+    ):
+        startup._check_stale_sync()
     mock_confirm.assert_not_called()
 
 
-def test_hevy_never_synced_no_prompt():
-    result = _run(hevy_ts=None, fit_connected=False)
+def test_hevy_never_synced_counts_as_stale():
+    """A profile that never synced gets the sync prompt (data is maximally stale)."""
+    result = _run(hevy_ts=None, fit_connected=False, confirm_answers=[True])
+    assert len(result["incremental_calls"]) == 1
+
+
+def test_hevy_never_synced_without_key_stays_silent():
+    """No API key configured → no point prompting a sync that cannot succeed."""
+    result = _run(hevy_ts=None, fit_connected=False, confirm_answers=[True], hevy_key="")
     assert result["incremental_calls"] == []
 
 
-def test_fit_never_synced_no_prompt():
-    result = _run(hevy_ts=_ts(1), fit_ts=None, fit_connected=True)
-    assert result["fit_sync_calls"] == []
+def test_fit_never_synced_counts_as_stale():
+    result = _run(hevy_ts=_ts(1), fit_ts=None, fit_connected=True, confirm_answers=[True])
+    assert result["fit_sync_calls"] == [90]
 
 
 def test_fit_not_connected_no_prompt():
@@ -89,8 +114,10 @@ def test_fit_not_connected_no_prompt():
 
 # ── hevy stale ────────────────────────────────────────────────────────────────
 
+
 def test_hevy_stale_prompts_user():
-    import cli
+    import commands.startup as startup
+
     confirm_calls = []
 
     def _capture_confirm(msg, **kwargs):
@@ -99,13 +126,17 @@ def test_hevy_stale_prompts_user():
         m.ask.return_value = False
         return m
 
-    with patch("db.store.get_sync_state", side_effect=lambda k: _ts(25) if k == "last_sync" else None), \
-         patch("fit.auth.is_connected", return_value=False), \
-         patch("questionary.confirm", side_effect=_capture_confirm), \
-         patch("cli._require_hevy", return_value=None), \
-         patch("cli.get_pref", return_value=None), \
-         patch("cli.console"):
-        cli._check_stale_sync()
+    with (
+        patch("commands.startup.get_sync_state", side_effect=lambda k: _ts(25) if k == "last_sync" else None),
+        patch("config.HEVY_API_KEY", "test-key"),
+        patch("fit.auth.is_connected", return_value=False),
+        patch("questionary.confirm", side_effect=_capture_confirm),
+        patch("cli._require_hevy", return_value=None),
+        patch("commands.startup.get_pref", return_value=None),
+        patch("ui.format.get_pref", return_value=None),
+        patch("commands.startup.console"),
+    ):
+        startup._check_stale_sync()
 
     assert any("Hevy" in msg for msg in confirm_calls)
 
@@ -137,8 +168,10 @@ def test_hevy_just_over_24h_is_stale():
 
 # ── google fit stale ──────────────────────────────────────────────────────────
 
+
 def test_fit_stale_prompts_user():
-    import cli
+    import commands.startup as startup
+
     confirm_calls = []
 
     def _capture_confirm(msg, **kwargs):
@@ -147,13 +180,17 @@ def test_fit_stale_prompts_user():
         m.ask.return_value = False
         return m
 
-    with patch("db.store.get_sync_state", side_effect=lambda k: _ts(25) if k == "fit_last_sync" else _ts(1)), \
-         patch("fit.auth.is_connected", return_value=True), \
-         patch("questionary.confirm", side_effect=_capture_confirm), \
-         patch("fit.sync.sync_fit"), \
-         patch("cli.get_pref", return_value=None), \
-         patch("cli.console"):
-        cli._check_stale_sync()
+    with (
+        patch("commands.startup.get_sync_state", side_effect=lambda k: _ts(25) if k == "fit_last_sync" else _ts(1)),
+        patch("config.HEVY_API_KEY", "test-key"),
+        patch("fit.auth.is_connected", return_value=True),
+        patch("questionary.confirm", side_effect=_capture_confirm),
+        patch("fit.sync.sync_fit"),
+        patch("commands.startup.get_pref", return_value=None),
+        patch("ui.format.get_pref", return_value=None),
+        patch("commands.startup.console"),
+    ):
+        startup._check_stale_sync()
 
     assert any("Google Fit" in msg for msg in confirm_calls)
 
@@ -170,13 +207,17 @@ def test_fit_stale_user_declines_no_sync():
 
 def test_fit_sync_exception_does_not_crash():
     result = _run(
-        hevy_ts=_ts(1), fit_ts=_ts(25), fit_connected=True,
-        confirm_answers=[True], fit_sync_raises=RuntimeError("auth failed"),
+        hevy_ts=_ts(1),
+        fit_ts=_ts(25),
+        fit_connected=True,
+        confirm_answers=[True],
+        fit_sync_raises=RuntimeError("auth failed"),
     )
     assert result["fit_sync_calls"] == []
 
 
 # ── both stale ────────────────────────────────────────────────────────────────
+
 
 def test_both_stale_both_confirmed_runs_both_syncs():
     result = _run(hevy_ts=_ts(25), fit_ts=_ts(25), fit_connected=True, confirm_answers=[True, True])
@@ -204,9 +245,11 @@ def test_both_stale_only_fit_confirmed():
 
 # ── auto_sync mode ────────────────────────────────────────────────────────────
 
+
 def test_auto_sync_hevy_syncs_without_prompt():
     """When auto_sync is on, a stale Hevy DB syncs silently — no confirm shown."""
-    import cli
+    import commands.startup as startup
+
     incremental_calls = []
 
     def _fake_incremental(client):
@@ -216,14 +259,18 @@ def test_auto_sync_hevy_syncs_without_prompt():
     def _get_pref_auto(key):
         return "1" if key == "auto_sync" else None
 
-    with patch("db.store.get_sync_state", side_effect=lambda k: _ts(25) if k == "last_sync" else None), \
-         patch("fit.auth.is_connected", return_value=False), \
-         patch("cli.get_pref", side_effect=_get_pref_auto), \
-         patch("cli._require_hevy", return_value=MagicMock()), \
-         patch("cli.incremental_sync", side_effect=_fake_incremental), \
-         patch("questionary.confirm") as mock_confirm, \
-         patch("cli.console"):
-        cli._check_stale_sync()
+    with (
+        patch("commands.startup.get_sync_state", side_effect=lambda k: _ts(25) if k == "last_sync" else None),
+        patch("config.HEVY_API_KEY", "test-key"),
+        patch("fit.auth.is_connected", return_value=False),
+        patch("commands.startup.get_pref", side_effect=_get_pref_auto),
+        patch("ui.format.get_pref", side_effect=_get_pref_auto),
+        patch("cli._require_hevy", return_value=MagicMock()),
+        patch("commands.startup.incremental_sync", side_effect=_fake_incremental),
+        patch("questionary.confirm") as mock_confirm,
+        patch("commands.startup.console"),
+    ):
+        startup._check_stale_sync()
 
     assert len(incremental_calls) == 1
     mock_confirm.assert_not_called()
@@ -231,7 +278,8 @@ def test_auto_sync_hevy_syncs_without_prompt():
 
 def test_auto_sync_fit_syncs_without_prompt():
     """When auto_sync is on, a stale Fit DB syncs silently — no confirm shown."""
-    import cli
+    import commands.startup as startup
+
     fit_sync_calls = []
 
     def _fake_sync_fit(days):
@@ -241,13 +289,17 @@ def test_auto_sync_fit_syncs_without_prompt():
     def _get_pref_auto(key):
         return "1" if key == "auto_sync" else None
 
-    with patch("db.store.get_sync_state", side_effect=lambda k: _ts(1) if k == "last_sync" else _ts(25)), \
-         patch("fit.auth.is_connected", return_value=True), \
-         patch("cli.get_pref", side_effect=_get_pref_auto), \
-         patch("fit.sync.sync_fit", side_effect=_fake_sync_fit), \
-         patch("questionary.confirm") as mock_confirm, \
-         patch("cli.console"):
-        cli._check_stale_sync()
+    with (
+        patch("commands.startup.get_sync_state", side_effect=lambda k: _ts(1) if k == "last_sync" else _ts(25)),
+        patch("config.HEVY_API_KEY", "test-key"),
+        patch("fit.auth.is_connected", return_value=True),
+        patch("commands.startup.get_pref", side_effect=_get_pref_auto),
+        patch("ui.format.get_pref", side_effect=_get_pref_auto),
+        patch("fit.sync.sync_fit", side_effect=_fake_sync_fit),
+        patch("questionary.confirm") as mock_confirm,
+        patch("commands.startup.console"),
+    ):
+        startup._check_stale_sync()
 
     assert fit_sync_calls == [30]
     mock_confirm.assert_not_called()
@@ -255,7 +307,8 @@ def test_auto_sync_fit_syncs_without_prompt():
 
 def test_auto_sync_both_stale_syncs_both_silently():
     """When auto_sync is on, both stale sources sync without any prompts."""
-    import cli
+    import commands.startup as startup
+
     incremental_calls = []
     fit_sync_calls = []
 
@@ -270,15 +323,19 @@ def test_auto_sync_both_stale_syncs_both_silently():
     def _get_pref_auto(key):
         return "1" if key == "auto_sync" else None
 
-    with patch("db.store.get_sync_state", return_value=_ts(25)), \
-         patch("fit.auth.is_connected", return_value=True), \
-         patch("cli.get_pref", side_effect=_get_pref_auto), \
-         patch("cli._require_hevy", return_value=MagicMock()), \
-         patch("cli.incremental_sync", side_effect=_fake_incremental), \
-         patch("fit.sync.sync_fit", side_effect=_fake_sync_fit), \
-         patch("questionary.confirm") as mock_confirm, \
-         patch("cli.console"):
-        cli._check_stale_sync()
+    with (
+        patch("commands.startup.get_sync_state", return_value=_ts(25)),
+        patch("config.HEVY_API_KEY", "test-key"),
+        patch("fit.auth.is_connected", return_value=True),
+        patch("commands.startup.get_pref", side_effect=_get_pref_auto),
+        patch("ui.format.get_pref", side_effect=_get_pref_auto),
+        patch("cli._require_hevy", return_value=MagicMock()),
+        patch("commands.startup.incremental_sync", side_effect=_fake_incremental),
+        patch("fit.sync.sync_fit", side_effect=_fake_sync_fit),
+        patch("questionary.confirm") as mock_confirm,
+        patch("commands.startup.console"),
+    ):
+        startup._check_stale_sync()
 
     assert len(incremental_calls) == 1
     assert fit_sync_calls == [30]
@@ -287,27 +344,32 @@ def test_auto_sync_both_stale_syncs_both_silently():
 
 def test_auto_sync_fit_exception_does_not_crash():
     """auto_sync Fit failure is swallowed silently (same as prompt path)."""
-    import cli
+    import commands.startup as startup
 
     def _get_pref_auto(key):
         return "1" if key == "auto_sync" else None
 
-    with patch("db.store.get_sync_state", side_effect=lambda k: _ts(1) if k == "last_sync" else _ts(25)), \
-         patch("fit.auth.is_connected", return_value=True), \
-         patch("cli.get_pref", side_effect=_get_pref_auto), \
-         patch("fit.sync.sync_fit", side_effect=RuntimeError("token expired")), \
-         patch("questionary.confirm") as mock_confirm, \
-         patch("cli.console"):
-        cli._check_stale_sync()   # must not raise
+    with (
+        patch("commands.startup.get_sync_state", side_effect=lambda k: _ts(1) if k == "last_sync" else _ts(25)),
+        patch("config.HEVY_API_KEY", "test-key"),
+        patch("fit.auth.is_connected", return_value=True),
+        patch("commands.startup.get_pref", side_effect=_get_pref_auto),
+        patch("ui.format.get_pref", side_effect=_get_pref_auto),
+        patch("fit.sync.sync_fit", side_effect=RuntimeError("token expired")),
+        patch("questionary.confirm") as mock_confirm,
+        patch("commands.startup.console"),
+    ):
+        startup._check_stale_sync()  # must not raise
 
     mock_confirm.assert_not_called()
 
 
 # ── configurable staleness threshold ──────────────────────────────────────────
 
+
 def test_custom_stale_hours_prompts_earlier():
     """With sync_stale_hours=6, a 7-hour-old sync is already stale."""
-    import cli
+    import commands.startup as startup
 
     def _pref(key):
         return "6" if key == "sync_stale_hours" else None
@@ -320,22 +382,31 @@ def test_custom_stale_hours_prompts_earlier():
         m.ask.return_value = False
         return m
 
-    with patch("db.store.get_sync_state", return_value=_ts(7)), \
-         patch("fit.auth.is_connected", return_value=False), \
-         patch("cli.get_pref", side_effect=_pref), \
-         patch("questionary.confirm", side_effect=_confirm), \
-         patch("cli.console"):
-        cli._check_stale_sync()
+    with (
+        patch("commands.startup.get_sync_state", return_value=_ts(7)),
+        patch("config.HEVY_API_KEY", "test-key"),
+        patch("fit.auth.is_connected", return_value=False),
+        patch("commands.startup.get_pref", side_effect=_pref),
+        patch("ui.format.get_pref", side_effect=_pref),
+        patch("questionary.confirm", side_effect=_confirm),
+        patch("commands.startup.console"),
+    ):
+        startup._check_stale_sync()
     # 7h > 6h threshold → the prompt fired (default 24h would have stayed silent)
     assert len(prompts) == 1
 
 
 def test_default_stale_hours_keeps_24h():
-    import cli
-    with patch("db.store.get_sync_state", return_value=_ts(7)), \
-         patch("fit.auth.is_connected", return_value=False), \
-         patch("cli.get_pref", return_value=None), \
-         patch("questionary.confirm") as mock_confirm, \
-         patch("cli.console"):
-        cli._check_stale_sync()
+    import commands.startup as startup
+
+    with (
+        patch("commands.startup.get_sync_state", return_value=_ts(7)),
+        patch("config.HEVY_API_KEY", "test-key"),
+        patch("fit.auth.is_connected", return_value=False),
+        patch("commands.startup.get_pref", return_value=None),
+        patch("ui.format.get_pref", return_value=None),
+        patch("questionary.confirm") as mock_confirm,
+        patch("commands.startup.console"),
+    ):
+        startup._check_stale_sync()
     mock_confirm.assert_not_called()

@@ -28,18 +28,21 @@ Security issues should be reported privately — see [SECURITY.md](SECURITY.md).
 ```bash
 git clone https://github.com/joaoferrete/lifter.git
 cd lifter
-pip install -r requirements-dev.txt
+pip install -e '.[dev]'
 cp .env.example .env
 # Fill in your API keys in .env
 ```
 
-`requirements-dev.txt` adds these tools on top of the runtime dependencies:
+The `dev` extra (declared in `pyproject.toml`, the single source of truth for
+dependencies) adds these tools on top of the runtime dependencies:
 
 | Package | Purpose |
 |---|---|
 | `pytest` + `pytest-cov` | Test runner and coverage reporting |
-| `ruff` | Linter and formatter |
+| `ruff` | Linter **and** formatter (`ruff check` / `ruff format`) |
+| `mypy` | Static type checker |
 | `pip-audit` | Dependency vulnerability scanner |
+| `build` + `twine` | Packaging and distribution checks |
 
 ## Project architecture
 
@@ -49,27 +52,43 @@ lifter/
 │   ├── client.py        API wrapper (all Hevy endpoints + payload sanitization)
 │   └── sync.py          Full + incremental sync via /v1/workouts/events
 ├── db/
-│   ├── store.py         SQLite schema + upsert helpers
-│   ├── goals.py         Goal CRUD, progress computation, user preferences
-│   └── memories.py      Chat memory: save/load/context
+│   ├── store.py         SQLite schema, connection lifecycle, upsert helpers
+│   ├── goals.py         Goal CRUD, typed preferences, token accounting
+│   ├── memories.py      Chat memory persistence
+│   └── export.py        Data export / import (backup & restore)
 ├── fit/
 │   ├── auth.py          Google OAuth (InstalledAppFlow, token persistence)
 │   ├── client.py        Google Fit REST API (aggregate + sessions)
 │   ├── sync.py          Sync sleep and daily stats
 │   └── analytics.py     Recovery score, sleep summary, activity summary
 ├── analytics/
+│   ├── common.py        Shared per-week denominator + DataFrame helpers
+│   ├── e1rm.py          Canonical estimated-1RM (Python + SQL fragment)
 │   ├── volume.py        Weekly tonnage per muscle group
 │   ├── progression.py   e1RM progression and plateau detection
 │   ├── frequency.py     Workout cadence and session duration
-│   └── records.py       Personal records, body measurement trends, BMI helpers
+│   ├── records.py       Personal records, body measurement trends, BMI helpers
+│   └── goal_progress.py Goal progress computation (goals domain service)
 ├── ai/
 │   ├── provider.py      Unified ChatSession abstraction (Gemini, Claude, OpenRouter, Groq, GitHub Models, Bedrock)
-│   ├── coach.py         Coaching report (with scores + distribution), chat loop, goal tools, memory extraction
+│   ├── coach.py         Facade: one-shot coaching report + public AI surface
+│   ├── context.py       Prompt-context assembly from stored data
+│   ├── prompts.py       Prompt copy and tool schemas (English by design)
+│   ├── tools.py         Tool-call handlers + confirmation UI
+│   ├── chat.py          Interactive chat loop
+│   ├── memory.py        End-of-chat memory extraction
+│   ├── errors.py        Provider-exception → friendly message mapping
+│   ├── routine_schema.py Validation gate for AI-generated routine args
 │   └── sanitize.py      Input sanitization and prompt-injection defence
-├── cli.py               Interactive menu (questionary + Rich)
+├── ui/                  Console/style, bar widgets, prompts, value formatting
+├── commands/            One module per menu domain (sync, stats, body, goals,
+│                        coach, fit, settings, profiles, startup)
+├── cli.py               Entry point: menu loop, ACTIONS dispatch, header
 ├── config.py            .env loader, runtime overrides, .env writer
+├── http_retry.py        Shared HTTP timeout + retry/backoff helper
 ├── paths.py             XDG path resolution + legacy-layout migration
 ├── profile_mgr.py       Multi-profile management (create, activate, switch, delete)
+├── render_cache.py      In-process memo cache for derived render data
 ├── debug_log.py         Structured debug logging (toggled via Settings → Developer)
 ├── i18n.py              Translation layer (reads locales/*.json)
 └── locales/             UI translations (shipped in the wheel as package data)
@@ -120,8 +139,10 @@ pytest tests/ -v --cov=. --cov-report=term-missing
 # Run a single test file
 pytest tests/test_hevy_sync.py -v
 
-# Run the linter (same flags as CI)
-ruff check . --ignore E501,E402,F401 --exclude tests/
+# Lint, format and type-check (exactly what CI runs; config lives in pyproject.toml)
+ruff check .
+ruff format .
+mypy .
 
 # Commit using conventional commits
 git commit -m "feat: add support for X"
@@ -142,54 +163,26 @@ Types: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`, `security`
 
 ## CI checks
 
-Every PR must pass all four checks before it can be merged:
+Every PR must pass all checks before it can be merged:
 
 | Check | What it runs |
 |---|---|
-| **Tests** | `pytest` on Python 3.11 and 3.12 |
-| **Lint** | `ruff check` (excluding tests/) |
-| **Dependency audit** | `pip-audit` against `requirements.txt` |
+| **Tests** | `pytest` with coverage on Python 3.11 and 3.12 |
+| **Lint & format** | `ruff check .` and `ruff format --check .` (tests included) |
+| **Type check** | `mypy .` |
+| **Build** | `python -m build` + `twine check` + wheel/sdist content verification |
+| **Dependency audit** | `pip-audit` against the project dependencies |
 | **Secret hygiene** | Scans `.env.example`, git-tracked files, and commit history |
 
-Run them locally before pushing to catch issues early.
+Run them locally before pushing to catch issues early (`make lint typecheck test`).
 
 ## Pull requests
 
 1. Push your branch and open a PR against `main`
-2. Fill in the PR template that GitHub loads automatically (see below)
-3. All four CI checks must pass
+2. Fill in the PR template that GitHub loads automatically from
+   [`.github/pull_request_template.md`](.github/pull_request_template.md)
+3. All CI checks must pass
 4. One approval required before merge
-
-### PR template
-
-When you open a PR on GitHub, the description is pre-filled with this template:
-
-```markdown
-## What changed
-<!-- 1–3 bullet points. Focus on what, not how. -->
-
-## Why
-<!-- Link to an issue (#123) or a brief motivation. -->
-
-## How to test
-<!-- Steps a reviewer can follow to verify the change. -->
-
-## Type of change
-- [ ] Bug fix
-- [ ] New feature / integration
-- [ ] Refactor
-- [ ] Documentation
-- [ ] Security fix
-
-## Checklist
-- [ ] `pytest tests/ -v` passes locally
-- [ ] `ruff check . --ignore E501,E402,F401 --exclude tests/` passes
-- [ ] Tests added or updated for any logic touching the DB or analytics
-- [ ] No sensitive files committed
-- [ ] No new dependencies added without justification
-```
-
-The template is stored at [`.github/pull_request_template.md`](.github/pull_request_template.md) — GitHub loads it automatically for every new PR.
 
 ## Releases
 
@@ -236,7 +229,7 @@ The UI translation layer lives in `i18n.py` and reads JSON files from `locales/`
    _SUPPORTED: set = {"en", "pt_BR", "fr"}   # add your code here
    ```
 
-3. **Add a display name** to `_UI_LANGUAGES` in `cli.py`:
+3. **Add a display name** to `_UI_LANGUAGES` in `commands/_shared.py`:
 
    ```python
    _UI_LANGUAGES = [
@@ -256,10 +249,71 @@ The UI translation layer lives in `i18n.py` and reads JSON files from `locales/`
 
 ## Code style
 
-- Python 3.11+
-- No type annotations required but encouraged for public functions
-- No comments that just restate what the code does
-- Tests required for any logic that touches the DB or analytics
+All lint/format/type configuration lives in `pyproject.toml` — CI runs the
+tools with no extra flags, so what passes locally passes in CI.
+
+### Formatting & linting
+
+- Python 3.11+, formatted with `ruff format` (line length 120). Run it before
+  committing; CI rejects unformatted code.
+- `ruff check .` must pass. The rule set includes bugbear (`B`), pyupgrade
+  (`UP`), simplify (`SIM`), comprehensions (`C4`), import sorting (`I`) and
+  the pylint `PLC`/`PLE`/`PLW` groups. Tests are linted too.
+- Lazy in-function imports are allowed only to keep CLI startup fast or to
+  break an import cycle — prefer top-level imports everywhere else.
+- No comments that just restate what the code does.
+
+### Type checking
+
+- `mypy .` must pass. The baseline checks untyped functions
+  (`check_untyped_defs`); modules listed as strict in `pyproject.toml`
+  (`disallow_untyped_defs`) must stay strict, and **new modules are born
+  strict** — add them to the strict list in the same PR.
+- Annotate public functions. `dict`/`list` annotations should carry value
+  types where practical (`dict[str, Any]` over bare `dict`).
+
+### i18n
+
+- **Every user-facing string goes through `i18n._()`** — no hardcoded English
+  in prompts, panels, or menu output. Add each new key to **both**
+  `locales/en.json` and `locales/pt_BR.json`; `tests/test_i18n_parity.py`
+  fails the build on asymmetry.
+- AI prompt copy (system prompts, tool descriptions) is intentionally English
+  and does not go through `_()`; the model is told the answer language
+  separately.
+
+### Layering
+
+Dependencies point downward only:
+
+```
+cli / ui / commands   →   ai, analytics, hevy, fit, db, config, i18n
+ai                    →   analytics, db, hevy, fit, config
+analytics             →   db, config
+hevy / fit            →   db (store only), config
+db                    →   config, paths
+(infra utils — usable from any layer: debug_log, render_cache)
+```
+
+- `db/` must not import `ai/` or `analytics/` — prompt formatting lives in
+  `ai/context.py`, goal-progress math in `analytics/goal_progress.py`.
+- `analytics/` modules must not read user preferences directly (pass values in
+  as parameters); the exception is `analytics/goal_progress.py`, the goals
+  domain service, which uses the `db.goals` CRUD.
+- UI concerns (Rich markup, questionary prompts, i18n strings) belong in the
+  CLI layer, never in `db/`, `analytics/`, `hevy/`, or `fit/`.
+
+### Error handling
+
+- Never `except Exception: pass` silently — if an exception is deliberately
+  swallowed, record a breadcrumb with `debug_log.error(...)` (or `log(...)`
+  for expected noise) so failures are diagnosable.
+- Tests required for any logic that touches the DB or analytics.
+
+### Future ideas
+
+New-feature ideas discovered while working on something else go into the
+local, untracked `FUTURE_IDEAS.md` (gitignored) — not into the PR.
 
 ## Error handling conventions
 

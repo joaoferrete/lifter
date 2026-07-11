@@ -1,4 +1,5 @@
 """Recovery and health analytics from Google Fit data."""
+
 from db.store import query
 
 
@@ -39,7 +40,7 @@ def activity_summary(days: int = 7) -> dict:
     if not rows:
         return {}
 
-    def avg(key):
+    def avg(key: str) -> float | None:
         vals = [r[key] for r in rows if r[key] is not None]
         return round(sum(vals) / len(vals), 1) if vals else None
 
@@ -47,7 +48,7 @@ def activity_summary(days: int = 7) -> dict:
         "avg_steps": avg("steps"),
         "avg_calories": avg("total_calories"),
         "avg_hr": avg("avg_hr"),
-        "resting_hr": avg("min_hr"),   # minimum HR is a proxy for resting HR
+        "resting_hr": avg("min_hr"),  # minimum HR is a proxy for resting HR
         "avg_active_minutes": avg("active_minutes"),
         "days_tracked": len(rows),
     }
@@ -65,27 +66,14 @@ def recovery_score(days: int = 3) -> dict | None:
     sleep_hours = sleep.get("avg_hours", 0)
     sleep_pts = min(sleep_hours / 8 * 50, 50)
 
-    # HR component (0-50): lower resting HR = better recovery
-    # baseline assumed at 65 bpm; every bpm below = +1pt (capped)
+    # HR component (0-50): lower resting HR = better recovery.
+    # Full 50 pts at ≤50 bpm, minus 1 pt per bpm above that (floored at 0).
     rhr = activity.get("resting_hr")
-    if rhr:
-        hr_pts = max(0, min(50, 50 - (rhr - 50)))
-    else:
-        hr_pts = 25  # neutral if no data
+    hr_pts = max(0, min(50, 50 - (rhr - 50))) if rhr else 25  # neutral if no data
 
     score = int(sleep_pts + hr_pts)
-    label = (
-        "Excellent" if score >= 80
-        else "Good"    if score >= 65
-        else "Fair"    if score >= 45
-        else "Poor"
-    )
-    color = (
-        "green"  if score >= 80
-        else "cyan"    if score >= 65
-        else "yellow"  if score >= 45
-        else "red"
-    )
+    label = "Excellent" if score >= 80 else "Good" if score >= 65 else "Fair" if score >= 45 else "Poor"
+    color = "green" if score >= 80 else "cyan" if score >= 65 else "yellow" if score >= 45 else "red"
 
     return {
         "score": score,

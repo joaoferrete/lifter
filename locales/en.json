@@ -5,7 +5,6 @@
   "nav.press_any_key": "  Press any key to return to menu...",
   "migration.xdg_title": "Data moved to standard folders",
   "migration.xdg_done": "[green]✓[/green] Your data now lives in standard user folders (config: [dim]{config_dir}[/dim], data: [dim]{data_dir}[/dim]). This happens only once.",
-
   "menu.sync": "  Sync new workouts",
   "menu.chat": "  Chat with coach",
   "menu.goals": "  My goals",
@@ -20,7 +19,6 @@
   "menu.exit": "  Exit",
   "menu.prompt": "What do you want to do?",
   "menu.goodbye": "\n[dim]See you at the gym![/dim]\n",
-
   "header.last_workout": "Last workout: [bold]{ago}[/bold]",
   "header.no_workouts": "[dim]No workouts yet[/dim]",
   "header.streak": "{fires} [bold]{days}d streak[/bold]",
@@ -34,7 +32,6 @@
   "header.goals": "[yellow]{count} goal[/yellow]",
   "header.goals_plural": "[yellow]{count} goals[/yellow]",
   "header.recovery": "  ·  Recovery [{color}]{score}/100[/{color}]",
-
   "snapshot.scores_title": "[bold dim]Last report scores[/bold dim]",
   "snapshot.volume_title": "[bold dim]Volume split (4w)[/bold dim]",
   "snapshot.goals_title": "[bold dim]Goals[/bold dim]",
@@ -43,7 +40,6 @@
   "snapshot.bmi_short": "BMI",
   "snapshot.n_more_goals": "  [dim]...and {count} more goal(s)[/dim]",
   "snapshot.panel_title": "[bold dim]Quick view[/bold dim]",
-
   "error.hevy_api_key_not_set": "[red]Hevy API key not set. Go to Settings → Profiles to add it.[/red]",
   "error.ai_key_not_set": "[red]{var} not set in .env (AI_PROVIDER={provider})[/red]",
   "error.unexpected": "[bold]Unexpected error ({exc_type}).[/bold]\nThe details were saved to the log at {log_dir}.\nThe app will return to the menu.",
@@ -67,7 +63,6 @@
   "error.not_enough_data": "[yellow]Not enough data yet.[/yellow]",
   "error.fit_sync_failed": "[red]{error}[/red]",
   "error.fit_auth_failed": "\n[red]Authentication failed. Check that fit_credentials.json is valid.[/red]",
-
   "wizard.no_exercises": "[yellow]  No exercises found. Run Sync first.[/yellow]",
   "wizard.lift_hint": "\n  [dim]Add one or more lift targets. Leave blank to stop.[/dim]",
   "wizard.lift_exercise_prompt": "  Exercise (start typing or press Enter to stop):",
@@ -113,7 +108,6 @@
   "wizard.goal_volume": "Increase weekly volume for a muscle group",
   "wizard.goal_custom": "Other — free text goal",
   "wizard.n_saved": "\n  [bold green]✓ {total} goal(s) saved.[/bold green] The AI coach will now track your progress.\n",
-
   "validate.enter_number": "Enter a number",
   "validate.enter_whole_number": "Enter a whole number",
   "validate.pick_from_list": "Pick from the list",
@@ -125,7 +119,6 @@
   "score.training": "Training",
   "score.health": "Health",
   "score.overall": "Overall",
-
   "weekly.checkin_title": "\n  [bold cyan]Weekly goals check-in, {name}![/bold cyan]\n",
   "weekly.current_goals": "  Your current goals:\n",
   "weekly.still_same": "  Are these goals still the same?",
@@ -133,7 +126,6 @@
   "weekly.update": "Update my goals",
   "weekly.skip": "Skip for now",
   "weekly.confirmed": "  [dim]Goals confirmed. See you next week![/dim]\n",
-
   "goals.achieved": "  [bold green]✓ ACHIEVED[/bold green]  [bold]{description}[/bold]  🎉",
   "goals.celebrate.panel_title": "[bold green]🎉 Congratulations![/bold green]",
   "goals.celebrate.intro": "Since your last visit you achieved:",
@@ -149,7 +141,6 @@
   "goals.update_label": "Update my goals",
   "goals.reset_label": "Set goals from scratch",
   "goals.menu_prompt": "Goals:",
-
   "sync.type_prompt": "Sync type:",
   "sync.incremental": "Incremental  (only fetch what's new)",
   "sync.full": "Full  (re-download everything)",
@@ -171,7 +162,6 @@
   "sync.auto_synced_fit": "[dim]Auto-synced Fit: {daily_days} days · {sleep_sessions} sleep sessions.[/dim]",
   "sync.auto_sync_fit_failed": "[dim]Fit auto-sync failed: {error}[/dim]",
   "sync.fit_sync_complete_title": "[bold green]Google Fit sync complete[/bold green]",
-
   "stats.time_period": "Time period:",
   "stats.rule_title": "[bold cyan]Training Stats — last {weeks} weeks[/bold cyan]",
   "stats.col_metric": "Metric",
@@ -204,7 +194,6 @@
   "stats.plateaus_rule": "[bold yellow]Plateaus[/bold yellow]",
   "stats.goals_rule": "[bold yellow]Goals Progress[/bold yellow]",
   "stats.volume_rule_this_week": "  [bold]Volume this week vs last week[/bold]",
-
   "progress.show_prompt": "What to show?",
   "progress.top_gainers": "Top gainers",
   "progress.specific_exercise": "Specific exercise",
@@ -219,9 +208,7 @@
   "progress.col_best_weight": "Best weight",
   "progress.col_reps": "Reps",
   "progress.col_e1rm": "e1RM",
-
   "records.rule_title": "[bold]All-time personal records[/bold]",
-
   "coach.rule_title": "[bold cyan]AI Coaching Report[/bold cyan]",
   "coach.weeks_prompt": "Weeks to analyse:",
   "coach.include_routine_prompt": "Also create a new suggested training routine? (uses more tokens)",
@@ -241,7 +228,6 @@
   "coach.generating_benefits": "[bold cyan]Generating exercise benefits...[/bold cyan]",
   "coach.benefits_skipped": "[dim]Benefits skipped.[/dim]\n",
   "coach.powered_by": "\n[dim]Powered by {provider}[/dim]\n",
-
   "chat.rule_title": "[bold cyan]Chat with AI Coach[/bold cyan]",
   "chat.hint": "  [dim]Provider: {provider} · {weeks} weeks of context loaded.[/dim]\n  [dim]The coach can create routines, modify goals, and remembers past conversations.[/dim]\n  [dim]Type [bold]quit[/bold] or press Ctrl+C to return to the menu.[/dim]\n",
   "chat.quit_words": "quit, exit, q, bye",
@@ -280,7 +266,6 @@
   "chat.goal_removed": "[green]✓ Goal removed[/green]",
   "chat.goal_invalid_id": "[red]⚠ AI referenced a non-existent goal (id={gid}). Change blocked.[/red]\n",
   "chat.exercise_benefits_title": "[bold green]Exercise Benefits[/bold green]",
-
   "settings.menu_prompt": "Settings:",
   "settings.profiles_choice": "  Manage profiles  (switch, create, rename, delete)",
   "settings.profile_choice": "  My data      (name, height, Hevy key)",
@@ -290,7 +275,6 @@
   "settings.about_choice": "  About        (version, links)",
   "about.title": "[bold cyan]Lifter[/bold cyan]",
   "about.body": "Personal Hevy workout client with analytics, goals and an AI coach.\n\nVersion:  [bold]{version}[/bold]\nAuthor:   João Ferrete\nLicense:  AGPL-3.0-or-later\n\nGitHub:   [link=https://github.com/joaoferrete/lifter]github.com/joaoferrete/lifter[/link]\nPyPI:     [link=https://pypi.org/project/lifter-cli/]pypi.org/project/lifter-cli[/link]\nIssues:   [link=https://github.com/joaoferrete/lifter/issues]github.com/joaoferrete/lifter/issues[/link]\n\n[dim]If Lifter helps your training, a star on GitHub helps the project.[/dim]",
-
   "settings.prefs.title": "[bold]Preferences[/bold]",
   "settings.prefs.units_label": "Weight units:          [bold]{units}[/bold]",
   "settings.prefs.checkin_label": "Goal check-in:         [bold]every {days} days[/bold]",
@@ -313,7 +297,7 @@
   "settings.prefs.checkin_30": "Every 30 days  (monthly)",
   "settings.prefs.checkin_saved": "[green]✓ Goal check-in set to every {days} days[/green]",
   "settings.prefs.autosync_enabled": "[green]✓ Auto-sync enabled[/green]",
-  "settings.prefs.autosync_disabled": "[green]✓ Auto-sync disabled[/green]",
+  "settings.prefs.autosync_disabled": "[dim]— Auto-sync disabled[/dim]",
   "settings.prefs.stats_window_prompt": "  Default stats window:",
   "settings.prefs.stats_window_saved": "[green]✓ Default stats window set to {window}[/green]",
   "settings.prefs.ui_language_prompt": "  UI language:",
@@ -334,7 +318,6 @@
   "settings.prefs.stale_hours_saved": "[green]✓ Staleness threshold set to {hours}h[/green]",
   "settings.on": "on",
   "settings.off": "off",
-
   "settings.dev.title": "[bold]Developer Settings[/bold]",
   "settings.dev.version_label": "Version:        [bold]{version}[/bold]",
   "settings.dev.debug_label": "Debug logging:  [bold]{state}[/bold]",
@@ -384,7 +367,6 @@
   "settings.dev.sync_ok": "[green]✓ ok[/green] [dim]{ago} · {detail}[/dim]",
   "settings.dev.sync_failed": "[red]✗ failed[/red] [dim]{ago}[/dim] — {detail}",
   "settings.dev.sync_never": "[dim]never[/dim]",
-
   "settings.ai.title": "[bold]AI Coach Settings[/bold]",
   "settings.ai.provider_line": "Provider:      [bold]{provider}[/bold]  ·  Model: [bold]{model}[/bold]",
   "settings.ai.context_line": "Context mode:  [bold]{mode}[/bold]",
@@ -492,7 +474,6 @@
   "settings.ai.memories_limit_invalid": "Enter a number between 0 and 10000.",
   "settings.ai.memories_limit_saved": "[green]✓ Memory limit set to {max}.[/green]",
   "settings.ai.memories_unlimited": "unlimited",
-
   "profiles.panel_title": "[bold]Manage profiles[/bold]",
   "profiles.panel_content": "Active profile: [bold]{name}[/bold]  ({total} total)",
   "profiles.menu_prompt": "Profiles:",
@@ -518,7 +499,6 @@
   "profiles.api_key_prompt": "  Hevy API key (leave blank to set later):",
   "profiles.language_prompt": "  Preferred language:",
   "profiles.created": "[green]✓ Profile '{name}' created.[/green]",
-
   "profile.panel_title": "[bold]My data[/bold]",
   "profile.display_name_label": "Display name:  [bold]{name}[/bold]",
   "profile.display_name_notset": "Display name:  [bold][dim]not set[/dim][/bold]",
@@ -533,7 +513,6 @@
   "profile.name_updated": "[green]✓ Name updated to '{name}'[/green]",
   "profile.new_api_key_prompt": "  New Hevy API key:",
   "profile.api_key_updated": "[green]✓ Hevy API key updated.[/green]",
-
   "migration.panel_title": "[bold cyan]Profile Migration[/bold cyan]",
   "migration.panel_body": "Lifter now supports multiple profiles.\nYour existing data will be migrated to a named profile.",
   "migration.name_prompt": "  Profile name (e.g. your name):",
@@ -542,7 +521,6 @@
   "welcome.name_prompt": "  Your name (for the AI coach):",
   "welcome.api_key_prompt": "  Hevy API key (hevy.com → Settings → Developer):",
   "welcome.language_prompt": "  Preferred language:",
-
   "data_reset.prompt": "What do you want to reset?",
   "data_reset.memories_choice": "Clear coach memories  (forget past conversations)",
   "data_reset.goals_choice": "Clear all goals",
@@ -565,7 +543,6 @@
   "data_reset.all_confirm1": "  Are you sure?",
   "data_reset.all_confirm2": "  Really? This cannot be undone.",
   "data_reset.all_done": "\n[bold green]✓ Everything wiped.[/bold green]\n  Run [bold]Sync → Full[/bold] to re-download your workouts.",
-
   "fit.menu_prompt": "Google Fit:",
   "fit.sync_choice": "Sync health data  (sleep, steps, calories, HR)",
   "fit.connect_choice": "Connect / re-authenticate",
@@ -604,5 +581,37 @@
   "fit.avg_calories": "Avg calories / day",
   "fit.resting_hr": "Resting HR",
   "fit.avg_active_minutes": "Avg active minutes",
-  "fit.recovery_label": "[bold green]Recovery[/bold green]"
+  "fit.recovery_label": "[bold green]Recovery[/bold green]",
+  "time_ago.just_now": "just now",
+  "time_ago.minutes": "{n}m ago",
+  "time_ago.hours": "{n}h ago",
+  "time_ago.days": "{n}d ago",
+  "time_ago.unknown": "unknown",
+  "confirm.really_sure": "Are you REALLY sure? This cannot be undone.",
+  "wizard.name_fallback": "athlete",
+  "header.line2": "[bold]{total}[/bold] workouts  ·  [bold]{week}[/bold] this week  ·  [bold]{avg}[/bold]/wk avg",
+  "sync.full_body": "[bold green]{workouts}[/bold green] workouts  ·  [bold]{templates}[/bold] exercise templates  ·  [bold]{body}[/bold] body measurements",
+  "sync.streak_line": "{fires}  [bold]{streak}-day streak![/bold]  [dim]({sessions} sessions in last 4w)[/dim]",
+  "sync.no_sets_logged": "  (no sets logged)",
+  "stats.plateau_line": "  [yellow]•[/yellow] {exercise} — stalled {sessions} sessions (e1RM {e1rm} kg)",
+  "coach.dist_by_group": "[bold]By muscle group[/bold]",
+  "coach.dist_by_muscle": "[bold]By muscle[/bold]",
+  "coach.dist_sets_avg": "({sets} sets/wk avg)",
+  "common.bodyweight_short": "BW",
+  "common.exercise_fallback": "Exercise",
+  "common.none": "None",
+  "fit.value_sleep": "{hours}h/night",
+  "fit.value_hours": "{hours}h",
+  "fit.value_calories": "{calories} kcal",
+  "fit.value_bpm": "{rhr} bpm",
+  "settings.ai.context_mode_slim": "Slim",
+  "settings.ai.context_mode_full": "Full",
+  "profiles.key_set": "set",
+  "profiles.key_not_set": "not set",
+  "goal.desc_lift_pr": "{exercise} — reach {target} e1RM",
+  "goal.desc_frequency": "Train {target}× per week",
+  "goal.desc_weight_loss": "Lose weight to {target}",
+  "goal.desc_weight_gain": "Gain weight to {target}",
+  "goal.desc_body_fat": "Reach {target}% body fat",
+  "goal.desc_volume": "{muscle} — {target} sets/week"
 }

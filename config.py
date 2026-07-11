@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 import paths
@@ -10,41 +11,69 @@ BASE_URL: str = "https://api.hevyapp.com"
 
 # Recognized providers — used to fail loudly on a typo instead of silently
 # falling back to Gemini (see ai/provider.py and cli._require_ai).
-KNOWN_PROVIDERS: frozenset[str] = frozenset(
-    {"gemini", "claude", "openrouter", "groq", "github", "bedrock"}
-)
+KNOWN_PROVIDERS: frozenset[str] = frozenset({"gemini", "claude", "openrouter", "groq", "github", "bedrock"})
 
 # OpenAI-compatible provider base URLs
 PROVIDER_BASE_URLS: dict[str, str] = {
     "openrouter": "https://openrouter.ai/api/v1",
-    "groq":       "https://api.groq.com/openai/v1",
-    "github":     "https://models.github.ai/inference",
+    "groq": "https://api.groq.com/openai/v1",
+    "github": "https://models.github.ai/inference",
 }
 
 # Default model per provider (overridden by AI_MODEL env var)
 _DEFAULT_MODELS: dict[str, str] = {
-    "gemini":      "gemini-flash-latest",
-    "claude":      "claude-opus-4-8",
-    "openrouter":  "openrouter/owl-alpha",
-    "groq":        "openai/gpt-oss-120b",
-    "github":      "openai/gpt-4o",  # GitHub Models requires the publisher/ prefix
-    "bedrock":     "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "gemini": "gemini-flash-latest",
+    "claude": "claude-opus-4-8",
+    "openrouter": "openrouter/owl-alpha",
+    "groq": "openai/gpt-oss-120b",
+    "github": "openai/gpt-4o",  # GitHub Models requires the publisher/ prefix
+    "bedrock": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
 }
 
 # Names pushed into ai.provider (which copies them at import time) whenever
 # the environment is reloaded — see _sync_provider_module().
 _PROVIDER_SYNC_NAMES: tuple[str, ...] = (
-    "AI_PROVIDER", "AI_MODEL",
-    "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY",
-    "GROQ_API_KEY", "GITHUB_TOKEN",
-    "AWS_REGION", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
-    "AWS_SESSION_TOKEN", "AWS_BEARER_TOKEN_BEDROCK",
+    "AI_PROVIDER",
+    "AI_MODEL",
+    "GEMINI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GROQ_API_KEY",
+    "GITHUB_TOKEN",
+    "AWS_REGION",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_BEARER_TOKEN_BEDROCK",
 )
 
 
 # Set by profile_mgr.activate_profile(). Wins over the env-derived DB_PATH so
 # reload_env() can't repoint the app at the default database mid-session.
 PROFILE_DB_PATH: Path | None = None
+
+# Env-derived module globals, (re)populated by _load_globals() at import time
+# and on every reload_env(). Declared here so the module's public surface is
+# visible to readers and type checkers.
+HEVY_API_KEY: str
+DEFAULT_LANGUAGE: str
+DB_PATH: Path
+EXPORT_DIR: str
+LOGS_DIR: str
+AI_PROVIDER: str
+AI_MODEL: str
+GEMINI_API_KEY: str
+ANTHROPIC_API_KEY: str
+OPENROUTER_API_KEY: str
+GROQ_API_KEY: str
+GITHUB_TOKEN: str
+AWS_REGION: str
+AWS_ACCESS_KEY_ID: str
+AWS_SECRET_ACCESS_KEY: str
+AWS_SESSION_TOKEN: str
+AWS_BEARER_TOKEN_BEDROCK: str
+_ENV_AI_PROVIDER: str
+_ENV_AI_MODEL: str
 
 
 def _resolve_db_path(raw: str | None) -> Path:
@@ -55,11 +84,26 @@ def _resolve_db_path(raw: str | None) -> Path:
 
 def _load_globals() -> None:
     """(Re)populate every env-derived module global from os.environ."""
-    global HEVY_API_KEY, DEFAULT_LANGUAGE, DB_PATH, AI_PROVIDER, AI_MODEL, \
-        GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENROUTER_API_KEY, GROQ_API_KEY, \
-        GITHUB_TOKEN, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, \
-        AWS_SESSION_TOKEN, AWS_BEARER_TOKEN_BEDROCK, _ENV_AI_PROVIDER, _ENV_AI_MODEL, \
-        EXPORT_DIR, LOGS_DIR
+    global \
+        HEVY_API_KEY, \
+        DEFAULT_LANGUAGE, \
+        DB_PATH, \
+        AI_PROVIDER, \
+        AI_MODEL, \
+        GEMINI_API_KEY, \
+        ANTHROPIC_API_KEY, \
+        OPENROUTER_API_KEY, \
+        GROQ_API_KEY, \
+        GITHUB_TOKEN, \
+        AWS_REGION, \
+        AWS_ACCESS_KEY_ID, \
+        AWS_SECRET_ACCESS_KEY, \
+        AWS_SESSION_TOKEN, \
+        AWS_BEARER_TOKEN_BEDROCK, \
+        _ENV_AI_PROVIDER, \
+        _ENV_AI_MODEL, \
+        EXPORT_DIR, \
+        LOGS_DIR
 
     HEVY_API_KEY = os.environ.get("HEVY_API_KEY", "")
     DEFAULT_LANGUAGE = os.environ.get("DEFAULT_LANGUAGE", "en")
@@ -95,7 +139,7 @@ def _load_globals() -> None:
 
     AI_MODEL = (
         os.environ.get("AI_MODEL")
-        or os.environ.get("GEMINI_MODEL")           # backward compat
+        or os.environ.get("GEMINI_MODEL")  # backward compat
         or _DEFAULT_MODELS.get(AI_PROVIDER, "gemini-flash-latest")
     )
 
@@ -112,6 +156,7 @@ _load_globals()
 def _sync_provider_module() -> None:
     """Push current config values into ai.provider's import-time copies."""
     import sys
+
     provider_mod = sys.modules.get("ai.provider")
     if provider_mod is None:
         return
@@ -140,6 +185,7 @@ def set_env_values(updates: dict[str, str], env_file: Path | None = None) -> Non
     atomic (tmp file + os.replace) and the file ends up chmod 0600.
     """
     import re
+
     target = env_file or paths.ENV_FILE
     target.parent.mkdir(parents=True, exist_ok=True)
     lines = target.read_text(encoding="utf-8").splitlines(keepends=True) if target.exists() else []
@@ -177,12 +223,12 @@ def default_model_for(provider: str) -> str:
 def get_provider_api_key(provider: str | None = None) -> str:
     """Return the API key for the given provider (default: the configured one)."""
     return {
-        "gemini":     GEMINI_API_KEY,
-        "claude":     ANTHROPIC_API_KEY,
+        "gemini": GEMINI_API_KEY,
+        "claude": ANTHROPIC_API_KEY,
         "openrouter": OPENROUTER_API_KEY,
-        "groq":       GROQ_API_KEY,
-        "github":     GITHUB_TOKEN,
-        "bedrock":    "",   # uses boto3 / env-based AWS credentials
+        "groq": GROQ_API_KEY,
+        "github": GITHUB_TOKEN,
+        "bedrock": "",  # uses boto3 / env-based AWS credentials
     }.get(provider or AI_PROVIDER, "")
 
 
@@ -195,7 +241,8 @@ def apply_ai_overrides() -> None:
     """
     global AI_PROVIDER, AI_MODEL
     try:
-        from db.goals import get_pref   # lazy — db.store imports config
+        from db.goals import get_pref  # lazy — db.store imports config
+
         pref_provider = (get_pref("ai_provider") or "").strip().lower()
         pref_model = (get_pref("ai_model") or "").strip()
     except Exception:
