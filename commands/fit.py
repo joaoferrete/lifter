@@ -108,32 +108,90 @@ def _do_fit() -> None:
         console.print(_("fit.disconnected"))
 
 
+def _prompt_credentials_json(dest: Path, saved_key: str) -> bool:
+    """Ask for a downloaded client-secrets JSON, validate it and copy to dest.
+
+    Returns True when a valid Desktop-app ("installed") JSON was saved."""
+    raw = questionary.path(_("fit.credentials_path_prompt"), style=STYLE).ask()
+    if not raw or not raw.strip():
+        return False
+    source = Path(raw.strip()).expanduser()
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        assert isinstance(payload, dict) and ("installed" in payload or "web" in payload)
+    except Exception:
+        console.print(_("fit.credentials_invalid"))
+        return False
+    if "installed" not in payload:
+        console.print(_("fit.credentials_web_client"))
+        return False
+    import shutil as _shutil
+
+    import paths as _paths
+
+    _paths.ensure_dirs()
+    _shutil.copy2(source, dest)
+    dest.chmod(0o600)
+    console.print(_(saved_key, path=_esc(str(dest))))
+    return True
+
+
 def _fit_setup() -> None:
-    from fit.auth import credentials_file
+    import paths as _paths
+    from fit.auth import credentials_file, describe_client, profile_credentials_file
 
     console.rule(_("fit.connect_rule"))
-    console.print(_("fit.setup_instructions"))
 
-    if not credentials_file().exists():
-        raw = questionary.path(_("fit.credentials_path_prompt"), style=STYLE).ask()
-        if not raw or not raw.strip():
-            return
-        source = Path(raw.strip()).expanduser()
-        try:
-            payload = json.loads(source.read_text(encoding="utf-8"))
-            assert isinstance(payload, dict) and ("installed" in payload or "web" in payload)
-        except Exception:
+    creds_path = credentials_file()
+    client = describe_client(creds_path) if creds_path.exists() else None
+
+    if client is None:
+        # First-ever setup (or unreadable file): full instructions + JSON prompt.
+        # An existing-but-broken file is replaced in place so resolution still finds it.
+        console.print(_("fit.setup_instructions"))
+        if creds_path.exists():
             console.print(_("fit.credentials_invalid"))
+        dest = creds_path if creds_path.exists() else _paths.FIT_CREDENTIALS_FILE
+        if not _prompt_credentials_json(dest, "fit.credentials_saved"):
             return
-        import shutil as _shutil
+    elif client["type"] == "web":
+        # A web-type client can never complete the loopback flow for anyone —
+        # replace it in place with a proper Desktop-app JSON.
+        console.print(_("fit.credentials_web_client"))
+        console.print(_("fit.setup_instructions"))
+        if not _prompt_credentials_json(creds_path, "fit.credentials_saved"):
+            return
+    else:
+        console.print(
+            Panel(
+                _(
+                    "fit.client_in_use",
+                    client_id=_esc(client["client_id"]),
+                    project_id=_esc(client["project_id"]),
+                    path=_esc(str(creds_path)),
+                ),
+                border_style="cyan",
+                padding=(0, 2),
+            )
+        )
+        choice = questionary.select(
+            _("fit.reuse_prompt"),
+            choices=[
+                questionary.Choice(_("fit.reuse_choice_existing"), value="existing"),
+                questionary.Choice(_("fit.reuse_choice_new"), value="new"),
+                questionary.Choice(_("fit.reuse_choice_cancel"), value="cancel"),
+            ],
+            style=STYLE,
+        ).ask()
+        if choice in (None, "cancel"):
+            return
+        if choice == "new":
+            console.print(_("fit.setup_instructions"))
+            if not _prompt_credentials_json(profile_credentials_file(), "fit.credentials_saved_profile"):
+                return
 
-        import paths as _paths
-
-        _paths.ensure_dirs()
-        _shutil.copy2(source, _paths.FIT_CREDENTIALS_FILE)
-        _paths.FIT_CREDENTIALS_FILE.chmod(0o600)
-        console.print(_("fit.credentials_saved", path=_esc(str(_paths.FIT_CREDENTIALS_FILE))))
-
+    console.print(_("fit.test_user_reminder"))
+    console.print(_("fit.testing_mode_note"))
     if not questionary.confirm(_("fit.ready_to_auth"), default=True, style=STYLE).ask():
         return
 
@@ -148,9 +206,15 @@ def _fit_setup() -> None:
         _dlog("ERROR", "Google Fit connect failed: credentials file not found")
         console.print(f"\n[red]{e}[/red]")  # safe: our own message, no secrets
     except Exception as e:
+        from fit.auth import _FLOW_TIMEOUT_S, classify_auth_error
+
         _dlog("ERROR", f"Google Fit connect failed: {type(e).__name__}", error=str(e)[:200])
-        console.print(_("error.fit_auth_failed"))
-        console.print(f"[dim]{type(e).__name__}[/dim]")
+        key = classify_auth_error(e)
+        if key:
+            console.print(_(key, minutes=_FLOW_TIMEOUT_S // 60))
+        else:
+            console.print(_("error.fit_auth_failed"))
+            console.print(f"[dim]{type(e).__name__}: {_esc(str(e)[:150])}[/dim]")
 
 
 def _render_fit_dashboard() -> None:

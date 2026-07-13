@@ -25,7 +25,8 @@ class FitClient:
         except RefreshError as e:
             self._disconnect()
             raise RuntimeError(
-                "Google Fit token expired and could not be refreshed.\n"
+                "Google Fit token expired and could not be refreshed — projects in "
+                "Testing mode expire tokens every ~7 days.\n"
                 "Go to Menu → Google Fit → Connect to re-authenticate."
             ) from e
         return {"Authorization": f"Bearer {self._creds.token}"}
@@ -36,7 +37,8 @@ class FitClient:
         if resp.status_code == 401:
             self._disconnect()
             raise RuntimeError(
-                "Google Fit session expired. Token has been cleared — "
+                "Google Fit session expired (Testing-mode projects expire tokens every "
+                "~7 days). Token has been cleared — "
                 "go to Menu → Google Fit → Connect to re-authenticate. (error 401)"
             )
         if resp.status_code == 403:

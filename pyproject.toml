@@ -131,6 +131,7 @@ module = [
     "questionary.*",
     "google.*",
     "google_auth_oauthlib.*",
+    "oauthlib.*",
     "pandas.*",
     "boto3.*",
     "botocore.*",

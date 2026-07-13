@@ -43,6 +43,37 @@ def test_credentials_file_env_relative_anchors_at_config_dir(monkeypatch):
     assert credentials_file() == paths.CONFIG_DIR / "my-creds.json"
 
 
+def test_credentials_file_prefers_profile_file(monkeypatch, tmp_path):
+    import config
+    from fit.auth import credentials_file
+
+    monkeypatch.delenv("GOOGLE_CREDENTIALS_FILE", raising=False)
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "hevy.db")
+    profile_creds = tmp_path / "fit_credentials.json"
+    profile_creds.write_text("{}")
+    assert credentials_file() == profile_creds
+
+
+def test_credentials_file_env_beats_profile_file(monkeypatch, tmp_path):
+    import config
+    from fit.auth import credentials_file
+
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "hevy.db")
+    (tmp_path / "fit_credentials.json").write_text("{}")
+    monkeypatch.setenv("GOOGLE_CREDENTIALS_FILE", str(tmp_path / "env-creds.json"))
+    assert credentials_file() == tmp_path / "env-creds.json"
+
+
+def test_credentials_file_falls_back_to_global_without_profile_file(monkeypatch, tmp_path):
+    import config
+    import paths
+    from fit.auth import credentials_file
+
+    monkeypatch.delenv("GOOGLE_CREDENTIALS_FILE", raising=False)
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "hevy.db")
+    assert credentials_file() == paths.FIT_CREDENTIALS_FILE
+
+
 def test_token_file_is_sibling_of_db():
     import config
     from fit.auth import _token_file

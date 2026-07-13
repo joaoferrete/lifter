@@ -1,5 +1,6 @@
 """Google OAuth flow for the Fitness API."""
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -15,14 +16,62 @@ SCOPES = [
 ]
 
 
+def profile_credentials_file() -> Path:
+    """Optional per-profile client-secrets file, next to the profile's DB."""
+    return config.DB_PATH.parent / "fit_credentials.json"
+
+
 def credentials_file() -> Path:
     """OAuth client-secrets location, resolved at call time so a file copied
-    in via the in-app setup is picked up without restarting."""
+    in via the in-app setup is picked up without restarting.
+
+    Resolution order: GOOGLE_CREDENTIALS_FILE env → per-profile file →
+    global file shared by all profiles."""
     raw = os.environ.get("GOOGLE_CREDENTIALS_FILE", "")
     if raw:
         p = Path(raw).expanduser()
         return p if p.is_absolute() else paths.CONFIG_DIR / p
+    pcf = profile_credentials_file()
+    if pcf.exists():
+        return pcf
     return paths.FIT_CREDENTIALS_FILE
+
+
+def describe_client(path: Path) -> dict | None:
+    """{'client_id', 'project_id', 'type'} from a client-secrets JSON, or None."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        kind = "installed" if "installed" in payload else "web" if "web" in payload else None
+        if kind is None:
+            return None
+        info = payload.get(kind) or {}
+        return {
+            "client_id": info.get("client_id", "?"),
+            "project_id": info.get("project_id", "?"),
+            "type": kind,
+        }
+    except Exception:
+        return None
+
+
+def classify_auth_error(e: BaseException) -> str | None:
+    """Map an OAuth-flow exception to an i18n error key, or None if unknown.
+
+    Matches by class name (not isinstance) so tests and callers don't need
+    oauthlib/google-auth imported."""
+    msg = str(e).lower()
+    names = {c.__name__ for c in type(e).__mro__}
+    if "AccessDeniedError" in names or "access_denied" in msg:
+        return "error.fit_access_denied"
+    if "WSGITimeoutError" in names or isinstance(e, AttributeError):
+        return "error.fit_auth_timeout"
+    if "redirect_uri_mismatch" in msg or (isinstance(e, ValueError) and "client secrets" in msg):
+        return "error.fit_web_client"
+    if "invalid_grant" in msg or "RefreshError" in names:
+        return "error.fit_token_refresh_expired"
+    return None
 
 
 def _token_file() -> Path:
@@ -30,6 +79,7 @@ def _token_file() -> Path:
 
 
 _REFRESH_TIMEOUT_S = 20
+_FLOW_TIMEOUT_S = 300
 
 
 def refresh_transport() -> Any:
@@ -56,6 +106,19 @@ def _write_token(creds: Any) -> None:
         ) from e
 
 
+def _run_browser_flow() -> Any:
+    creds_file = credentials_file()
+    if not creds_file.exists():
+        raise FileNotFoundError(
+            f"Google OAuth credentials file not found at '{creds_file}'.\n"
+            "Follow the setup instructions in the menu to create one."
+        )
+    from google_auth_oauthlib.flow import InstalledAppFlow
+
+    flow = InstalledAppFlow.from_client_secrets_file(str(creds_file), SCOPES)
+    return flow.run_local_server(port=0, open_browser=True, timeout_seconds=_FLOW_TIMEOUT_S)
+
+
 def get_credentials() -> Any:
     """Return valid Google credentials, running the OAuth flow if needed."""
     from google.oauth2.credentials import Credentials
@@ -67,18 +130,17 @@ def get_credentials() -> Any:
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(refresh_transport())
-        else:
-            creds_file = credentials_file()
-            if not creds_file.exists():
-                raise FileNotFoundError(
-                    f"Google OAuth credentials file not found at '{creds_file}'.\n"
-                    "Follow the setup instructions in the menu to create one."
-                )
-            from google_auth_oauthlib.flow import InstalledAppFlow
+            from google.auth.exceptions import RefreshError
 
-            flow = InstalledAppFlow.from_client_secrets_file(str(creds_file), SCOPES)
-            creds = flow.run_local_server(port=0, open_browser=True)
+            try:
+                creds.refresh(refresh_transport())
+            except RefreshError:
+                # Testing-mode projects expire refresh tokens after ~7 days;
+                # drop the stale token and re-run the full browser flow.
+                disconnect()
+                creds = _run_browser_flow()
+        else:
+            creds = _run_browser_flow()
 
         _write_token(creds)
 
