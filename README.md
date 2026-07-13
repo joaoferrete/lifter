@@ -91,7 +91,7 @@ reinstalls never touch your data:
 | Contents | Location | Override |
 |---|---|---|
 | Profiles, databases, exports | `~/.local/share/lifter/` | `$XDG_DATA_HOME` |
-| `.env` (API keys), `fit_credentials.json` | `~/.config/lifter/` | `$XDG_CONFIG_HOME` |
+| `.env` (API keys), `fit_credentials.json` (shared OAuth client) | `~/.config/lifter/` | `$XDG_CONFIG_HOME` |
 | Debug logs, chat history | `~/.local/state/lifter/` | `$XDG_STATE_HOME` |
 
 Setting `LIFTER_HOME=/some/dir` forces all three into a single directory
@@ -316,9 +316,12 @@ Adds sleep, steps, calories, and heart rate data to your analytics and AI contex
 4. **APIs & Services → OAuth consent screen**
    - User type: External
    - Fill in app name (anything, e.g. "lifter")
-   - Add your Gmail as a **Test user** → Save
+   - Add **every Google account you'll connect from any profile** as a **Test user**
+     (up to 100) → Save. An account that isn't listed gets **Error 403: access_denied**
+     in the browser when it tries to connect.
 5. **APIs & Services → Credentials → Create Credentials → OAuth client ID**
-   - Application type: **Desktop app**
+   - Application type: **Desktop app** — ⚠ **not** "Web application"; a web client
+     cannot complete the local sign-in flow
    - Name: anything
    - Click Create
 6. **Download JSON** → Google will download a file named something like
@@ -332,11 +335,21 @@ In the menu: **Google Fit → Connect / re-authenticate**
 
 Lifter asks for the path to the downloaded JSON (first time only), then a browser window opens. Sign in with the Gmail you added as a test user and approve the fitness permissions. The token is saved per profile as `fit_token.json` and reused automatically.
 
+If an OAuth client is already configured (e.g. by another profile), Connect shows which client/project is in use and lets you either reuse it — sign in with any account added as a Test user — or supply a different OAuth JSON just for this profile.
+
 ### Step 3 — Sync
 
 **Google Fit → Sync health data → 30 days**
 
 After syncing, the recovery score appears in the header and the AI coach uses your sleep and HR data in all suggestions.
+
+### Multiple profiles
+
+All profiles share the OAuth client saved at `~/.config/lifter/fit_credentials.json` by default — each profile just signs in with its own Google account (add every account as a Test user, step 1.4). To use a completely separate Google Cloud project for one profile, choose **"Use a different OAuth JSON"** during Connect; it is stored at `~/.local/share/lifter/profiles/{slug}/fit_credentials.json` and takes precedence over the shared one for that profile.
+
+### Token expires weekly
+
+While the Google Cloud project is in **Testing** publishing status, Google expires the connection roughly every **7 days**. Lifter detects this and asks you to reconnect — just run **Google Fit → Connect** again. To get rid of the weekly re-auth, publish the app in Cloud Console (**OAuth consent screen → Publish app**); Google shows an "unverified app" warning screen during sign-in, which is fine for personal use.
 
 ### Samsung Health users
 
@@ -643,7 +656,7 @@ Each profile stores its own settings that are set through the in-app menus:
 | `slug` | URL-safe identifier used as the directory name |
 | `hevy_api_key` | API key for this profile's Hevy account |
 
-Profile databases live at `~/.local/share/lifter/profiles/{slug}/hevy.db` and Google Fit tokens at `~/.local/share/lifter/profiles/{slug}/fit_token.json`.
+Profile databases live at `~/.local/share/lifter/profiles/{slug}/hevy.db` and Google Fit tokens at `~/.local/share/lifter/profiles/{slug}/fit_token.json`. A profile may also have its own `fit_credentials.json` in the same directory (optional — overrides the shared OAuth client in `~/.config/lifter/`).
 
 All in-app preferences are stored in the `user_preferences` table in each profile's database, not in `.env`. Notable keys: `units`, `auto_sync`, `sync_stale_hours`, `goals_checkin_days`, `default_stats_weeks`, `report_weeks`, `ui_language`, `ai_provider` / `ai_model` (per-profile override of `.env`), `ai_send_name` / `ai_send_body` (privacy), `ai_tokens_month_budget`, `memories_max`, `debug_logging`.
 
