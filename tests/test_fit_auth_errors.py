@@ -86,7 +86,9 @@ def test_describe_client_web(tmp_path):
     from fit.auth import describe_client
 
     p = _write_json(tmp_path / "c.json", {"web": {"client_id": "web-id", "project_id": "p"}})
-    assert describe_client(p)["type"] == "web"
+    client = describe_client(p)
+    assert client is not None
+    assert client["type"] == "web"
 
 
 def test_describe_client_garbage_returns_none(tmp_path):

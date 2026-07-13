@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Connecting Google Fit from a second profile no longer dead-ends: the
+  Connect wizard was silently skipping the credentials step when a global
+  `fit_credentials.json` already existed, and a Google account not listed
+  as a Test user of the project hit "Error 403: access_denied" in the
+  browser — with the CLI hanging forever since Google never redirects back.
+  The OAuth flow now times out after 5 minutes with a message explaining
+  the Test-user requirement.
+- OAuth client-secrets JSON of type "Web application" is now rejected up
+  front with instructions to recreate it as a Desktop app client (it can
+  never complete the local sign-in flow).
+- When the saved token expires (Testing-mode projects expire refresh tokens
+  every ~7 days), Connect now falls through to the browser flow instead of
+  failing with a cryptic `invalid_grant`; sync error messages explain the
+  7-day cause.
+
+### Changed
+
+- The Google Fit Connect wizard is transparent about which OAuth client is
+  in use: it shows the client ID, project and file path, and offers to
+  reuse it (signing in with any Test-user account) or supply a different
+  OAuth JSON for the current profile only.
+- Google Fit credentials can now be set per profile: an optional
+  `profiles/{slug}/fit_credentials.json` takes precedence over the shared
+  global file (`GOOGLE_CREDENTIALS_FILE` still wins over both).
+- OAuth failures are mapped to actionable messages (access denied → add the
+  account as a Test user; timeout; web-type client; expired token) in both
+  English and pt_BR, and the setup instructions now stress adding every
+  connecting Google account as a Test user and the weekly Testing-mode
+  expiry.
+
 ## [0.4.2] - 2026-07-10
 
 ### Fixed
