@@ -6,7 +6,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 # ── classify_auth_error ───────────────────────────────────────────────────────
 
 
@@ -148,8 +147,8 @@ def test_get_credentials_reruns_flow_when_refresh_fails(monkeypatch, tmp_path):
 
 def test_get_credentials_raises_when_no_credentials_file(monkeypatch, tmp_path):
     import config
-    import paths
     import fit.auth as auth
+    import paths
 
     monkeypatch.delenv("GOOGLE_CREDENTIALS_FILE", raising=False)
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "hevy.db")

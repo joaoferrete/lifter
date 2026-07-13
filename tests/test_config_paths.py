@@ -65,8 +65,8 @@ def test_credentials_file_env_beats_profile_file(monkeypatch, tmp_path):
 
 
 def test_credentials_file_falls_back_to_global_without_profile_file(monkeypatch, tmp_path):
-    import paths
     import config
+    import paths
     from fit.auth import credentials_file
 
     monkeypatch.delenv("GOOGLE_CREDENTIALS_FILE", raising=False)
