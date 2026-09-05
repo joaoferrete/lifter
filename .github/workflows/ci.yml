@@ -175,7 +175,7 @@ jobs:
           echo "OK — no sensitive files tracked"
 
       - name: Scan git history for secrets (TruffleHog)
-        uses: trufflesecurity/trufflehog@v3.95.9
+        uses: trufflesecurity/trufflehog@v3.97.2
         with:
           path: ./
           base: ${{ github.event.before || 'HEAD~1' }}
